@@ -1,0 +1,31 @@
+#!/bin/sh
+# Panel app: draws the Home Assistant dashboard. Restarted when it exits;
+# its output goes to syslog (and from there to pstore, see S98logforward).
+
+DAEMON=/usr/bin/nspanel-app
+PIDFILE=/var/run/nspanel-app-supervisor.pid
+
+case "$1" in
+start)
+	[ -x "$DAEMON" ] || exit 0
+	(
+		while true; do
+			{ "$DAEMON"; echo "$?" > /tmp/nspanel-app.status; } 2>&1 | logger -t nspanel-app
+			echo "<4>nspanel-app: exited (status $(cat /tmp/nspanel-app.status 2>/dev/null)), restarting in 2 s" > /dev/kmsg
+			sleep 2
+		done
+	) &
+	echo $! > "$PIDFILE"
+	;;
+stop)
+	[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+	rm -f "$PIDFILE"
+	p=$(pidof nspanel-app) && kill $p
+	;;
+restart | reload)
+	"$0" stop
+	sleep 1
+	"$0" start
+	;;
+esac
+exit 0

@@ -1,0 +1,74 @@
+# PanelOS
+
+Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running a native **Rust + Slint** Home Assistant dashboard and voice satellite. No browser, no cloud.
+
+Version **0.0.1**. Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
+
+## Supported devices
+
+| Device | SoC | State |
+|---|---|---|
+| Sonoff NSPanel Pro (86 model) | Rockchip PX30 | working: dashboard, voice satellite, boot animation |
+
+## Features
+
+- **Native Home Assistant dashboard**: drawn by the panel itself from a Home Assistant dashboard (tiles, shutters, climate, media, camera), details layers, themes, screensaver, automatic brightness, wake on approach. Pairing with a QR code, no token typing.
+- **Voice satellite**: on-device wake words (microWakeWord), Assist pipelines, echo cancellation, timers, announcements, follow-up listening.
+- **Assistant mode**: smart-display home screen with clock, weather, media and quick tiles, and a full-screen conversation view.
+- **Home Assistant device** over the ESPHome native API: settings and sensors as entities of the built-in ESPHome integration; an optional custom integration (`custom_components/nspanel_pro`) configures the assistant mode and shows views or messages on the panel.
+- **Fast start**: boot animation from the first second of user space; the UI comes as soon as Wi-Fi is up.
+
+Details: [docs/app.md](docs/app.md).
+
+## Future plans
+
+- More devices: other NSPanel models (NSPanel Pro 120, NSPanel Pro Gen2), the Shelly Wall Display (MediaTek MT6580; mainline Linux support still to be checked) and Wall Display XL (Rockchip RK3566), and the ESP32-based NSPanel as a separate, smaller target (its screen is driven by its own controller over a serial link).
+- A 3D-printable adapter plate for mounting the US NSPanel on a European 60 mm wall box (screw spacing 83.5 mm vs 60 mm).
+- A first-start setup screen on the panel: it finds Home Assistant on the network by itself (Home Assistant announces itself over mDNS as `_home-assistant._tcp`), or takes its address on a simple on-screen keyboard, so the first setup needs no SSH.
+- The panel announces its ESPHome API over mDNS (`_esphomelib._tcp`), so Home Assistant discovers it and offers to add it. Both mDNS parts live in the panel app (no system mDNS service, smaller image).
+- Ready-made images on GitHub Releases, so a user does not have to build. A release image must not carry a personal SSH key: the user's own key is added at install.
+- Native builds on Macs with Apple silicon and other arm64 computers: Buildroot's Bootlin toolchain only runs on x86-64 hosts, so an arm64 host needs Buildroot's own toolchain (built from source). Until then the build runs in an emulated x86-64 virtual machine (see [docs/install.md](docs/install.md#mac)).
+- Web mode, signed over-the-air updates, a smaller image for the `boot` partition (A/B).
+- A wiki once more devices are supported.
+
+## Why (NSPanel Pro)
+
+- The stock software is slow: a heavy React Native launcher, constant cloud sync and an old Chromium 107 WebView.
+- The panel runs Android 8.1 on every Sonoff firmware version (3.x and 4.x alike), so the system WebView can never go past Chromium 138.
+- Enabling ADB/root permanently blocks official firmware updates.
+- The hardware itself is fine for a wall panel: 4x Cortex-A35, Mali-G31, 2 GB RAM, 480x480 MIPI-DSI screen, capacitive touch, light and proximity sensors, microphones and a speaker.
+
+## Install (NSPanel Pro 86)
+
+Step-by-step guide, no Linux knowledge needed: **[docs/install.md](docs/install.md)**.
+
+In short: turn on developer mode and ADB in the eWeLink app, build the image on a Linux or WSL computer, back up the panel, write PanelOS to its recovery partition over Wi-Fi ADB, make it the default boot, give it the address of Home Assistant, and log in with the QR code on the screen.
+
+## Known limitations
+
+- The stock bootloader takes about 45 s, with a black screen, before the kernel starts; an own bootloader logo is not done yet.
+- No TLS yet: Home Assistant must be reachable over plain `http://`.
+- The first setup needs the Home Assistant address entered over SSH (step 10 of the install guide); there is no on-screen setup yet.
+- The ESPHome API runs without encryption and mDNS discovery so far.
+- Web mode (the real Home Assistant frontend) is not started.
+- The look is a first version; a full redesign is planned.
+
+## Repository layout
+
+- `app/` the panel app (Rust + Slint), see [docs/app.md](docs/app.md)
+- `custom_components/nspanel_pro/` optional Home Assistant integration (assistant mode settings, screen actions), installable with the Home Assistant Marketplace or HACS, see [docs/home_assistant.md](docs/home_assistant.md)
+- `docs/` hardware notes ([docs/hardware.md](docs/hardware.md)), backup and restore, bring-up notes ([docs/bringup.md](docs/bringup.md)), design decisions and plans, feature list
+- `kernel/` board device tree (`dts/`), mainline kernel patches (`patches/`), config fragment (`configs/`)
+- `buildroot/` Buildroot external tree (`BR2_EXTERNAL`): root filesystem defconfig, init scripts, boot splash, small tools
+- `assets/` logo and logotype (SVG), generated boot pictures
+- `testinit/` minimal PID 1 used for the first bring-up test boots
+- `tools/` build scripts, backup and restore, flashing over ADB or SSH, resource image pack/unpack, DTB dump, pstore log, boot splash renderer (`tools/splash/`), wake word benchmark
+- `backup/` local firmware backups, git-ignored, **never published**
+
+## Warning
+
+Flashing can brick the device. Make a full backup first (see [docs/restore.md](docs/restore.md)) and prove that you can restore it before you write anything. The partitions contain device-unique data (MAC addresses, keys, serial numbers): never share your backup images.
+
+## License
+
+AGPL-3.0-or-later (full text in LICENSE). The panel app uses the Slint toolkit under its GPLv3 option, which GPLv3 section 13 allows to be combined with AGPL-3.0 code. Third-party parts keep their own licences (Linux kernel GPL-2.0, Buildroot packages, DejaVu fonts, Material Design Icons, the microWakeWord models).

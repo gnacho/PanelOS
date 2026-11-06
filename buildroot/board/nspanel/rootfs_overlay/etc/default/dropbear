@@ -1,0 +1,2 @@
+# Key-based login only.
+DROPBEAR_ARGS="-s"

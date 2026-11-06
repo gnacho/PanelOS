@@ -1,0 +1,112 @@
+diff --git a/drivers/gpu/drm/panel/panel-sitronix-st7701.c b/drivers/gpu/drm/panel/panel-sitronix-st7701.c
+index 2f79ec4a2..82dac607b 100644
+--- a/drivers/gpu/drm/panel/panel-sitronix-st7701.c
++++ b/drivers/gpu/drm/panel/panel-sitronix-st7701.c
+@@ -319,6 +319,41 @@ static void st7701_init_sequence(struct st7701 *st7701)
+ 		   (desc->eot_en ? ST7701_CMD2_BK1_MIPISET1_EOT_EN : 0));
+ }
+ 
++static void nspanel_pro_86_gip_sequence(struct st7701 *st7701)
++{
++	/*
++	 * Values from the stock Sonoff firmware (vendor DT panel-init-sequence).
++	 * The generic init sequence derives BK0 PORCTRL/INVSEL and BK1 VGHSS
++	 * differently from the stock values, so write them again here; the
++	 * final register state then matches the stock firmware byte for byte.
++	 */
++	st7701_switch_cmd_bkx(st7701, true, 0);
++	ST7701_WRITE(st7701, ST7701_CMD2_BK0_PORCTRL, 0x0D, 0x02);
++	ST7701_WRITE(st7701, ST7701_CMD2_BK0_INVSEL, 0x21, 0x08);
++
++	st7701_switch_cmd_bkx(st7701, true, 1);
++	ST7701_WRITE(st7701, ST7701_CMD2_BK1_VGHSS, 0x87);
++	msleep(20);
++
++	ST7701_WRITE(st7701, 0xE0, 0x00, 0x1B, 0x02);
++	ST7701_WRITE(st7701, 0xE1, 0x08, 0xA0, 0x00, 0x00, 0x07, 0xA0, 0x00,
++		     0x00, 0x00, 0x44, 0x44);
++	ST7701_WRITE(st7701, 0xE2, 0x11, 0x11, 0x44, 0x44, 0xED, 0xA0, 0x00,
++		     0x00, 0xEC, 0xA0, 0x00, 0x00);
++	ST7701_WRITE(st7701, 0xE3, 0x00, 0x00, 0x11, 0x11);
++	ST7701_WRITE(st7701, 0xE4, 0x44, 0x44);
++	ST7701_WRITE(st7701, 0xE5, 0x0A, 0xE9, 0xD8, 0xA0, 0x0C, 0xEB, 0xD8,
++		     0xA0, 0x0E, 0xED, 0xD8, 0xA0, 0x10, 0xEF, 0xD8, 0xA0);
++	ST7701_WRITE(st7701, 0xE6, 0x00, 0x00, 0x11, 0x11);
++	ST7701_WRITE(st7701, 0xE7, 0x44, 0x44);
++	ST7701_WRITE(st7701, 0xE8, 0x09, 0xE8, 0xD8, 0xA0, 0x0B, 0xEA, 0xD8,
++		     0xA0, 0x0D, 0xEC, 0xD8, 0xA0, 0x0F, 0xEE, 0xD8, 0xA0);
++	ST7701_WRITE(st7701, 0xEB, 0x02, 0x00, 0xE4, 0xE4, 0x88, 0x00, 0x40);
++	ST7701_WRITE(st7701, 0xEC, 0x3C, 0x00);
++	ST7701_WRITE(st7701, 0xED, 0xAB, 0x89, 0x76, 0x54, 0x02, 0xFF, 0xFF,
++		     0xFF, 0xFF, 0xFF, 0xFF, 0x20, 0x45, 0x67, 0x98, 0xBA);
++}
++
+ static void ts8550b_gip_sequence(struct st7701 *st7701)
+ {
+ 	/**
+@@ -659,6 +694,57 @@ static const struct drm_panel_funcs st7701_funcs = {
+ 	.get_orientation = st7701_get_orientation,
+ };
+ 
++static const struct drm_display_mode nspanel_pro_86_mode = {
++	.clock		= 16000,
++
++	.hdisplay	= 480,
++	.hsync_start	= 480 + 12,
++	.hsync_end	= 480 + 12 + 10,
++	.htotal		= 480 + 12 + 10 + 15,
++
++	.vdisplay	= 480,
++	.vsync_start	= 480 + 12,
++	.vsync_end	= 480 + 12 + 8,
++	.vtotal		= 480 + 12 + 8 + 15,
++
++	.width_mm	= 72,
++	.height_mm	= 70,
++
++	.flags		= DRM_MODE_FLAG_NHSYNC | DRM_MODE_FLAG_NVSYNC,
++	.type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED,
++};
++
++static const struct st7701_panel_desc nspanel_pro_86_desc = {
++	.mode = &nspanel_pro_86_mode,
++	.lanes = 2,
++	.format = MIPI_DSI_FMT_RGB888,
++	.panel_sleep_delay = 0,
++
++	/* Gamma tables as raw register bytes from the stock firmware. */
++	.pv_gamma = {
++		0x00, 0x11, 0x18, 0x0E, 0x11, 0x06, 0x07, 0x08,
++		0x07, 0x22, 0x04, 0x12, 0x0F, 0xAA, 0x31, 0x18
++	},
++	.nv_gamma = {
++		0x00, 0x11, 0x19, 0x0E, 0x12, 0x07, 0x08, 0x08,
++		0x08, 0x22, 0x04, 0x11, 0x11, 0xA9, 0x32, 0x18
++	},
++	.nlinv = 1,
++	.vop_uv = 4737500,	/* VRHS 0x60 */
++	.vcom_uv = 700000,	/* VCOM 0x30 */
++	.vgh_mv = 15000,	/* VGHSS low nibble 0x7 */
++	.vgl_mv = -10170,	/* VGLS 0x49 */
++	.avdd_mv = 6600,	/* PWCTLR2 0x21 */
++	.avcl_mv = -4600,
++	.gamma_op_bias = OP_BIAS_MIDDLE,	/* PWCTLR1 0x85 */
++	.input_op_bias = OP_BIAS_MIN,
++	.output_op_bias = OP_BIAS_MIN,
++	.t2d_ns = 1600,		/* SPD1 0x78 */
++	.t3d_ns = 10400,	/* SPD2 0x78 */
++	.eot_en = false,
++	.gip_sequence = nspanel_pro_86_gip_sequence,
++};
++
+ static const struct drm_display_mode ts8550b_mode = {
+ 	.clock		= 27500,
+ 
+@@ -1387,6 +1473,7 @@ static const struct of_device_id st7701_dsi_of_match[] = {
+ 	{ .compatible = "anbernic,rg-arc-panel", .data = &rg_arc_desc },
+ 	{ .compatible = "densitron,dmt028vghmcmi-1a", .data = &dmt028vghmcmi_1a_desc },
+ 	{ .compatible = "elida,kd50t048a", .data = &kd50t048a_desc },
++	{ .compatible = "sonoff,nspanel-pro-86-panel", .data = &nspanel_pro_86_desc },
+ 	{ .compatible = "techstar,ts8550b", .data = &ts8550b_desc },
+ 	{ .compatible = "winstar,wf40eswaa6mnn0", .data = &wf40eswaa6mnn0_desc },
+ 	{ }

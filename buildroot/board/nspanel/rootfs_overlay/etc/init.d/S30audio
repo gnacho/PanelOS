@@ -1,0 +1,27 @@
+#!/bin/sh
+# Audio defaults.
+#
+# The built-in speaker is driven by the RK809 codec's class-D output (SPK);
+# the headphone output (HP) is not connected to it (measured with the
+# panel's own microphones, docs/bringup.md test boot 14). The codec powers
+# up with the HP path selected, so SPK is selected here.
+
+log() { echo "<5>nspanel-audio: $*" > /dev/kmsg; }
+
+case "$1" in
+start)
+	if ! grep -q "rk809" /proc/asound/cards 2>/dev/null; then
+		log "no rk809 sound card"
+		exit 0
+	fi
+	card=$(sed -n 's/^ *\([0-9]*\) \[rk809 .*/\1/p' /proc/asound/cards)
+	amixer -q -c "$card" cset name="Playback Mux" SPK
+	# 200 of 255 = -20.6 dB digital volume until the panel app starts and
+	# sets the user's volume (settings / the Volume entity in Home Assistant).
+	amixer -q -c "$card" cset name="Master Playback Volume" 200,200
+	log "speaker path selected (card $card)"
+	;;
+stop | restart | reload)
+	;;
+esac
+exit 0

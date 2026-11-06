@@ -1,0 +1,23 @@
+# Local firmware backups: contain device-unique data (MAC, keys, serial). Never publish.
+backup/
+*.img
+*.apk
+
+# Buildroot / kernel build outputs
+output/
+build/
+dl/
+*.tar.gz
+*.tar.xz
+
+# Rust
+target/
+
+# Secrets and local config
+.env
+*.secret
+setup.json
+config.local.*
+
+# Logs
+*.log

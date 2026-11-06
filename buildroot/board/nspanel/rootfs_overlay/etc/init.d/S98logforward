@@ -1,0 +1,27 @@
+#!/bin/sh
+# Development aid: forward new syslog lines (dropbear, wpa_supplicant, udhcpc)
+# to the kernel log, so they end up in pstore and can be read back from the
+# stock Android after a reboot.
+
+LOG=/var/log/messages
+
+case "$1" in
+start)
+	(
+		while [ ! -f "$LOG" ]; do sleep 1; done
+		tail -n +1 -F "$LOG" 2>/dev/null | while IFS= read -r line; do
+			# Never forward anything that came from the kernel log: klogd
+			# puts kernel messages (and our own /dev/kmsg lines, as
+			# "user.* kernel:") into syslog, so forwarding them would
+			# loop back into the kernel log forever.
+			case "$line" in
+			*" kernel:"* | *"syslog:"*) continue ;;
+			esac
+			echo "<6>syslog: $line" > /dev/kmsg
+		done
+	) &
+	;;
+stop | restart | reload)
+	;;
+esac
+exit 0

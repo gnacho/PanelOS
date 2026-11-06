@@ -1,0 +1,60 @@
+#!/bin/sh
+# Which system the stock U-Boot starts on every boot.
+#
+#   nspanel-bootmode open      always boot the open system (recovery partition)
+#   nspanel-bootmode android   normal boot again (stock Android on the boot partition)
+#   nspanel-bootmode status
+#
+# The stock (Rockchip) U-Boot reads an Android bootloader message ("BCB") at
+# 16 KiB into the misc partition; while its command is "boot-recovery" it boots
+# the recovery partition, where this system lives. Nothing clears it except
+# this tool (the stock Android recovery would, but it is not used).
+
+BCB_OFFSET_SECTORS=32   # 16 KiB
+BCB_SIZE=2048
+
+find_part() {
+	for d in /sys/class/block/mmcblk0p*; do
+		if grep -qx "PARTNAME=$1" "$d/uevent"; then
+			echo "/dev/$(basename "$d")"
+			return 0
+		fi
+	done
+	return 1
+}
+
+misc=$(find_part misc) || { echo "misc partition not found" >&2; exit 1; }
+
+current() {
+	dd if="$misc" bs=512 skip=$BCB_OFFSET_SECTORS count=1 2>/dev/null | head -c 32 | tr -d '\000'
+}
+
+case "$1" in
+open)
+	tmp=/tmp/bcb.$$
+	dd if=/dev/zero of=$tmp bs=$BCB_SIZE count=1 2>/dev/null
+	printf 'boot-recovery' | dd of=$tmp conv=notrunc 2>/dev/null
+	printf 'recovery\n' | dd of=$tmp bs=1 seek=64 conv=notrunc 2>/dev/null
+	dd if=$tmp of="$misc" bs=512 seek=$BCB_OFFSET_SECTORS conv=notrunc 2>/dev/null
+	rm -f $tmp
+	sync
+	echo "default boot: open system (misc command: $(current))"
+	;;
+android)
+	dd if=/dev/zero of="$misc" bs=512 seek=$BCB_OFFSET_SECTORS count=$((BCB_SIZE / 512)) conv=notrunc 2>/dev/null
+	sync
+	echo "default boot: normal (stock Android on the boot partition)"
+	;;
+status | "")
+	cmd=$(current)
+	if [ "$cmd" = "boot-recovery" ]; then
+		echo "default boot: open system"
+	else
+		echo "default boot: normal (misc command: '${cmd}')"
+	fi
+	;;
+*)
+	echo "usage: $0 open|android|status" >&2
+	exit 2
+	;;
+esac

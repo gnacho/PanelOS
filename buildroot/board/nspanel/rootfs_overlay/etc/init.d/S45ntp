@@ -1,0 +1,33 @@
+#!/bin/sh
+# Network time: busybox ntpd, started once Wi-Fi has an address.
+
+SERVERS="-p hu.pool.ntp.org -p pool.ntp.org"
+
+log() { echo "<5>nspanel-ntp: $*" > /dev/kmsg; }
+
+case "$1" in
+start)
+	(
+		i=0
+		while [ $i -lt 180 ]; do
+			if ip -4 -o addr show dev wlan0 2>/dev/null | grep -q " inet "; then
+				# shellcheck disable=SC2086
+				ntpd $SERVERS
+				log "ntpd started"
+				exit 0
+			fi
+			sleep 2
+			i=$((i + 2))
+		done
+		log "no network address, ntpd not started"
+	) &
+	;;
+stop)
+	p=$(pidof ntpd) && kill $p
+	;;
+restart | reload)
+	"$0" stop
+	"$0" start
+	;;
+esac
+exit 0

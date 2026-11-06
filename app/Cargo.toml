@@ -1,0 +1,38 @@
+[package]
+name = "nspanel-app"
+version = "0.0.1"
+edition = "2021"
+description = "Native Home Assistant panel app for the Sonoff NSPanel Pro 86"
+publish = false
+# Slint is used under its GPLv3 option (its royalty-free licence excludes
+# embedded systems); GPLv3 section 13 allows the combination.
+license = "AGPL-3.0-or-later"
+
+[dependencies]
+slint = { version = "1.18", default-features = false, features = [
+    "compat-1-2",
+    "std",
+    "renderer-software",
+    "software-renderer-systemfonts",
+] }
+drm = "0.15"
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+ureq = { version = "2.12", default-features = false }
+qrcode = { version = "0.14", default-features = false }
+jpeg-decoder = { version = "0.3", default-features = false }
+prost = "0.14"
+minimp3 = "0.5"
+alsa = "0.12"
+
+[build-dependencies]
+slint-build = "1.18"
+cc = "1"
+prost-build = "0.14"
+protox = "0.10"
+
+[profile.release]
+strip = true
+lto = "thin"

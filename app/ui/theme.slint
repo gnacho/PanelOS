@@ -1,0 +1,23 @@
+// Colours for the light and dark look; `dark` is set by the app
+// (setting: dark, light, or auto = by the sun / the light sensor).
+
+export global Theme {
+    in-out property <bool> dark: true;
+
+    out property <color> background: dark ? #0f1115 : #eef1f5;
+    out property <color> card: dark ? #1b1f27 : #ffffff;
+    out property <color> card-on: dark ? #262b35 : #ffffff;
+    out property <color> card-pressed: dark ? #323846 : #e3e7ec;
+    out property <color> button: dark ? #2a2f3a : #eceff3;
+    out property <color> button-pressed: dark ? #3a4150 : #d5dae1;
+    out property <color> text: dark ? #f3f4f6 : #111827;
+    out property <color> muted: dark ? #9ca3af : #5b6472;
+    out property <color> faint: dark ? #6b7280 : #9aa3af;
+    out property <color> scrim: dark ? #000000c0 : #00000070;
+    out property <color> sheet: dark ? #161a21 : #f7f8fa;
+    out property <color> accent: #3b82f6;
+    out property <color> badge-off: dark ? #ffffff12 : #0000000d;
+    out property <color> chip: dark ? #2a2f3a : #ffffff;
+    out property <color> chip-border: dark ? #2a2f3a : #cfd5dd;
+    out property <length> radius: 18px;
+}

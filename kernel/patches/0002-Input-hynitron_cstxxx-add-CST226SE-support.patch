@@ -1,0 +1,72 @@
+diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
+index 49fb35c83..9bca54b9f 100644
+--- a/drivers/input/touchscreen/hynitron_cstxxx.c
++++ b/drivers/input/touchscreen/hynitron_cstxxx.c
+@@ -27,6 +27,8 @@
+ struct hynitron_ts_chip_data {
+ 	unsigned int max_touch_num;
+ 	u32 ic_chkcode;
++	unsigned int reset_delay_ms;	/* settle time after reset, 0 = 60 ms */
++	const char *input_name;		/* NULL = "Hynitron cst3xx Touchscreen" */
+ 	int (*firmware_info)(struct i2c_client *client);
+ 	int (*bootloader_enter)(struct i2c_client *client);
+ 	int (*init_input)(struct i2c_client *client);
+@@ -372,7 +374,8 @@ static int cst3xx_input_dev_int(struct i2c_client *client)
+ 		return -ENOMEM;
+ 	}
+ 
+-	ts_data->input_dev->name = "Hynitron cst3xx Touchscreen";
++	ts_data->input_dev->name = ts_data->chip->input_name ?:
++				  "Hynitron cst3xx Touchscreen";
+ 	ts_data->input_dev->phys = "input/ts";
+ 	ts_data->input_dev->id.bustype = BUS_I2C;
+ 
+@@ -440,11 +443,13 @@ static int hyn_probe(struct i2c_client *client)
+ 		return err;
+ 	}
+ 
+-	hyn_reset_proc(client, 60);
++	hyn_reset_proc(client, ts_data->chip->reset_delay_ms ?: 60);
+ 
+-	err = ts_data->chip->bootloader_enter(client);
+-	if (err < 0)
+-		return err;
++	if (ts_data->chip->bootloader_enter) {
++		err = ts_data->chip->bootloader_enter(client);
++		if (err < 0)
++			return err;
++	}
+ 
+ 	err = ts_data->chip->init_input(client);
+ 	if (err < 0)
+@@ -475,6 +480,22 @@ static const struct hynitron_ts_chip_data cst3xx_data = {
+ 	.report_touch		= &cst3xx_touch_report,
+ };
+ 
++/*
++ * CST226SE (CST2xx family, e.g. Sonoff NSPanel Pro): same firmware info
++ * commands and touch frame as the CST3xx, but it does not answer the CST3xx
++ * bootloader command; trying it leaves the chip in bootloader mode until the
++ * next reset. Chip type 0xa8 is reported at register 0xd204.
++ */
++static const struct hynitron_ts_chip_data cst226se_data = {
++	.max_touch_num		= 5,
++	.ic_chkcode		= 0xcaca0000,
++	.reset_delay_ms		= 100,
++	.input_name		= "Hynitron CST226SE Touchscreen",
++	.firmware_info		= &cst3xx_firmware_info,
++	.init_input		= &cst3xx_input_dev_int,
++	.report_touch		= &cst3xx_touch_report,
++};
++
+ static const struct i2c_device_id hyn_tpd_id[] = {
+ 	{ .name = "hynitron_ts" },
+ 	{ /* sentinel */ },
+@@ -482,6 +503,7 @@ static const struct i2c_device_id hyn_tpd_id[] = {
+ MODULE_DEVICE_TABLE(i2c, hyn_tpd_id);
+ 
+ static const struct of_device_id hyn_dt_match[] = {
++	{ .compatible = "hynitron,cst226se", .data = &cst226se_data },
+ 	{ .compatible = "hynitron,cst340", .data = &cst3xx_data },
+ 	{ /* sentinel */ },
+ };

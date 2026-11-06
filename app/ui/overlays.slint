@@ -1,0 +1,513 @@
+// Full-screen layers: entity details ("more info"), settings, screensaver,
+// pairing (QR login).
+
+import { Theme } from "theme.slint";
+import { Icon, RoundButton, TextButton, Chip, ChipRow, Toggle, BigSlider } from "widgets.slint";
+
+export struct MoreInfoData {
+    entity: string,
+    name: string,
+    icon: string,
+    state: string,
+    accent: color,
+    on: bool,
+    domain: string,        // light, cover, climate, media_player, ...
+    can-toggle: bool,
+    has-brightness: bool,
+    brightness: float,     // 0..1
+    has-ct: bool,
+    ct: float,             // 0..1 between ct-min and ct-max
+    ct-min: int,           // kelvin
+    ct-max: int,
+    has-color: bool,
+    hue: float,            // 0..1
+    has-position: bool,
+    position: float,       // 0..1
+    target: string,
+    current: string,
+    hvac-labels: [string],
+    hvac-index: int,
+    fan-labels: [string],
+    fan-index: int,
+    preset-labels: [string],
+    preset-index: int,
+    swing-labels: [string],
+    swing-index: int,
+    title: string,
+    artist: string,
+    playing: bool,
+    volume: float,         // 0..1
+    source-labels: [string],
+    source-index: int,
+}
+
+component Section inherits VerticalLayout {
+    in property <string> title;
+    spacing: 8px;
+    Text {
+        text: root.title;
+        font-size: 14px;
+        color: Theme.muted;
+    }
+    @children
+}
+
+export component MoreInfo inherits Rectangle {
+    in property <MoreInfoData> data;
+    callback close();
+    callback slider(string, float);
+    callback select(string, int);
+    callback act(string);
+    background: Theme.scrim;
+    TouchArea { clicked => { root.close(); } }
+    Rectangle {
+        y: 24px;
+        height: parent.height - 24px;
+        border-radius: 22px;
+        background: Theme.sheet;
+        TouchArea { }   // keeps taps on the sheet from closing it
+        VerticalLayout {
+            padding: 16px;
+            spacing: 12px;
+            HorizontalLayout {
+                spacing: 12px;
+                Rectangle {
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 24px;
+                    background: root.data.on ? root.data.accent.with-alpha(0.22) : Theme.badge-off;
+                    Icon {
+                        text: root.data.icon;
+                        font-size: 28px;
+                        color: root.data.on ? root.data.accent : Theme.muted;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Text { text: root.data.name; font-size: 20px; font-weight: 700; color: Theme.text; overflow: elide; }
+                    Text { text: root.data.state; font-size: 15px; color: Theme.muted; overflow: elide; }
+                }
+                if root.data.can-toggle: VerticalLayout {
+                    alignment: center;
+                    Toggle { on: root.data.on; toggled => { root.act("toggle"); } }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    RoundButton { icon: "\u{F0156}"; size: 40px; clicked => { root.close(); } }
+                }
+            }
+            Flickable {
+                content-height: body.preferred-height;
+                body := VerticalLayout {
+                    spacing: 16px;
+                    padding-bottom: 12px;
+                    // Lights
+                    if root.data.has-brightness: BigSlider {
+                        title: "Brightness";
+                        value: root.data.brightness;
+                        fill: root.data.accent;
+                        changed(v) => { root.slider("brightness", v); }
+                    }
+                    if root.data.has-ct: BigSlider {
+                        title: "White";
+                        value: root.data.ct;
+                        unit: 1;
+                        min-value: root.data.ct-min;
+                        max-value: root.data.ct-max;
+                        show-fill: false;
+                        track: @linear-gradient(90deg, #ffb347 0%, #fff3e0 50%, #cfe3ff 100%);
+                        changed(v) => { root.slider("ct", v); }
+                    }
+                    if root.data.has-color: BigSlider {
+                        title: "Colour";
+                        value: root.data.hue;
+                        unit: 2;
+                        show-fill: false;
+                        track: @linear-gradient(90deg, #ff0000 0%, #ffff00 17%, #00ff00 33%, #00ffff 50%, #0000ff 67%, #ff00ff 83%, #ff0000 100%);
+                        changed(v) => { root.slider("hue", v); }
+                    }
+                    // Shutters
+                    if root.data.has-position: BigSlider {
+                        title: "Open";
+                        value: root.data.position;
+                        changed(v) => { root.slider("position", v); }
+                    }
+                    if root.data.domain == "cover": HorizontalLayout {
+                        alignment: center;
+                        spacing: 16px;
+                        RoundButton { icon: "\u{F005D}"; size: 56px; clicked => { root.act("open"); } }
+                        RoundButton { icon: "\u{F04DB}"; size: 56px; clicked => { root.act("stop"); } }
+                        RoundButton { icon: "\u{F0045}"; size: 56px; clicked => { root.act("close"); } }
+                    }
+                    // Climate
+                    if root.data.domain == "climate": HorizontalLayout {
+                        alignment: center;
+                        spacing: 16px;
+                        VerticalLayout { alignment: center; RoundButton { icon: "\u{F0374}"; size: 56px; clicked => { root.act("temp_down"); } } }
+                        VerticalLayout {
+                            alignment: center;
+                            Text {
+                                text: root.data.target;
+                                font-size: 48px;
+                                font-weight: 700;
+                                color: root.data.on ? root.data.accent : Theme.muted;
+                                horizontal-alignment: center;
+                            }
+                            Text {
+                                text: "Now " + root.data.current;
+                                font-size: 15px;
+                                color: Theme.muted;
+                                horizontal-alignment: center;
+                            }
+                        }
+                        VerticalLayout { alignment: center; RoundButton { icon: "\u{F0415}"; size: 56px; clicked => { root.act("temp_up"); } } }
+                    }
+                    if root.data.hvac-labels.length > 0: Section {
+                        title: "Mode";
+                        ChipRow { items: root.data.hvac-labels; selected: root.data.hvac-index; picked(i) => { root.select("hvac", i); } }
+                    }
+                    if root.data.fan-labels.length > 0: Section {
+                        title: "Fan";
+                        ChipRow { items: root.data.fan-labels; selected: root.data.fan-index; picked(i) => { root.select("fan", i); } }
+                    }
+                    if root.data.preset-labels.length > 0: Section {
+                        title: "Preset";
+                        ChipRow { items: root.data.preset-labels; selected: root.data.preset-index; picked(i) => { root.select("preset", i); } }
+                    }
+                    if root.data.swing-labels.length > 0: Section {
+                        title: "Swing";
+                        ChipRow { items: root.data.swing-labels; selected: root.data.swing-index; picked(i) => { root.select("swing", i); } }
+                    }
+                    // Media
+                    if root.data.domain == "media_player": VerticalLayout {
+                        spacing: 4px;
+                        Text { text: root.data.title; font-size: 18px; color: Theme.text; overflow: elide; horizontal-alignment: center; }
+                        Text { text: root.data.artist; font-size: 15px; color: Theme.muted; overflow: elide; horizontal-alignment: center; }
+                    }
+                    if root.data.domain == "media_player": HorizontalLayout {
+                        alignment: center;
+                        spacing: 16px;
+                        RoundButton { icon: "\u{F04AE}"; size: 56px; clicked => { root.act("prev"); } }
+                        RoundButton {
+                            icon: root.data.playing ? "\u{F03E4}" : "\u{F040A}";
+                            size: 64px;
+                            tint: root.data.accent;
+                            clicked => { root.act("play_pause"); }
+                        }
+                        RoundButton { icon: "\u{F04AD}"; size: 56px; clicked => { root.act("next"); } }
+                    }
+                    if root.data.domain == "media_player": BigSlider {
+                        title: "Volume";
+                        value: root.data.volume;
+                        fill: root.data.accent;
+                        changed(v) => { root.slider("volume", v); }
+                    }
+                    if root.data.source-labels.length > 0: Section {
+                        title: "Source";
+                        ChipRow { items: root.data.source-labels; selected: root.data.source-index; picked(i) => { root.select("source", i); } }
+                    }
+                }
+            }
+        }
+    }
+}
+
+export struct SettingsData {
+    theme-index: int,          // 0 dark, 1 light, 2 auto
+    brightness: float,         // 0..1 (manual)
+    auto-brightness: bool,
+    screensaver-index: int,    // index into the app's timeout list
+    style-index: int,          // 0 clock, 1 black
+    proximity: bool,
+    dashboards: [string],
+    dashboard-index: int,
+    display-mode: int,         // 0 dashboard, 1 assistant
+    volume: float,             // 0..1
+    about: string,
+}
+
+component SettingRow inherits HorizontalLayout {
+    in property <string> title;
+    spacing: 12px;
+    Text {
+        text: root.title;
+        font-size: 17px;
+        color: Theme.text;
+        vertical-alignment: center;
+        horizontal-stretch: 1;
+    }
+    @children
+}
+
+export component SettingsPage inherits Rectangle {
+    in property <SettingsData> data;
+    in property <[string]> screensaver-labels;
+    callback close();
+    callback changed(string, string);
+    background: Theme.background;
+    TouchArea { }
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 12px;
+            Text {
+                text: "Settings";
+                font-size: 24px;
+                font-weight: 700;
+                color: Theme.text;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            RoundButton { icon: "\u{F0156}"; size: 40px; clicked => { root.close(); } }
+        }
+        Flickable {
+            content-height: list.preferred-height;
+            list := VerticalLayout {
+                spacing: 14px;
+                padding-bottom: 16px;
+                Section {
+                    title: "Display mode";
+                    ChipRow {
+                        items: ["Dashboard", "Assistant"];
+                        selected: root.data.display-mode;
+                        picked(i) => { root.changed("display_mode", i == 0 ? "dashboard" : "assistant"); }
+                    }
+                }
+                Section {
+                    title: "Theme";
+                    ChipRow {
+                        items: ["Dark", "Light", "Auto"];
+                        selected: root.data.theme-index;
+                        picked(i) => { root.changed("theme", i == 0 ? "dark" : i == 1 ? "light" : "auto"); }
+                    }
+                }
+                Section {
+                    title: "Brightness";
+                    SettingRow {
+                        title: "Automatic (light sensor)";
+                        Toggle {
+                            on: root.data.auto-brightness;
+                            toggled => { root.changed("auto_brightness", root.data.auto-brightness ? "false" : "true"); }
+                        }
+                    }
+                    if !root.data.auto-brightness: BigSlider {
+                        title: "Brightness";
+                        value: root.data.brightness;
+                        changed(v) => { root.changed("brightness", "" + round(v * 100)); }
+                    }
+                }
+                Section {
+                    title: "Sound";
+                    BigSlider {
+                        title: "Volume";
+                        value: root.data.volume;
+                        changed(v) => { root.changed("volume", "" + round(v * 100)); }
+                    }
+                }
+                Section {
+                    title: "Screensaver after";
+                    ChipRow {
+                        items: root.screensaver-labels;
+                        selected: root.data.screensaver-index;
+                        picked(i) => { root.changed("screensaver_index", "" + i); }
+                    }
+                    ChipRow {
+                        items: ["Clock", "Screen off"];
+                        selected: root.data.style-index;
+                        picked(i) => { root.changed("screensaver_style", i == 0 ? "clock" : "black"); }
+                    }
+                    SettingRow {
+                        title: "Wake when someone approaches";
+                        Toggle {
+                            on: root.data.proximity;
+                            toggled => { root.changed("proximity_wake", root.data.proximity ? "false" : "true"); }
+                        }
+                    }
+                }
+                Section {
+                    title: "Dashboard";
+                    ChipRow {
+                        items: root.data.dashboards;
+                        selected: root.data.dashboard-index;
+                        picked(i) => { root.changed("dashboard_index", "" + i); }
+                    }
+                }
+                Section {
+                    title: "About";
+                    Text {
+                        text: root.data.about;
+                        font-size: 14px;
+                        color: Theme.muted;
+                        wrap: word-wrap;
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    TextButton { text: "Restart app"; clicked => { root.changed("restart_app", ""); } }
+                    TextButton { text: "Reboot panel"; clicked => { root.changed("reboot", ""); } }
+                }
+                TextButton { text: "Log out of Home Assistant"; danger: true; clicked => { root.changed("logout", ""); } }
+            }
+        }
+    }
+}
+
+export component Screensaver inherits Rectangle {
+    in property <string> time;
+    in property <string> date;
+    in property <string> info;
+    in property <string> info-icon;
+    in property <bool> black;
+    callback wake();
+    background: #000000;
+    if !root.black: VerticalLayout {
+        alignment: center;
+        spacing: 8px;
+        Text {
+            text: root.time;
+            font-size: 120px;
+            font-weight: 700;
+            color: #e5e7eb;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.date;
+            font-size: 22px;
+            color: #9ca3af;
+            horizontal-alignment: center;
+        }
+        if root.info != "": HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            Icon { text: root.info-icon; font-size: 30px; color: #9ca3af; }
+            Text { text: root.info; font-size: 22px; color: #9ca3af; vertical-alignment: center; }
+        }
+    }
+    // Wake on release: the whole tap stays on the screensaver, so nothing
+    // underneath receives half of it.
+    TouchArea {
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.up) {
+                root.wake();
+            }
+        }
+    }
+}
+
+// Voice conversation feedback at the bottom of the screen.
+// state: 1 listening, 2 thinking, 3 answer, 4 error.
+export component AssistPanel inherits Rectangle {
+    in property <int> state;
+    in property <string> heard;
+    in property <string> answer;
+    callback dismiss();
+    height: 168px;
+    border-radius: 22px;
+    background: Theme.sheet;
+    drop-shadow-blur: 16px;
+    drop-shadow-color: #00000060;
+    TouchArea { clicked => { root.dismiss(); } }
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 14px;
+        VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 64px;
+                height: 64px;
+                border-radius: 32px;
+                background: root.state == 1 ? #3b82f6 : root.state == 2 ? #f59e0b : root.state == 4 ? #ef4444 : #22c55e;
+                animate background { duration: 200ms; }
+                Icon {
+                    text: root.state == 1 ? "\u{F036C}" : root.state == 2 ? "\u{F12CA}" : root.state == 4 ? "\u{F05D6}" : "\u{F05CB}";
+                    font-size: 36px;
+                    color: #ffffff;
+                }
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 6px;
+            Text {
+                text: root.state == 1 ? (root.heard == "" ? "Listening…" : root.heard)
+                    : root.state == 2 ? (root.heard == "" ? "…" : root.heard)
+                    : root.heard;
+                font-size: 17px;
+                color: Theme.muted;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+            if root.state >= 3: Text {
+                text: root.answer;
+                font-size: 18px;
+                color: Theme.text;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+export component TimerAlarm inherits Rectangle {
+    in property <string> name;
+    callback stop();
+    background: #000000e8;
+    TouchArea { }
+    VerticalLayout {
+        alignment: center;
+        spacing: 16px;
+        Icon { text: "\u{F009E}"; font-size: 96px; color: #f59e0b; }
+        Text {
+            text: root.name == "" ? "Timer" : root.name;
+            font-size: 30px;
+            font-weight: 700;
+            color: #ffffff;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            TextButton { width: 200px; text: "Stop"; clicked => { root.stop(); } }
+        }
+    }
+}
+
+export component PairingScreen inherits Rectangle {
+    in property <image> qr;
+    in property <string> hint;
+    background: Theme.background;
+    VerticalLayout {
+        padding: 20px;
+        spacing: 12px;
+        alignment: center;
+        Text {
+            text: "Connect to Home Assistant";
+            font-size: 24px;
+            font-weight: 700;
+            color: Theme.text;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 270px;
+                height: 270px;
+                background: #ffffff;
+                border-radius: 12px;
+                Image {
+                    width: 254px;
+                    height: 254px;
+                    source: root.qr;
+                    image-rendering: pixelated;
+                }
+            }
+        }
+        Text {
+            text: root.hint;
+            font-size: 15px;
+            color: Theme.muted;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}

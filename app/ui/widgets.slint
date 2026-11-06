@@ -1,0 +1,164 @@
+// Small building blocks: icon text, round buttons, chips, toggles, sliders.
+
+import { Theme } from "theme.slint";
+
+export component Icon inherits Text {
+    font-family: "Material Design Icons";
+    horizontal-alignment: center;
+    vertical-alignment: center;
+}
+
+export component RoundButton inherits Rectangle {
+    in property <string> icon;
+    in property <color> tint: Theme.text;
+    in property <length> size: 44px;
+    callback clicked;
+    width: self.size;
+    height: self.size;
+    border-radius: self.size / 2;
+    background: touch.pressed ? Theme.button-pressed : Theme.button;
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    Icon {
+        text: root.icon;
+        font-size: root.size * 0.55;
+        color: root.tint;
+    }
+}
+
+export component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <color> tint: Theme.text;
+    in property <bool> danger: false;
+    callback clicked;
+    height: 48px;
+    border-radius: 14px;
+    background: touch.pressed ? Theme.button-pressed : Theme.button;
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: root.text;
+        font-size: 16px;
+        color: root.danger ? #ef4444 : root.tint;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> selected;
+    callback clicked;
+    height: 40px;
+    min-width: label.preferred-width + 28px;
+    border-radius: 20px;
+    background: root.selected ? Theme.accent.with-alpha(0.22) : (touch.pressed ? Theme.button-pressed : Theme.chip);
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? Theme.accent : Theme.chip-border;
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    label := Text {
+        text: root.text;
+        font-size: 15px;
+        color: Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+// A horizontally scrolling row of chips; `selected` is an index (-1 = none).
+export component ChipRow inherits Flickable {
+    in property <[string]> items;
+    in property <int> selected: -1;
+    callback picked(int);
+    height: 44px;
+    content-width: row.preferred-width;
+    row := HorizontalLayout {
+        spacing: 8px;
+        padding-top: 2px;
+        padding-bottom: 2px;
+        for item[i] in root.items: Chip {
+            text: item;
+            selected: i == root.selected;
+            clicked => { root.picked(i); }
+        }
+    }
+}
+
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    callback toggled;
+    width: 56px;
+    height: 32px;
+    border-radius: 16px;
+    background: root.on ? Theme.accent : Theme.button-pressed;
+    animate background { duration: 150ms; }
+    Rectangle {
+        x: root.on ? parent.width - self.width - 4px : 4px;
+        y: 4px;
+        width: 24px;
+        height: 24px;
+        border-radius: 12px;
+        background: #ffffff;
+        animate x { duration: 150ms; }
+    }
+    TouchArea {
+        clicked => { root.toggled(); }
+    }
+}
+
+// Large touch slider. `value` (0..1) comes from Home Assistant; while the
+// finger is down the slider follows it and `changed` fires on release.
+// unit: 0 = percent, 1 = kelvin (min-value..max-value), 2 = no number.
+export component BigSlider inherits Rectangle {
+    in property <float> value;
+    in property <string> title;
+    in property <brush> track: Theme.button;
+    in property <brush> fill: Theme.accent;
+    in property <bool> show-fill: true;
+    in property <int> unit: 0;
+    in property <int> min-value: 0;
+    in property <int> max-value: 100;
+    callback changed(float);
+    property <float> live: touch.pressed ? max(0, min(1, touch.mouse-x / self.width)) : root.value;
+    height: 56px;
+    border-radius: 16px;
+    background: root.track;
+    clip: true;
+    if root.show-fill: Rectangle {
+        x: 0;
+        width: parent.width * root.live;
+        height: parent.height;
+        background: root.fill;
+    }
+    if !root.show-fill: Rectangle {
+        x: max(4px, min(parent.width - 10px, parent.width * root.live - 3px));
+        y: 6px;
+        width: 6px;
+        height: parent.height - 12px;
+        border-radius: 3px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #00000055;
+    }
+    Text {
+        x: 16px;
+        text: root.unit == 0 ? root.title + "   " + round(root.live * 100) + " %"
+            : root.unit == 1 ? root.title + "   " + round(root.min-value + root.live * (root.max-value - root.min-value)) + " K"
+            : root.title;
+        font-size: 16px;
+        // Gradient tracks (colour temperature, colour) are light at the left: dark text.
+        color: !root.show-fill ? #111827 : (root.live > 0.25 ? #ffffff : Theme.text);
+        vertical-alignment: center;
+    }
+    touch := TouchArea {
+        pointer-event(ev) => {
+            if (ev.kind == PointerEventKind.up) {
+                root.changed(max(0, min(1, self.mouse-x / root.width)));
+            }
+        }
+    }
+}

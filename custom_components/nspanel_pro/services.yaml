@@ -1,0 +1,61 @@
+show_view:
+  fields:
+    panel_id:
+      example: nspanel-pro
+      selector:
+        text:
+    view:
+      required: true
+      default: home
+      selector:
+        select:
+          translation_key: view
+          options:
+            - home
+            - dashboard
+            - weather
+            - media
+            - camera
+    entity_id:
+      selector:
+        entity:
+          domain: camera
+    seconds:
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+
+show_message:
+  fields:
+    panel_id:
+      example: nspanel-pro
+      selector:
+        text:
+    title:
+      example: Doorbell
+      selector:
+        text:
+    message:
+      required: true
+      example: Someone is at the front door.
+      selector:
+        text:
+          multiline: true
+    icon:
+      example: mdi:doorbell
+      selector:
+        icon:
+    seconds:
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: s
+    chime:
+      default: false
+      selector:
+        boolean:

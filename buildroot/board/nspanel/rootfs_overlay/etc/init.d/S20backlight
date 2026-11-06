@@ -1,0 +1,16 @@
+#!/bin/sh
+# Switch the backlight on at boot.
+
+BL=/sys/class/backlight/backlight
+
+case "$1" in
+start)
+	if [ -w "$BL/brightness" ]; then
+		echo 180 > "$BL/brightness"
+		echo "<5>nspanel: backlight on" > /dev/kmsg
+	fi
+	;;
+stop | restart | reload)
+	;;
+esac
+exit 0

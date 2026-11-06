@@ -1,0 +1,49 @@
+# Sonoff NSPanel Pro 86 (Rockchip PX30), root filesystem only.
+# The kernel is built separately (tools/build_image.sh) from kernel/.
+BR2_aarch64=y
+BR2_cortex_a35=y
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
+BR2_TARGET_GENERIC_HOSTNAME="nspanel"
+BR2_TARGET_GENERIC_ISSUE="NSPanel Pro open firmware"
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_MDEV=y
+BR2_TARGET_GENERIC_GETTY_PORT="ttyS2"
+BR2_TARGET_GENERIC_GETTY_BAUDRATE_KEEP=y
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_NSPANEL_PATH)/board/nspanel/rootfs_overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_NSPANEL_PATH)/board/nspanel/post-build.sh"
+BR2_PACKAGE_LINUX_FIRMWARE=y
+BR2_PACKAGE_LINUX_FIRMWARE_RTL_RTW88=y
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_CLI=y
+BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
+BR2_PACKAGE_DROPBEAR=y
+BR2_PACKAGE_IW=y
+BR2_PACKAGE_WIRELESS_REGDB=y
+BR2_PACKAGE_I2C_TOOLS=y
+BR2_PACKAGE_EVTEST=y
+BR2_PACKAGE_ALSA_UTILS=y
+BR2_PACKAGE_ALSA_UTILS_AMIXER=y
+BR2_PACKAGE_ALSA_UTILS_APLAY=y
+BR2_PACKAGE_ALSA_UTILS_SPEAKER_TEST=y
+# Font discovery for the panel app's UI toolkit (Slint software renderer).
+# fontique (Slint's font backend) panics when fontconfig finds no font at
+# all, so at least one system font must be installed.
+BR2_PACKAGE_FONTCONFIG=y
+BR2_PACKAGE_DEJAVU=y
+# BR2_PACKAGE_DEJAVU_MONO is not set
+# BR2_PACKAGE_DEJAVU_SERIF is not set
+# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
+# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
+# Busybox extras (ntpd)
+BR2_PACKAGE_BUSYBOX_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_NSPANEL_PATH)/board/nspanel/busybox.fragment"
+# On-device wake word (microWakeWord models) for the voice satellite
+BR2_PACKAGE_TENSORFLOW_LITE=y
+# Echo cancellation (AEC3), noise suppression for the voice satellite
+BR2_PACKAGE_WEBRTC_AUDIO_PROCESSING=y
+# Rust toolchain (prebuilt, host only) for the panel app
+BR2_PACKAGE_HOST_RUSTC=y
+BR2_PACKAGE_HOST_RUST_BIN=y
+BR2_TARGET_ROOTFS_CPIO=y
+BR2_TARGET_ROOTFS_CPIO_GZIP=y
+# BR2_TARGET_ROOTFS_TAR is not set

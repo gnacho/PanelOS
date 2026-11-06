@@ -1,0 +1,354 @@
+// NSPanel Pro 86 panel UI: top bar, view tabs, native Home Assistant
+// dashboard rows, the assistant mode home screen, and the full-screen
+// layers (details, settings, screensaver, pairing, camera, conversation,
+// weather, media, messages).
+
+import "./fonts/DejaVuSans.ttf";
+import "./fonts/DejaVuSans-Bold.ttf";
+import "./fonts/materialdesignicons-webfont.ttf";
+
+import { Theme } from "theme.slint";
+import { Icon, RoundButton, ChipRow } from "widgets.slint";
+import { TileData, RowData, RowView } from "rows.slint";
+import { MoreInfoData, MoreInfo, SettingsData, SettingsPage, Screensaver, PairingScreen, AssistPanel, TimerAlarm } from "overlays.slint";
+import { ForecastItem, AssistantData, AssistantHome, AssistFull, MessageCard, WeatherFull, MediaFull } from "assistant.slint";
+
+export { Theme, TileData, RowData, MoreInfoData, SettingsData, ForecastItem, AssistantData }
+
+export component MainWindow inherits Window {
+    width: 480px;
+    height: 480px;
+    background: Theme.background;
+    default-font-family: "DejaVu Sans";
+
+    in property <string> time: "--:--";
+    in property <string> date: "";
+    in property <string> long-date: "";
+    in property <bool> paired: false;
+    in property <image> qr;
+    in property <string> pair-hint: "";
+    in property <string> pair-url: "";
+    in property <string> status: "";
+    in property <bool> connected: false;
+    in property <string> header-info: "";
+    in property <[RowData]> rows;
+    in property <[string]> views;
+    in property <int> view-index: 0;
+    in property <image> camera-image;
+    in-out property <bool> camera-full: false;
+    in property <MoreInfoData> more-info;
+    in-out property <bool> more-info-open: false;
+    in property <SettingsData> settings;
+    in property <[string]> screensaver-labels;
+    in-out property <bool> settings-open: false;
+    in property <bool> screensaver: false;
+    in property <bool> screensaver-black: false;
+    in property <string> saver-info: "";
+    in property <string> saver-icon: "";
+    in property <int> assist-state: 0;
+    in property <string> assist-heard: "";
+    in property <string> assist-answer: "";
+    in property <string> timer-text: "";
+    in property <bool> timer-ringing: false;
+    in property <string> timer-name: "";
+    in property <bool> mic-muted: false;
+    // Hand-over from the boot splash
+    in property <image> intro-logo;
+    in property <length> intro-x;
+    in property <length> intro-y;
+    in-out property <bool> intro: true;
+    in-out property <bool> intro-visible: true;
+    // Assistant mode
+    in property <int> display-mode: 0;          // 0 dashboard, 1 assistant
+    in-out property <bool> show-dashboard: false; // assistant mode: dashboard opened for a while
+    in property <AssistantData> assistant;
+    in property <[RowData]> assistant-rows;
+    in property <image> media-art;
+    in property <bool> has-art: false;
+    in property <bool> assist-full: false;     // full-screen conversation
+    in-out property <bool> message-open: false;
+    in property <string> message-title: "";
+    in property <string> message-text: "";
+    in property <string> message-icon: "";
+    in-out property <bool> weather-open: false;
+    in-out property <bool> media-open: false;
+    in property <int> assistant-reset: 0;      // change it to scroll the home screen to the top
+    property <bool> dashboard-visible: root.display-mode == 0 || root.show-dashboard;
+
+    out property <length> scroll-y: flick.content-y;
+    out property <length> list-height: flick.height;
+    property <length> tabs-height: root.views.length > 1 ? 52px : 0px;
+
+    callback action(string, string);
+    callback view-selected(int);
+    callback more-info-slider(string, float);
+    callback more-info-select(string, int);
+    callback more-info-action(string);
+    callback more-info-closed();
+    callback settings-opened();
+    callback setting-changed(string, string);
+    callback wake();
+    callback stop-timer();
+    callback dismiss-assist();
+    callback media-action(string);
+    callback media-volume(float);
+    callback overlay-closed();
+    callback scroll-by(length);
+    scroll-by(d) => {
+        flick.content-y = max(min(0px, flick.content-y - d), flick.height - flick.content-height);
+    }
+    public function scroll-top() {
+        flick.content-y = 0px;
+    }
+
+    // Top bar: clock, date / page title, connection state, settings.
+    Rectangle {
+        height: 64px;
+        y: 0;
+        visible: root.dashboard-visible || !root.paired;
+        HorizontalLayout {
+            padding-left: 18px;
+            padding-right: 10px;
+            spacing: 12px;
+            Text {
+                text: root.time;
+                font-size: 34px;
+                font-weight: 700;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text { text: root.date; font-size: 14px; color: Theme.muted; overflow: elide; }
+                Text { text: root.header-info; font-size: 14px; color: Theme.muted; overflow: elide; }
+            }
+            if root.timer-text != "": VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    height: 32px;
+                    width: timer-row.preferred-width + 20px;
+                    border-radius: 16px;
+                    background: #f59e0b30;
+                    timer-row := HorizontalLayout {
+                        x: 10px;
+                        spacing: 4px;
+                        Icon { text: "\u{F051B}"; font-size: 18px; color: #f59e0b; }
+                        Text { text: root.timer-text; font-size: 15px; color: Theme.text; vertical-alignment: center; }
+                    }
+                }
+            }
+            if root.mic-muted: VerticalLayout {
+                alignment: center;
+                Icon { text: "\u{F036D}"; font-size: 22px; color: #ef4444; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Rectangle {
+                    width: 10px;
+                    height: 10px;
+                    border-radius: 5px;
+                    background: root.connected ? #22c55e : #ef4444;
+                }
+            }
+            if root.display-mode == 1: VerticalLayout {
+                alignment: center;
+                RoundButton {
+                    icon: "\u{F02DC}";
+                    size: 40px;
+                    tint: Theme.muted;
+                    clicked => { root.show-dashboard = false; }
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                RoundButton {
+                    icon: "\u{F0493}";
+                    size: 40px;
+                    tint: Theme.muted;
+                    clicked => {
+                        root.settings-open = true;
+                        root.settings-opened();
+                    }
+                }
+            }
+        }
+    }
+
+    if root.paired && root.dashboard-visible && root.views.length > 1: ChipRow {
+        x: 16px;
+        y: 64px;
+        width: root.width - 32px;
+        items: root.views;
+        selected: root.view-index;
+        picked(i) => { root.view-selected(i); }
+    }
+
+    flick := Flickable {
+        y: 64px + root.tabs-height;
+        height: root.height - 64px - root.tabs-height;
+        width: root.width;
+        content-height: list.preferred-height;
+        visible: root.paired && root.dashboard-visible;
+        list := VerticalLayout {
+            width: root.width;
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-top: 4px;
+            padding-bottom: 20px;
+            spacing: 8px;
+            for row in root.rows: RowView {
+                data: row;
+                camera-frame: root.camera-image;
+                act(e, a) => { root.action(e, a); }
+                camera-full => { root.camera-full = true; }
+            }
+            if root.rows.length == 0: Text {
+                text: root.status;
+                font-size: 16px;
+                color: Theme.muted;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+        }
+    }
+
+    if root.paired && !root.dashboard-visible: AssistantHome {
+        reset: root.assistant-reset;
+        time: root.time;
+        date: root.long-date;
+        data: root.assistant;
+        rows: root.assistant-rows;
+        art: root.media-art;
+        has-art: root.has-art;
+        camera-frame: root.camera-image;
+        connected: root.connected;
+        mic-muted: root.mic-muted;
+        timer-text: root.timer-text;
+        act(e, a) => { root.action(e, a); }
+        media-act(a) => { root.media-action(a); }
+        open-media => { root.media-open = true; }
+        open-weather => { root.weather-open = true; }
+        open-dashboard => { root.show-dashboard = true; }
+        open-settings => {
+            root.settings-open = true;
+            root.settings-opened();
+        }
+        camera-full => { root.camera-full = true; }
+    }
+
+    if !root.paired: PairingScreen {
+        y: 64px;
+        height: root.height - 64px;
+        qr: root.qr;
+        hint: root.pair-hint;
+    }
+
+    if root.more-info-open: MoreInfo {
+        data: root.more-info;
+        close => {
+            root.more-info-open = false;
+            root.more-info-closed();
+        }
+        slider(what, v) => { root.more-info-slider(what, v); }
+        select(what, i) => { root.more-info-select(what, i); }
+        act(a) => { root.more-info-action(a); }
+    }
+
+    if root.weather-open: WeatherFull {
+        data: root.assistant;
+        close => {
+            root.weather-open = false;
+            root.overlay-closed();
+        }
+    }
+
+    if root.media-open: MediaFull {
+        data: root.assistant;
+        art: root.media-art;
+        has-art: root.has-art;
+        close => {
+            root.media-open = false;
+            root.overlay-closed();
+        }
+        act(a) => { root.media-action(a); }
+        volume(v) => { root.media-volume(v); }
+    }
+
+    if root.camera-full: Rectangle {
+        background: #000000;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.camera-image;
+            image-fit: contain;
+        }
+        TouchArea {
+            clicked => {
+                root.camera-full = false;
+                root.overlay-closed();
+            }
+        }
+    }
+
+    if root.settings-open: SettingsPage {
+        data: root.settings;
+        screensaver-labels: root.screensaver-labels;
+        close => { root.settings-open = false; }
+        changed(k, v) => { root.setting-changed(k, v); }
+    }
+
+    if root.screensaver: Screensaver {
+        time: root.time;
+        date: root.date;
+        info: root.saver-info;
+        info-icon: root.saver-icon;
+        black: root.screensaver-black;
+        wake => { root.wake(); }
+    }
+
+    if root.message-open: MessageCard {
+        title: root.message-title;
+        message: root.message-text;
+        icon: root.message-icon;
+        dismiss => {
+            root.message-open = false;
+            root.overlay-closed();
+        }
+    }
+
+    if root.assist-state > 0 && root.assist-full: AssistFull {
+        state: root.assist-state;
+        heard: root.assist-heard;
+        answer: root.assist-answer;
+        dismiss => { root.dismiss-assist(); }
+    }
+
+    if root.assist-state > 0 && !root.assist-full: AssistPanel {
+        x: 10px;
+        y: root.height - self.height - 10px;
+        width: root.width - 20px;
+        state: root.assist-state;
+        heard: root.assist-heard;
+        answer: root.assist-answer;
+        dismiss => { root.dismiss-assist(); }
+    }
+
+    if root.timer-ringing: TimerAlarm {
+        name: root.timer-name;
+        stop => { root.stop-timer(); }
+    }
+
+    // Hand-over from the boot splash: its last frame (logo and text on
+    // black, same pixels), then it fades into the UI.
+    if root.intro-visible: Rectangle {
+        background: #000000;
+        opacity: root.intro ? 1 : 0;
+        animate opacity { duration: 500ms; easing: ease-in-out; }
+        Image {
+            x: root.intro-x;
+            y: root.intro-y;
+            source: root.intro-logo;
+        }
+    }
+}

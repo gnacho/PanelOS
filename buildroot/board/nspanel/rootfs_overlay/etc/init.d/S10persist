@@ -1,0 +1,43 @@
+#!/bin/sh
+# Persistent storage for this system's own settings (Wi-Fi, later the Home
+# Assistant pairing and the dashboard choice).
+#
+# While the stock Android is still on the eMMC, a directory on its "cache"
+# partition (ext4) is used: /mnt/persist/nspanel. When Android goes away,
+# this system gets its own data partition instead.
+
+MNT=/mnt/persist
+DIR=$MNT/nspanel
+
+log() { echo "<5>nspanel-persist: $*" > /dev/kmsg; }
+
+find_part() {
+	for d in /sys/class/block/mmcblk0p*; do
+		if grep -qx "PARTNAME=$1" "$d/uevent"; then
+			echo "/dev/$(basename "$d")"
+			return 0
+		fi
+	done
+	return 1
+}
+
+case "$1" in
+start)
+	dev=$(find_part cache) || { log "no cache partition"; exit 0; }
+	mkdir -p "$MNT"
+	if mount -t ext4 -o rw,noatime "$dev" "$MNT"; then
+		mkdir -p "$DIR"
+		chmod 700 "$DIR"
+		log "mounted $dev at $MNT"
+	else
+		log "cannot mount $dev, settings will not persist"
+	fi
+	;;
+stop)
+	sync
+	mountpoint -q "$MNT" && umount "$MNT"
+	;;
+restart | reload)
+	;;
+esac
+exit 0

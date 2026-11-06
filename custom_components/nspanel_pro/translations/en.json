@@ -1,0 +1,98 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add an NSPanel Pro",
+        "description": "Settings for the panel's assistant mode. The panel itself (settings, sensors, voice) is added by the ESPHome integration; switch it to assistant mode with its Display mode entity or on the panel.",
+        "data": {
+          "panel_id": "Panel ID (the panel's ESPHome name)",
+          "weather_entity": "Weather",
+          "media_player_entity": "Media player",
+          "tile_entities": "Quick tiles",
+          "show_conversation": "Full-screen conversation"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This panel is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Assistant mode",
+        "data": {
+          "weather_entity": "Weather",
+          "media_player_entity": "Media player",
+          "tile_entities": "Quick tiles",
+          "show_conversation": "Full-screen conversation"
+        }
+      }
+    }
+  },
+  "selector": {
+    "view": {
+      "options": {
+        "home": "Home screen",
+        "dashboard": "Dashboard",
+        "weather": "Weather",
+        "media": "Media player",
+        "camera": "Camera"
+      }
+    }
+  },
+  "services": {
+    "show_view": {
+      "name": "Show view",
+      "description": "Shows a view on an NSPanel Pro for a while.",
+      "fields": {
+        "panel_id": {
+          "name": "Panel",
+          "description": "The panel's ESPHome name; empty = every panel."
+        },
+        "view": {
+          "name": "View",
+          "description": "What to show."
+        },
+        "entity_id": {
+          "name": "Camera",
+          "description": "The camera for the camera view."
+        },
+        "seconds": {
+          "name": "Seconds",
+          "description": "How long to show it; 0 = until someone touches the screen."
+        }
+      }
+    },
+    "show_message": {
+      "name": "Show message",
+      "description": "Shows a message on an NSPanel Pro.",
+      "fields": {
+        "panel_id": {
+          "name": "Panel",
+          "description": "The panel's ESPHome name; empty = every panel."
+        },
+        "title": {
+          "name": "Title",
+          "description": "Heading of the message."
+        },
+        "message": {
+          "name": "Message",
+          "description": "Text of the message."
+        },
+        "icon": {
+          "name": "Icon",
+          "description": "Material Design icon (mdi:...)."
+        },
+        "seconds": {
+          "name": "Seconds",
+          "description": "How long to show it; 0 = until someone touches the screen."
+        },
+        "chime": {
+          "name": "Chime",
+          "description": "Play a short chime on the panel."
+        }
+      }
+    }
+  }
+}

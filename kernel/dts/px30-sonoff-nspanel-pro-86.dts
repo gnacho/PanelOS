@@ -1,0 +1,497 @@
+// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
+/*
+ * Sonoff NSPanel Pro, 86-box variant (Rockchip PX30, board ST-PX30-T6E).
+ *
+ * Based on px30-evb.dts. Board values (regulator voltages, panel, pins) come
+ * from the stock vendor device tree; see docs/hardware.md in this repository.
+ *
+ * Bring-up stage 1: boot, eMMC, display (ST7701S over MIPI-DSI), backlight,
+ * ramoops at the same place as the stock kernel. Touch, Wi-Fi, sensors and
+ * audio follow in later stages.
+ */
+
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include "px30.dtsi"
+
+/ {
+	model = "Sonoff NSPanel Pro 86";
+	compatible = "sonoff,nspanel-pro-86", "rockchip,px30";
+
+	aliases {
+		mmc0 = &emmc;
+		mmc1 = &sdio;
+	};
+
+	chosen {
+		stdout-path = "serial2:1500000n8";
+	};
+
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		/* Same region and layout as the stock kernel, so either side can read the other's log. */
+		ramoops@110000 {
+			compatible = "ramoops";
+			reg = <0x0 0x110000 0x0 0xf0000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+			ftrace-size = <0x0>;
+			pmsg-size = <0x50000>;
+		};
+	};
+
+	backlight: backlight {
+		compatible = "pwm-backlight";
+		pwms = <&pwm1 0 25000 0>;
+		power-supply = <&vcc3v3_lcd>;
+		brightness-levels = <0 255>;
+		num-interpolated-steps = <255>;
+		default-brightness-level = <128>;
+	};
+
+	/*
+	 * RTL8723DS enable line (WL_REG_ON, GPIO0_A2, high = on), described as
+	 * the card's supply. GPIO0 sits in the PMU domain and keeps its level
+	 * across a warm (PSCI) restart, so the module could stay powered with
+	 * its old firmware running; rtw88 then fails with "failed to dump efuse
+	 * logical map". As a regulator it is switched off at probe and kept off
+	 * for at least off-on-delay before the MMC core powers the card up.
+	 */
+	vcc_wl: regulator-vcc-wl {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_wl";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		gpio = <&gpio0 RK_PA2 GPIO_ACTIVE_HIGH>;
+		enable-active-high;
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_h>;
+		off-on-delay-us = <200000>;
+		startup-delay-us = <100000>;
+		vin-supply = <&vcc3v3_sys>;
+	};
+
+	vcc5v0_sys: regulator-vcc5v0-sys {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc5v0_sys";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+	};
+
+	/*
+	 * Audio: RK809 codec on I2S1 (2-channel). The codec's "Playback Mux"
+	 * control selects HP or SPK; the built-in speaker is on SPK (codec class
+	 * D), HP is not connected to it (measured with the panel microphones,
+	 * docs/bringup.md test boot 14). The codec input is NOT a microphone: it
+	 * carries the speaker signal back as the echo-cancellation reference
+	 * (stock "adc-for-loopback"; measured, docs/bringup.md test boot 13).
+	 * The stock firmware reads it through the PDM controller (codec data out
+	 * in PDM mode on GPIO2_C5); mainline reads the same pin as I2S1 SDI.
+	 */
+	sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "rk809";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,widgets =
+			"Microphone", "Mic",
+			"Headphone", "Headphones",
+			"Speaker", "Speaker";
+		simple-audio-card,routing =
+			"MICL", "Mic",
+			"Headphones", "HPOL",
+			"Headphones", "HPOR",
+			"Speaker", "SPKO";
+
+		simple-audio-card,codec {
+			sound-dai = <&rk809>;
+		};
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s1_2ch>;
+		};
+	};
+
+	/*
+	 * Microphones: the stock voice HAL (AISpeech, "AEC_ch4-2-ch2_1ref")
+	 * captures through the SoC PDM controller (PCM "ff0a0000.pdm-rk817-hifi").
+	 * Measured (docs/bringup.md, test boot 14): the microphones are on PDM
+	 * data line 1 (GPIO3_D0, channels 2 and 3); lines 2 and 3 read zero.
+	 * Data line 0 shares GPIO2_C5 with the I2S1 SDI used above (the codec's
+	 * echo reference). Which clock output feeds the microphones is not
+	 * known yet, so both are muxed. px30.dtsi has no PDM node; values from
+	 * the stock DT.
+	 */
+	pdm: pdm@ff0a0000 {
+		compatible = "rockchip,px30-pdm";
+		reg = <0x0 0xff0a0000 0x0 0x1000>;
+		clocks = <&cru SCLK_PDM>, <&cru HCLK_PDM>;
+		clock-names = "pdm_clk", "pdm_hclk";
+		dmas = <&dmac 24>;
+		dma-names = "rx";
+		resets = <&cru SRST_PDM>;
+		reset-names = "pdm-m";
+		pinctrl-names = "default";
+		pinctrl-0 = <&pdm_clk0m1 &pdm_clk1 &pdm_sdi1 &pdm_sdi2 &pdm_sdi3>;
+		#sound-dai-cells = <0>;
+	};
+
+	pdm_codec: pdm-codec {
+		compatible = "dmic-codec";
+		num-channels = <8>;
+		#sound-dai-cells = <0>;
+	};
+
+	pdm-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "pdm-mics";
+
+		simple-audio-card,cpu {
+			sound-dai = <&pdm>;
+		};
+
+		simple-audio-card,codec {
+			sound-dai = <&pdm_codec>;
+		};
+	};
+};
+
+&cpu0 {
+	cpu-supply = <&vdd_arm>;
+};
+
+&cpu1 {
+	cpu-supply = <&vdd_arm>;
+};
+
+&cpu2 {
+	cpu-supply = <&vdd_arm>;
+};
+
+&cpu3 {
+	cpu-supply = <&vdd_arm>;
+};
+
+&display_subsystem {
+	status = "okay";
+};
+
+&dsi {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	status = "okay";
+
+	ports {
+		mipi_out: port@1 {
+			reg = <1>;
+
+			mipi_out_panel: endpoint {
+				remote-endpoint = <&mipi_in_panel>;
+			};
+		};
+	};
+
+	panel@0 {
+		compatible = "sonoff,nspanel-pro-86-panel";
+		reg = <0>;
+		backlight = <&backlight>;
+		VCC-supply = <&vcc3v3_lcd>;
+		IOVCC-supply = <&vcc3v3_lcd>;
+		/*
+		 * The pin is active low in hardware, but the st7701 driver drives
+		 * it as "1 = out of reset", so it is described as active high.
+		 */
+		reset-gpios = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
+
+		port {
+			mipi_in_panel: endpoint {
+				remote-endpoint = <&mipi_out_panel>;
+			};
+		};
+	};
+};
+
+&dsi_dphy {
+	status = "okay";
+};
+
+&emmc {
+	bus-width = <8>;
+	cap-mmc-highspeed;
+	non-removable;
+	status = "okay";
+};
+
+&i2c0 {
+	status = "okay";
+
+	rk809: pmic@20 {
+		compatible = "rockchip,rk809";
+		reg = <0x20>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PA7 IRQ_TYPE_LEVEL_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pmic_int>, <&i2s1_2ch_mclk>;
+		/* Codec master clock: I2S1 MCLK out (GPIO2_C3). */
+		clocks = <&cru SCLK_I2S1_OUT>;
+		clock-names = "mclk";
+		#sound-dai-cells = <0>;
+		/*
+		 * No "system-power-controller": with it, the RK809 driver registers
+		 * a PMIC restart handler (DEV_RST) above PSCI, which resets the PMU
+		 * GRF and loses the reboot-mode flag, so "reboot recovery" and
+		 * "reboot loader" would end up in a normal boot. Restart therefore
+		 * goes through PSCI, like the stock kernel.
+		 */
+		wakeup-source;
+		#clock-cells = <0>;
+		clock-output-names = "xin32k";
+
+		vcc1-supply = <&vcc5v0_sys>;
+		vcc2-supply = <&vcc5v0_sys>;
+		vcc3-supply = <&vcc5v0_sys>;
+		vcc4-supply = <&vcc5v0_sys>;
+		vcc5-supply = <&vcc3v3_sys>;
+		vcc6-supply = <&vcc3v3_sys>;
+		vcc7-supply = <&vcc3v3_sys>;
+		vcc8-supply = <&vcc3v3_sys>;
+		vcc9-supply = <&vcc5v0_sys>;
+
+		/* Voltages copied from the stock vendor device tree. */
+		regulators {
+			vdd_log: DCDC_REG1 {
+				regulator-name = "vdd_log";
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-ramp-delay = <6001>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vdd_arm: DCDC_REG2 {
+				regulator-name = "vdd_arm";
+				regulator-min-microvolt = <950000>;
+				regulator-max-microvolt = <1350000>;
+				regulator-ramp-delay = <6001>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc_ddr: DCDC_REG3 {
+				regulator-name = "vcc_ddr";
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc_3v0: DCDC_REG4 {
+				regulator-name = "vcc_3v0";
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3000000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc3v3_sys: DCDC_REG5 {
+				regulator-name = "vcc3v3_sys";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc_1v0: LDO_REG1 {
+				regulator-name = "vcc_1v0";
+				regulator-min-microvolt = <1000000>;
+				regulator-max-microvolt = <1000000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc_1v8: LDO_REG2 {
+				regulator-name = "vcc_1v8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vdd_1v0: LDO_REG3 {
+				regulator-name = "vdd_1v0";
+				regulator-min-microvolt = <1000000>;
+				regulator-max-microvolt = <1000000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc3v0_pmu: LDO_REG4 {
+				regulator-name = "vcc3v0_pmu";
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3000000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vccio_sd: LDO_REG5 {
+				regulator-name = "vccio_sd";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc_sd: LDO_REG6 {
+				regulator-name = "vcc_sd";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+			};
+
+			vcc2v8_dvp: LDO_REG7 {
+				regulator-name = "vcc2v8_dvp";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc1v8_dvp: LDO_REG8 {
+				regulator-name = "vcc1v8_dvp";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc1v5_dvp: LDO_REG9 {
+				regulator-name = "vcc1v5_dvp";
+				regulator-min-microvolt = <3000000>;
+				regulator-max-microvolt = <3000000>;
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc5v0_host: SWITCH_REG1 {
+				regulator-name = "vcc5v0_host";
+				regulator-always-on;
+				regulator-boot-on;
+			};
+
+			vcc3v3_lcd: SWITCH_REG2 {
+				regulator-name = "vcc3v3_lcd";
+				regulator-boot-on;
+			};
+		};
+
+		/* Stock DT: differential microphone input. */
+		rk809_codec: codec {
+			rockchip,mic-in-differential;
+		};
+	};
+};
+
+&i2s1_2ch {
+	status = "okay";
+};
+
+/*
+ * Touch: Hynitron CST226SE. INT GPIO0_B5, RST GPIO0_B4 (stock DT).
+ * Needs kernel/patches/0002 (CST3xx commands, no bootloader step).
+ */
+&i2c1 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	touchscreen@5a {
+		compatible = "hynitron,cst226se";
+		reg = <0x5a>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <RK_PB5 IRQ_TYPE_LEVEL_LOW>;
+		reset-gpios = <&gpio0 RK_PB4 GPIO_ACTIVE_LOW>;
+		touchscreen-size-x = <480>;
+		touchscreen-size-y = <480>;
+		/* Measured: the controller's X runs along the screen's Y and vice versa. */
+		touchscreen-swapped-x-y;
+	};
+};
+
+/*
+ * Ambient light + proximity: Sensortek STK3x3x at 0x47 (stock DT, polled by
+ * the stock firmware). The stock DT also lists a second-source STK3A5X at 0x46
+ * (not fitted on this unit) and an unknown vendor device "smatek,tp" at 0x3c.
+ * Proximity interrupt line (unused for now): GPIO3_C0, active low.
+ */
+&i2c2 {
+	clock-frequency = <100000>;
+	i2c-scl-falling-time-ns = <50>;
+	i2c-scl-rising-time-ns = <300>;
+	status = "okay";
+
+	light-sensor@47 {
+		compatible = "sensortek,stk3310";
+		reg = <0x47>;
+	};
+};
+
+&pinctrl {
+	pmic {
+		pmic_int: pmic-int {
+			rockchip,pins = <0 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	sdio-pwrseq {
+		wifi_enable_h: wifi-enable-h {
+			rockchip,pins = <0 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+};
+
+/* Wi-Fi: Realtek RTL8723DS. High speed only for now (no UHS voltage switching). */
+&sdio {
+	bus-width = <4>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	non-removable;
+	vmmc-supply = <&vcc_wl>;
+	status = "okay";
+};
+
+&pwm1 {
+	status = "okay";
+};
+
+&tsadc {
+	/* CRU reset on overheat: the SoC resets itself, no PMIC wiring needed. */
+	rockchip,hw-tshut-mode = <0>;
+	rockchip,hw-tshut-temp = <120000>;
+	status = "okay";
+};
+
+&uart2 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2m0_xfer>;
+	status = "okay";
+};
+
+&vopb {
+	status = "okay";
+};
+
+&vopb_mmu {
+	status = "okay";
+};
+
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
+	status = "okay";
+};

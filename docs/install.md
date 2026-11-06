@@ -1,0 +1,294 @@
+# Installing PanelOS on the Sonoff NSPanel Pro 86
+
+This guide takes you from a stock NSPanel Pro to PanelOS step by step. You do not need to know Linux.
+
+> **Read this first.** Installing replaces the panel's software. It can go wrong, and turning on developer mode (step 1) ends official Sonoff updates for good. You need a working backup (step 7) before anything is written. You do everything at your own risk.
+
+## What you need
+
+- A **Sonoff NSPanel Pro, 86 model** (the square 86 × 86 mm one), on its stock firmware, set up in the eWeLink app and **connected to your Wi-Fi**. PanelOS takes over this Wi-Fi network. It has been tested on stock firmware 3.0.0.
+- A **computer**: Windows 10/11, Linux, or a Mac (see [Mac](#mac)), with about **20 GB free disk space** (64 GB for the Mac virtual machine) and internet access. The first build takes a long time (it builds a whole Linux system); later builds take a few minutes.
+- **Home Assistant** on the same network, and a phone with a camera.
+- The **IP address of Home Assistant** (for example `192.168.1.10`; in Home Assistant: Settings → System → Network). The panel cannot use names like `homeassistant.local`.
+
+## How to type the commands
+
+Everything from step 3 on happens in one **terminal window** on the computer: the **Ubuntu** window on Windows (step 3 installs it), a terminal on Linux, or on a Mac the Terminal window connected to the Linux virtual machine (step 3, Mac).
+
+- Copy a command from this page and paste it into the window: **right-click** in the Ubuntu window, **Ctrl+Shift+V** in a Linux terminal, **Cmd+V** in the Mac Terminal. Then press **Enter**.
+- Wait until the command has finished: the window shows the prompt again, a line ending in `#`, for example `root@PC:~#`. Only then paste the next one.
+- Paste the commands **one at a time**, in the order of this guide. Each grey box is one command.
+- Replace anything in `<angle brackets>` with your own value and leave out the brackets.
+- Some lines only store a value for the later commands, for example `PANEL=192.168.1.50`. They print nothing. The value is kept while the window stays open; if you close the window, open it again, type `sudo -i`, and repeat these lines (they are marked **"Set again after reopening"**).
+
+## 1. Turn on developer mode and ADB on the panel
+
+ADB is the service the computer uses to install PanelOS. On the stock firmware it is switched on in the eWeLink app on your phone:
+
+1. Open the **eWeLink** app and open the NSPanel Pro.
+2. Tap the **three dots** in the top right corner to open the device settings.
+3. Scroll down to **Device ID** and **tap it repeatedly** (about eight times) until the app says developer mode is on.
+4. Open the new **Developer mode** item and switch on **ADB**. Accept the agreement: this cannot be undone, and the panel will not get official firmware updates any more.
+
+Developer mode is not available on every firmware version, and the menus can differ. These community guides describe the steps, workarounds and pitfalls:
+
+- [blakadder: Sideload apps to Sonoff NSPanel Pro](https://blakadder.com/nspanel-pro-sideload/)
+- [Home Automation Guy: Home Assistant on a Sonoff NSPanel Pro](https://www.homeautomationguy.io/blog/home-assistant-on-a-sonoff-nspanel-pro)
+- [Home Assistant Community: NSPanel Pro – custom Android apps](https://community.home-assistant.io/t/nspanel-pro-custom-android-apps-working/459563)
+- [seaky/nspanel_pro_roottool_apk](https://github.com/seaky/nspanel_pro_roottool_apk)
+
+PanelOS needs ADB **with root** (the `su` command). Step 6 checks it.
+
+## 2. Find the panel's IP address
+
+The eWeLink app shows it in the device settings, and your router lists it among the connected devices. Write it down (for example `192.168.1.50`). Give the panel a fixed address in your router (DHCP reservation), so it does not change later.
+
+## 3. Prepare the computer
+
+PanelOS is built on Linux.
+
+### Windows
+
+Windows runs Linux in WSL, a Linux system inside Windows.
+
+1. Click Start, type `PowerShell`, right-click **Windows PowerShell** and choose **Run as administrator**.
+2. Paste this and press Enter:
+
+   ```
+   wsl --install -d Ubuntu-24.04
+   ```
+
+3. Restart the computer when it asks you to.
+4. Open **Ubuntu 24.04** from the Start menu. The first time it asks for a user name and a password: choose any (you need the password in a moment). This window is the **Ubuntu window** of this guide.
+
+### Linux
+
+Use Ubuntu 24.04 or a similar distribution and open a terminal.
+
+### Mac
+
+On a Mac the build runs in a Linux virtual machine with the free UTM app. The build needs an x86-64 (Intel) Linux system:
+
+- on an **Intel Mac** UTM runs it at full speed;
+- on a **Mac with Apple silicon** (M1 and later) UTM has to emulate an Intel processor, which works but is slow: the first build can take many hours. Native support for Apple silicon is planned.
+
+This route has not been tested yet; the UTM screens may look slightly different.
+
+1. Download and install UTM from [mac.getutm.app](https://mac.getutm.app/).
+2. Download the **Ubuntu Server 24.04 LTS** installer for **amd64 (x86-64)** from [ubuntu.com/download/server](https://ubuntu.com/download/server) (a file like `ubuntu-24.04.x-live-server-amd64.iso`).
+3. In UTM select **+** → **Create a New Virtual Machine**:
+   - Intel Mac: **Virtualize**; Apple silicon: **Emulate**.
+   - Operating system: **Linux**.
+   - Boot ISO image: **Browse** and select the downloaded file. On Apple silicon set the architecture to **x86_64**.
+   - Memory: at least **8192 MB**; CPU cores: as many as offered (at least 4).
+   - Storage: at least **64 GB**.
+   - Save, then start the virtual machine with the **play** button.
+4. Install Ubuntu with the default answers. Choose a user name and password, and tick **Install OpenSSH server** when it is offered. When the installation asks to restart, remove the installer first (in UTM: the CD/DVD icon → **Clear**), then restart.
+5. Log in in the virtual machine window and find its address with this command (it prints the address, for example `192.168.64.5`; if it prints more than one, use the first):
+
+   ```
+   hostname -I
+   ```
+
+6. On the Mac, open **Terminal** (Applications → Utilities) and connect to the virtual machine (replace the user and the address):
+
+   ```
+   ssh <user>@<address of the virtual machine>
+   ```
+
+   Answer `yes` to the question about the fingerprint and type the password. From now on this Terminal window is the window of this guide: paste with **Cmd+V**, and continue with "Install the tools" below.
+
+### Install the tools
+
+In the Ubuntu window (or Linux terminal), become the administrator (root). It asks for the password you chose:
+
+```
+sudo -i
+```
+
+The prompt now ends in `#`. Install the tools the build needs:
+
+```
+apt update && apt install -y build-essential bc bison flex cpio rsync unzip wget curl git file patch python3 libssl-dev libelf-dev libncurses-dev device-tree-compiler gcc-aarch64-linux-gnu lz4 zstd openssh-client adb
+```
+
+## 4. Download PanelOS and its sources
+
+```
+git clone https://github.com/lauden-io/PanelOS.git /root/PanelOS
+```
+
+```
+cd /root/PanelOS && tools/fetch_sources.sh
+```
+
+The second command downloads the Linux kernel and Buildroot (a few GB). It ends with a line like `kernel: 7.3.1  buildroot: 2026.08.1`.
+
+## 5. Build the system image
+
+```
+cd /root/PanelOS && tools/build_image.sh
+```
+
+This is the long step. When it is done, the last line is `done: /tmp/nspanel_out/recovery-dev.img`. The build also creates an SSH key in `/root/.ssh/nspanel_dev`: it is your key to log in to your panels later, so keep it.
+
+You build once; the same image goes on every NSPanel Pro 86 you have.
+
+## 6. Connect to the panel and check root
+
+Store the panel's IP address and a short name for the panel (letters and digits, no spaces, for example `kitchen`). **Set again after reopening.**
+
+```
+PANEL=<panel IP address>
+```
+
+```
+NAME=<short name of the panel>
+```
+
+Connect to the panel:
+
+```
+adb connect $PANEL:5555
+```
+
+It should say `connected to …`. If the panel asks on its screen whether to allow the connection, allow it. Then check root:
+
+```
+adb -s $PANEL:5555 shell su -c id
+```
+
+The answer must start with `uid=0(root)`. If it does not, stop here: without root PanelOS cannot be installed (see the guides in step 1).
+
+## 7. Back up the panel
+
+Every panel gets its own backup folder, named after the panel and the date, so backups of several panels never overwrite each other. **Set again after reopening.**
+
+```
+BACKUP=/root/nspanel-backups/$NAME-$(date +%Y-%m-%d)
+```
+
+```
+cd /root/PanelOS && tools/backup_partitions.sh $PANEL:5555 $BACKUP
+```
+
+This copies the panel's partitions (about 2.5 GB; it takes a while) and checks every copy; it ends with `done: ok=16 bad=0` (`bad` must be 0). Then copy the backups out of Linux too.
+
+- Windows, into your Documents folder (replace `<your Windows user>`):
+
+  ```
+  cp -r /root/nspanel-backups "/mnt/c/Users/<your Windows user>/Documents/"
+  ```
+
+- Linux or a virtual machine: copy `/root/nspanel-backups` to a USB drive or another computer.
+
+Keep the backups private: they contain each panel's own identity (MAC addresses, keys, serial number). **A backup belongs to one panel only: never write it to another panel.** [restore.md](restore.md) explains how to use it.
+
+### Check that the backup can be restored (optional, strongly recommended)
+
+A backup only helps if it can be written back. Test it now, while the panel still runs the stock firmware and nothing is at stake. [restore.md](restore.md#test-the-restore-before-you-need-it) describes two tests:
+
+- **Quick test** (one command, the panel stays closed): writes the backed-up recovery partition back over ADB and checks it.
+- **Full test** (the panel has to be opened): checks the USB rescue path, the one you need when the panel does not start at all.
+
+## 8. Install PanelOS
+
+How it works: PanelOS goes into the panel's **recovery** partition, and the panel starts it once. The stock firmware stays on the panel. In step 9 you tell the panel to start PanelOS every time. This matters, because whenever the stock firmware starts, it rewrites the recovery partition with its own content and PanelOS is gone.
+
+```
+cd /root/PanelOS && tools/flash_recovery_adb.sh $PANEL:5555 /tmp/nspanel_out/recovery-dev.img --boot
+```
+
+The command writes the image, checks it, and restarts the panel. On the panel you see:
+
+1. a **black screen for about 45 seconds** (the stock bootloader loads PanelOS),
+2. the **PanelOS animation**, then a light band running across the logo until Wi-Fi is up,
+3. the message **"Not configured"** (step 10 fixes that).
+
+You do this step **once**.
+
+If the panel starts the stock firmware again (the Sonoff screen) instead of PanelOS, PanelOS found no network within 90 seconds and went back by itself. Check in the stock firmware that the panel is connected to your Wi-Fi. Then run the command of this step again.
+
+## 9. Make PanelOS start every time
+
+Do this while PanelOS is running (after the animation):
+
+```
+ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL nspanel-bootmode open
+```
+
+The answer starts with `default boot: open system`. From now on the panel starts PanelOS every time, also after a power cut.
+
+## 10. Tell the panel where Home Assistant is
+
+Store the address of Home Assistant: its IP address, plus `:8123` if your Home Assistant uses that port (installations from before 2026.8 and Docker installations do; without a port the panel uses port 80). **Set again after reopening.**
+
+```
+HA=http://<Home Assistant IP address>:8123
+```
+
+Then save it on the panel and restart it:
+
+```
+ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL "echo '{\"ha_url\": \"$HA\"}' > /mnt/persist/nspanel/app.json && nohup reboot >/dev/null 2>&1 </dev/null &"
+```
+
+The panel restarts (black screen, animation), then shows a **QR code**.
+
+## 11. Log in to Home Assistant
+
+1. Scan the QR code with the phone's camera (Android: the camera app or Google Lens; iPhone: the Camera app), and open the link it shows.
+2. The Home Assistant login page opens. It always asks for a user name and password, also when the phone is already logged in to Home Assistant, so log in with the user the panel should use (a separate, non-administrator Home Assistant user works well).
+3. The panel connects by itself and shows your default dashboard. You can pick another dashboard on the panel: gear icon → Dashboard.
+
+## 12. Add the panel to Home Assistant
+
+1. In Home Assistant: **Settings → Devices & services → Add integration → ESPHome**.
+2. Host: the panel's IP address. Port: `6053`. Leave the encryption key empty.
+3. The panel appears as a device with its settings, sensors and the voice assistant (Assist satellite). Choose the wake words and the assistant on the device page.
+
+Optional: the assistant mode (smart-display home screen) is configured with the PanelOS Home Assistant integration; see [home_assistant.md](home_assistant.md).
+
+## 13. Check
+
+Unplug the panel's power (or switch off its circuit) for 10 seconds and switch it on again. After the black bootloader phase and the animation, the panel must show your dashboard again.
+
+## More panels
+
+Do steps 1–2 and 6–13 for each further panel. Steps 3–5 are not needed again: the computer is ready, and the same image fits every NSPanel Pro 86. In step 6 set `PANEL` and `NAME` for the new panel, so its backup goes into its own folder.
+
+## Updating later
+
+Until PanelOS can update itself (planned: updates from Home Assistant's Settings → Updates, without a computer), an update is built and written from the computer, the same way as the install.
+
+1. In the Ubuntu window, become root (`sudo -i`) and build the new version once. One build serves all your panels:
+
+   ```
+   cd /root/PanelOS && git pull && tools/build_image.sh
+   ```
+
+2. For **each panel**, set its address, write the new version and restart it. The panel keeps running PanelOS while it is written; the new version starts after the restart, and all settings (Wi-Fi, Home Assistant login, choices) stay.
+
+   ```
+   PANEL=<panel IP address>
+   ```
+
+   ```
+   cd /root/PanelOS && tools/flash_recovery_ssh.sh $PANEL /tmp/nspanel_out/recovery-dev.img
+   ```
+
+   ```
+   ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL "nohup reboot >/dev/null 2>&1 </dev/null &"
+   ```
+
+   Then the next panel: set `PANEL` again and repeat these three commands.
+
+## Going back to the stock firmware
+
+See [restore.md](restore.md), case A.
+
+## If something goes wrong
+
+- **The panel shows the Sonoff screen / stock firmware again:** PanelOS was not made the default (step 9) or found no network. Repeat from step 8.
+- **"Not configured" on the screen:** step 10 is missing or the address is wrong; repeat step 10.
+- **The screen stays black for minutes:** unplug the power for 10 seconds. If it still does not start, follow [restore.md](restore.md), case C.

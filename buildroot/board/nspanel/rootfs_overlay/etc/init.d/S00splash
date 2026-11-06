@@ -1,0 +1,23 @@
+#!/bin/sh
+# Boot splash: the logo animation (nspanel-splash) from the first second of
+# user space until the panel app takes over the display (the app signals it).
+
+PIDFILE=/var/run/nspanel-splash.pid
+
+case "$1" in
+start)
+	[ -x /usr/sbin/nspanel-splash ] || exit 0
+	# Backlight on now; S20backlight and the app set their own level later.
+	BL=/sys/class/backlight/backlight/brightness
+	[ -w "$BL" ] && echo 180 > "$BL"
+	/usr/sbin/nspanel-splash /usr/share/nspanel/splash.bin </dev/null >/dev/null 2>&1 &
+	echo $! > "$PIDFILE"
+	;;
+stop)
+	[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+	rm -f "$PIDFILE"
+	;;
+restart | reload)
+	;;
+esac
+exit 0
