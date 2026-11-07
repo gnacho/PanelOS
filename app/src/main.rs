@@ -9,6 +9,7 @@ mod artwork;
 mod assistant;
 mod auth;
 mod camera;
+mod clock;
 mod config;
 mod dashboard;
 mod display;
@@ -260,6 +261,64 @@ fn handle_voice_ui(ui: &MainWindow, event: voice::VoiceUi) {
 const SPLASH_PIDFILE: &str = "/var/run/nspanel-splash.pid";
 
 const SPLASH_DONE: &str = "/var/run/nspanel-splash.done";
+
+/// Longest wait for the clock and the first Home Assistant data before the UI
+/// takes the display anyway (Home Assistant or the network is down).
+const READY_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Holds the UI back until it has something current to show: the clock is
+/// set and the first full state list from Home Assistant is in (a short
+/// grace lets the assistant settings and forecasts follow). Pairing needed:
+/// at once, the QR code is the content. Meanwhile the boot splash keeps its
+/// light band running. Returns the events received so far, for the UI.
+fn wait_until_ready(events: &mpsc::Receiver<Event>) -> Vec<Event> {
+    let started = Instant::now();
+    let mut buffered = Vec::new();
+    let mut states_at: Option<Instant> = None;
+    let mut connected_at: Option<Instant> = None;
+    let mut clock_at: Option<Instant> = None;
+    loop {
+        if clock_at.is_none() && clock::valid() {
+            clock_at = Some(Instant::now());
+        }
+        let data = states_at.is_some_and(|t| t.elapsed() >= Duration::from_millis(300))
+            // A dashboard without entities never sends states.
+            || connected_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(2));
+        if (data && clock::valid()) || started.elapsed() >= READY_TIMEOUT {
+            break;
+        }
+        match events.recv_timeout(Duration::from_millis(50)) {
+            Ok(event) => {
+                let pairing = matches!(event, Event::NeedPairing);
+                match &event {
+                    Event::States(_) => {
+                        states_at.get_or_insert_with(Instant::now);
+                    }
+                    Event::Status { connected: true, .. } => {
+                        connected_at.get_or_insert_with(Instant::now);
+                    }
+                    _ => {}
+                }
+                buffered.push(event);
+                if pairing {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let at = |t: Option<Instant>| t.map(|t| format!("{} ms", (t - started).as_millis())).unwrap_or_else(|| "-".into());
+    eprintln!(
+        "nspanel-app: ready for the display after {} ms (clock set at {}, connected at {}, states at {}, {} events)",
+        started.elapsed().as_millis(),
+        at(clock_at),
+        at(connected_at),
+        at(states_at),
+        buffered.len()
+    );
+    buffered
+}
 
 /// Asks the boot splash (nspanel-splash) to hand the display over and waits
 /// until it has: it first finishes its sequence and keeps the last picture
@@ -1062,6 +1121,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { tzset() };
 
     platform::install_screenshot_signal();
+
+    let settings = Settings::load();
+    let config = AppConfig::load();
+    let fixture = std::env::var("NSPANEL_FIXTURE").ok();
+    let shared = Arc::new(ha::Shared::default());
+    let dashboard_name = if !settings.dashboard.is_empty() {
+        settings.dashboard.clone()
+    } else {
+        config.as_ref().map(|c| c.dashboard.clone()).unwrap_or_default()
+    };
+    *shared.dashboard.lock().unwrap() = dashboard_name;
+    // The same entities and forecast as apply_assistant_config() sets later,
+    // so the first session needs no reload.
+    *shared.extra_entities.lock().unwrap() = assistant::extra_entities(&settings);
+    *shared.forecast_entity.lock().unwrap() = assistant::effective(&settings).weather_entity.clone();
+    let auth = config
+        .as_ref()
+        .ok()
+        .map(|c| Arc::new(Auth::load(&c.ha_url, PathBuf::from(format!("{PERSIST_DIR}/ha_auth.json")))));
+
+    // Home Assistant client first, the display after: the first screen shows
+    // the right time and current states instead of 1970 and empty tiles.
+    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
+    let ha_early = match (&config, &auth, &fixture) {
+        (Ok(c), Some(a), None) => {
+            let (event_tx, event_rx) = mpsc::channel::<Event>();
+            ha::spawn(c.ws_url(), shared.clone(), a.clone(), cmd_rx, move |event| {
+                let _ = event_tx.send(event);
+            });
+            let buffered = wait_until_ready(&event_rx);
+            Some((event_rx, buffered))
+        }
+        _ => None,
+    };
+
     // The boot splash owns the display until now: it shows the finished logo,
     // gives up DRM master and keeps the picture until this app has drawn.
     let splash = splash_handoff();
@@ -1118,9 +1212,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let settings = Settings::load();
-    let config = AppConfig::load();
-    let fixture = std::env::var("NSPANEL_FIXTURE").ok();
     let model = Rc::new(VecModel::<RowData>::default());
     ui.set_rows(model.clone().into());
     let assistant_model = Rc::new(VecModel::<RowData>::default());
@@ -1130,18 +1221,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SCREENSAVER_CHOICES.iter().map(|(_, l)| SharedString::from(*l)).collect::<Vec<_>>(),
     )));
 
-    let shared = Arc::new(ha::Shared::default());
-    let dashboard_name = if !settings.dashboard.is_empty() {
-        settings.dashboard.clone()
-    } else {
-        config.as_ref().map(|c| c.dashboard.clone()).unwrap_or_default()
-    };
-    *shared.dashboard.lock().unwrap() = dashboard_name;
-
-    let auth = config
-        .as_ref()
-        .ok()
-        .map(|c| Arc::new(Auth::load(&c.ha_url, PathBuf::from(format!("{PERSIST_DIR}/ha_auth.json")))));
     let device = Arc::new(std::sync::Mutex::new(esphome::DeviceState::default()));
     let (device_notify, device_rx) = mpsc::channel::<()>();
     let mic_muted = Arc::new(std::sync::atomic::AtomicBool::new(settings.mic_muted));
@@ -1470,20 +1549,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_paired(auth.is_paired());
     ui.set_status("Connecting to Home Assistant…".into());
 
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
     with_state(|s| s.commands = Some(cmd_tx));
 
-    let weak = ui.as_weak();
-    let cam = camera.clone();
-    ha::spawn(config.ws_url(), shared, auth.clone(), cmd_rx, move |event| {
-        let weak = weak.clone();
-        let cam = cam.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                handle_event(&ui, event, &cam);
+    // The Home Assistant client started before the display: hand its events
+    // to the UI thread, the ones from the wait first, in order.
+    if let Some((events, buffered)) = ha_early {
+        let weak = ui.as_weak();
+        let cam = camera.clone();
+        std::thread::spawn(move || {
+            for event in buffered.into_iter().chain(events.iter()) {
+                let weak = weak.clone();
+                let cam = cam.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(ui) = weak.upgrade() {
+                        handle_event(&ui, event, &cam);
+                    }
+                });
             }
         });
-    });
+    }
 
     let weak = ui.as_weak();
     let art_tx = artwork::spawn(config.ha_url.clone(), auth.clone(), move |img| {

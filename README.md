@@ -2,13 +2,13 @@
 
 Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running a native **Rust + Slint** Home Assistant dashboard and voice satellite. No browser, no cloud.
 
-Version **0.0.1**. Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
+Version **0.0.2** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
 
 ## Supported devices
 
 | Device | SoC | State |
 |---|---|---|
-| Sonoff NSPanel Pro (86 model) | Rockchip PX30 | working: dashboard, voice satellite, boot animation |
+| Sonoff NSPanel Pro (86 model) | Rockchip PX30 | working: dashboard, voice satellite, boot logo and animation, about 12 s boot |
 
 ## Features
 
@@ -16,7 +16,7 @@ Version **0.0.1**. Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
 - **Voice satellite**: on-device wake words (microWakeWord), Assist pipelines, echo cancellation, timers, announcements, follow-up listening.
 - **Assistant mode**: smart-display home screen with clock, weather, media and quick tiles, and a full-screen conversation view.
 - **Home Assistant device** over the ESPHome native API: settings and sensors as entities of the built-in ESPHome integration; an optional custom integration (`custom_components/nspanel_pro`) configures the assistant mode and shows views or messages on the panel.
-- **Fast start**: boot animation from the first second of user space; the UI comes as soon as Wi-Fi is up.
+- **Super fast boot**: about 12 s from power on to the dashboard, more than four times faster than the stock firmware (about 53 s). The PanelOS logo already shows in the bootloader, then the boot animation; the UI comes with the right time and current Home Assistant data.
 
 Details: [docs/app.md](docs/app.md).
 
@@ -42,11 +42,10 @@ Details: [docs/app.md](docs/app.md).
 
 Step-by-step guide, no Linux knowledge needed: **[docs/install.md](docs/install.md)**.
 
-In short: turn on developer mode and ADB in the eWeLink app, build the image on a Linux or WSL computer, back up the panel, write PanelOS to its recovery partition over Wi-Fi ADB, make it the default boot, give it the address of Home Assistant, and log in with the QR code on the screen.
+In short: turn on developer mode and ADB in the eWeLink app, back up the panel, build the image on a Linux or WSL computer (it takes the stock bootloader's device tree from the backup), write PanelOS to its recovery partition over Wi-Fi ADB, make it the default boot, give it the address of Home Assistant, and log in with the QR code on the screen.
 
 ## Known limitations
 
-- The stock bootloader takes about 45 s, with a black screen, before the kernel starts; an own bootloader logo is not done yet.
 - No TLS yet: Home Assistant must be reachable over plain `http://`.
 - The first setup needs the Home Assistant address entered over SSH (step 10 of the install guide); there is no on-screen setup yet.
 - The ESPHome API runs without encryption and mDNS discovery so far.

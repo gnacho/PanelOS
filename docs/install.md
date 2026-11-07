@@ -2,7 +2,7 @@
 
 This guide takes you from a stock NSPanel Pro to PanelOS step by step. You do not need to know Linux.
 
-> **Read this first.** Installing replaces the panel's software. It can go wrong, and turning on developer mode (step 1) ends official Sonoff updates for good. You need a working backup (step 7) before anything is written. You do everything at your own risk.
+> **Read this first.** Installing replaces the panel's software. It can go wrong, and turning on developer mode (step 1) ends official Sonoff updates for good. You need a working backup (step 6) before anything is written. You do everything at your own risk.
 
 ## What you need
 
@@ -37,7 +37,7 @@ Developer mode is not available on every firmware version, and the menus can dif
 - [Home Assistant Community: NSPanel Pro – custom Android apps](https://community.home-assistant.io/t/nspanel-pro-custom-android-apps-working/459563)
 - [seaky/nspanel_pro_roottool_apk](https://github.com/seaky/nspanel_pro_roottool_apk)
 
-PanelOS needs ADB **with root** (the `su` command). Step 6 checks it.
+PanelOS needs ADB **with root** (the `su` command). Step 5 checks it.
 
 ## 2. Find the panel's IP address
 
@@ -124,17 +124,7 @@ cd /root/PanelOS && tools/fetch_sources.sh
 
 The second command downloads the Linux kernel and Buildroot (a few GB). It ends with a line like `kernel: 7.3.1  buildroot: 2026.08.1`.
 
-## 5. Build the system image
-
-```
-cd /root/PanelOS && tools/build_image.sh
-```
-
-This is the long step. When it is done, the last line is `done: /tmp/nspanel_out/recovery-dev.img`. The build also creates an SSH key in `/root/.ssh/nspanel_dev`: it is your key to log in to your panels later, so keep it.
-
-You build once; the same image goes on every NSPanel Pro 86 you have.
-
-## 6. Connect to the panel and check root
+## 5. Connect to the panel and check root
 
 Store the panel's IP address and a short name for the panel (letters and digits, no spaces, for example `kitchen`). **Set again after reopening.**
 
@@ -160,7 +150,7 @@ adb -s $PANEL:5555 shell su -c id
 
 The answer must start with `uid=0(root)`. If it does not, stop here: without root PanelOS cannot be installed (see the guides in step 1).
 
-## 7. Back up the panel
+## 6. Back up the panel
 
 Every panel gets its own backup folder, named after the panel and the date, so backups of several panels never overwrite each other. **Set again after reopening.**
 
@@ -191,6 +181,18 @@ A backup only helps if it can be written back. Test it now, while the panel stil
 - **Quick test** (one command, the panel stays closed): writes the backed-up recovery partition back over ADB and checks it.
 - **Full test** (the panel has to be opened): checks the USB rescue path, the one you need when the panel does not start at all.
 
+## 7. Build the system image
+
+```
+cd /root/PanelOS && tools/build_image.sh
+```
+
+This is the long step. When it is done, the last line is `done: /tmp/nspanel_out/recovery-dev.img`. The build also creates an SSH key in `/root/.ssh/nspanel_dev`: it is your key to log in to your panels later, so keep it.
+
+The build takes one file from the backup of step 6: the stock device tree from the `resource` partition. The panel's bootloader needs it to show the boot logo and to load PanelOS in about 2 seconds.
+
+You build once; the same image goes on every NSPanel Pro 86 you have.
+
 ## 8. Install PanelOS
 
 How it works: PanelOS goes into the panel's **recovery** partition, and the panel starts it once. The stock firmware stays on the panel. In step 9 you tell the panel to start PanelOS every time. This matters, because whenever the stock firmware starts, it rewrites the recovery partition with its own content and PanelOS is gone.
@@ -201,7 +203,7 @@ cd /root/PanelOS && tools/flash_recovery_adb.sh $PANEL:5555 /tmp/nspanel_out/rec
 
 The command writes the image, checks it, and restarts the panel. On the panel you see:
 
-1. a **black screen for about 45 seconds** (the stock bootloader loads PanelOS),
+1. after a few seconds the **PanelOS logo** (the stock bootloader loads PanelOS), then a short black moment,
 2. the **PanelOS animation**, then a light band running across the logo until Wi-Fi is up,
 3. the message **"Not configured"** (step 10 fixes that).
 
@@ -233,7 +235,7 @@ Then save it on the panel and restart it:
 ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL "echo '{\"ha_url\": \"$HA\"}' > /mnt/persist/nspanel/app.json && nohup reboot >/dev/null 2>&1 </dev/null &"
 ```
 
-The panel restarts (black screen, animation), then shows a **QR code**.
+The panel restarts (logo, animation), then shows a **QR code**.
 
 ## 11. Log in to Home Assistant
 
@@ -251,11 +253,11 @@ Optional: the assistant mode (smart-display home screen) is configured with the 
 
 ## 13. Check
 
-Unplug the panel's power (or switch off its circuit) for 10 seconds and switch it on again. After the black bootloader phase and the animation, the panel must show your dashboard again.
+Unplug the panel's power (or switch off its circuit) for 10 seconds and switch it on again. After the logo and the animation, the panel must show your dashboard again.
 
 ## More panels
 
-Do steps 1–2 and 6–13 for each further panel. Steps 3–5 are not needed again: the computer is ready, and the same image fits every NSPanel Pro 86. In step 6 set `PANEL` and `NAME` for the new panel, so its backup goes into its own folder.
+Do steps 1–2, 5–6 and 8–13 for each further panel. Steps 3, 4 and 7 are not needed again: the computer is ready, and the same image fits every NSPanel Pro 86. In step 5 set `PANEL` and `NAME` for the new panel, so its backup goes into its own folder.
 
 ## Updating later
 

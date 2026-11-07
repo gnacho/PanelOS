@@ -20,7 +20,7 @@ Native Rust app with the Slint UI toolkit. It draws a Home Assistant dashboard s
 ## ESPHome native API
 
 - The app is an ESPHome API server on TCP 6053 (plaintext for now; Noise encryption and mDNS discovery still to do). Message types are generated from `app/proto/api.proto` (aioesphomeapi, MIT). Home Assistant's built-in ESPHome integration adds the panel by IP.
-- Entities: Screen (switch: off = screensaver now), Dashboard (select, options = the Home Assistant dashboards), Theme, Screensaver after, Screensaver style, Display mode (selects), Brightness, Volume (numbers), Automatic brightness, Wake on approach, Mute microphone (switches), Illuminance, SoC temperature, Wi-Fi signal (sensors), Presence (binary sensor from the proximity sensor), IP address, App version (text sensors), Restart app, Reboot (buttons), plus the voice satellite entities Home Assistant creates itself.
+- Entities: Screen (switch: off = screensaver now), Dashboard (select, options = the Home Assistant dashboards), Theme, Screensaver after, Screensaver style, Display mode (selects), Brightness, Volume (numbers), Automatic brightness, Wake on approach, Mute microphone (switches), Illuminance, SoC temperature, Wi-Fi signal, Wake level, Wake SNR, Wake score (sensors; the wake values are sent with every wake word before the voice run starts, so Home Assistant can let the satellite that heard best answer: level = RMS of the last second in dBFS, SNR = loudest 100 ms of the last second over the second before it in dB, score = the model's averaged probability), Presence (binary sensor from the proximity sensor), IP address, App version (text sensors), Restart app, Reboot (buttons), plus the voice satellite entities Home Assistant creates itself.
 - `src/esphome.rs`: framing, entity list, state diffing (changes pushed when the UI thread notifies), commands mapped to the same setting keys as the on-panel settings screen.
 - Start-up: the server accepts Home Assistant's connection only after the dashboard list is known (at most 20 s), so the Dashboard select is complete at once.
 - rtw88 does not fill `/proc/net/wireless`; the Wi-Fi signal comes from `iw dev wlan0 link`.
@@ -81,6 +81,7 @@ A second display mode next to the native dashboard, in the style of a smart disp
 | `app/src/pairing.rs` | QR code, small HTTP server for the login redirect |
 | `app/src/dashboard.rs` | Dashboard config → rows; entity state → tile text, icon, colour |
 | `app/src/camera.rs` | Camera snapshot thread (JPEG decode) |
+| `app/src/clock.rs` | Wall clock: set from Home Assistant's HTTP `Date` header until NTP has run (no battery-backed clock) |
 | `app/src/icons.rs` | Material Design Icons name → glyph; default icons |
 | `app/src/display.rs` | DRM/KMS output: two dumb buffers (XRGB8888) with page flips; own `TargetPixel` type |
 | `app/src/touch.rs` | Touch from evdev (single-touch emulation) |

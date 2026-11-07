@@ -8,6 +8,9 @@
 | Native Rust app with the Slint UI toolkit | No browser and no WebView; renders directly on DRM/KMS; small and fast on a Cortex-A35 |
 | Home Assistant WebSocket API for the dashboard, ESPHome native API for the device and the voice satellite | Works with Home Assistant's built-in integrations; no broker and no custom integration needed for the basics |
 | Zigbee radio optional, router role at most | Not needed for the panel's main job |
+| Keep the stock U-Boot (no mainline U-Boot for now) | Replacing it is the only step that can brick the panel, and the USB rescue mode depends on it; it keeps the install simple for everyone. With the chain loader below it shows the PanelOS logo and takes about 2.5 s |
+| The stock U-Boot gets the stock device tree, the kernel its own (chain loader in front of the kernel) | The stock U-Boot drives its own display and storage with the boot image's device tree: with the mainline one it showed no logo and took about 45 s, vendor nodes mixed into it made it hang. The stock device tree comes from each user's own backup, it is not redistributed |
+| Hold the UI back until the clock and the first Home Assistant data are in | The first screen shows the right time and current states, not 1970 and empty tiles; the boot animation's light band shows the wait |
 | Features inspired by an open-source Flutter panel app, no code reused | Feature ideas only |
 | Project licence AGPL-3.0-or-later | Slint is used under GPLv3 (its royalty-free licence excludes embedded systems); GPLv3 §13 permits combining it with AGPL-3.0 code |
 
@@ -66,7 +69,5 @@ The stock firmware backup is not published: it is Sonoff's copyrighted software,
 
 ## Open questions
 
-- Keep the vendor U-Boot or move to mainline U-Boot for PX30.
-- Bootloader logo: which vendor DT node makes the stock U-Boot hang (needs the serial console).
 - Whether the two microphone channels are two capsules or one capsule read on both clock edges.
 - Identify the device at i2c-2 0x3c and the Zigbee UART.

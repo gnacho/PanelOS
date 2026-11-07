@@ -92,6 +92,9 @@ enum Id {
     MicMute,
     DisplayMode,
     Volume,
+    WakeLevel,
+    WakeScore,
+    WakeSnr,
 }
 
 const ENTITIES: &[(Id, u32, &str, &str, &str)] = &[
@@ -114,7 +117,14 @@ const ENTITIES: &[(Id, u32, &str, &str, &str)] = &[
     (Id::MicMute, 17, "mute_microphone", "Mute microphone", "mdi:microphone-off"),
     (Id::DisplayMode, 18, "display_mode", "Display mode", "mdi:monitor-dashboard"),
     (Id::Volume, 19, "volume", "Volume", "mdi:volume-high"),
+    // Sent with every wake word, before the run starts (voice::WakeLevel).
+    (Id::WakeLevel, 20, "wake_level", "Wake level", "mdi:microphone"),
+    (Id::WakeScore, 21, "wake_score", "Wake score", "mdi:target"),
+    (Id::WakeSnr, 22, "wake_snr", "Wake SNR", "mdi:waveform"),
 ];
+
+/// Last wake word level and score, for a (re)connecting Home Assistant.
+static LAST_WAKE: Mutex<Option<(f32, f32, Option<f32>)>> = Mutex::new(None);
 
 const CONFIG: i32 = EntityCategory::Config as i32;
 const DIAGNOSTIC: i32 = EntityCategory::Diagnostic as i32;
@@ -166,7 +176,8 @@ fn value_of(id: Id, s: &DeviceState) -> Option<Value> {
         Id::Presence => Value::Bool(s.presence),
         Id::Ip => Value::Str(s.ip.clone()),
         Id::Version => Value::Str(env!("CARGO_PKG_VERSION").to_string()),
-        Id::RestartApp | Id::Reboot => return None,
+        // Pushed by the voice thread (forward_voice), not diffed here.
+        Id::RestartApp | Id::Reboot | Id::WakeLevel | Id::WakeScore | Id::WakeSnr => return None,
     })
 }
 
@@ -263,10 +274,13 @@ fn list_entities(stream: &mut TcpStream, s: &DeviceState) -> io::Result<()> {
                     object_id, key, name, icon, entity_category: category, ..Default::default()
                 })?;
             }
-            Id::Illuminance | Id::SocTemp | Id::Wifi => {
+            Id::Illuminance | Id::SocTemp | Id::Wifi | Id::WakeLevel | Id::WakeScore | Id::WakeSnr => {
                 let (unit, class, decimals, category) = match id {
                     Id::Illuminance => ("lx", "illuminance", 0, 0),
                     Id::SocTemp => ("°C", "temperature", 1, DIAGNOSTIC),
+                    Id::WakeLevel => ("dBFS", "", 1, DIAGNOSTIC),
+                    Id::WakeScore => ("", "", 2, DIAGNOSTIC),
+                    Id::WakeSnr => ("dB", "", 1, DIAGNOSTIC),
                     _ => ("dBm", "signal_strength", 0, DIAGNOSTIC),
                 };
                 let (object_id, key, name, icon, category) = common(category);
@@ -312,7 +326,7 @@ fn send_state(stream: &mut TcpStream, id: Id, key: u32, value: &Value) -> io::Re
         (Id::AutoBrightness | Id::ProximityWake | Id::Screen | Id::MicMute, Value::Bool(v)) => {
             send(stream, 26, &SwitchStateResponse { key, state: *v, ..Default::default() })
         }
-        (Id::Illuminance | Id::SocTemp | Id::Wifi, Value::Float(v)) => send(stream, 25, &SensorStateResponse {
+        (Id::Illuminance | Id::SocTemp | Id::Wifi | Id::WakeLevel | Id::WakeScore | Id::WakeSnr, Value::Float(v)) => send(stream, 25, &SensorStateResponse {
             key, state: v.unwrap_or(0.0), missing_state: v.is_none(), ..Default::default()
         }),
         (Id::Presence, Value::Bool(v)) => {
@@ -473,14 +487,37 @@ fn handle_voice(kind: u32, payload: &[u8], voice: &VoiceLink, stream: &mut TcpSt
     Ok(())
 }
 
-fn forward_voice(voice: &VoiceLink, stream: &mut TcpStream, subscribed: bool) -> io::Result<()> {
+/// SNR first (Home Assistant's arbitration reads it), then level and score.
+fn send_wake_info(stream: &mut TcpStream, level_dbfs: f32, score: f32, snr_db: Option<f32>) -> io::Result<()> {
+    send_state(stream, Id::WakeSnr, 22, &Value::Float(snr_db.map(|v| (v * 10.0).round() / 10.0)))?;
+    send_state(stream, Id::WakeLevel, 20, &Value::Float(Some((level_dbfs * 10.0).round() / 10.0)))?;
+    send_state(stream, Id::WakeScore, 21, &Value::Float(Some((score * 100.0).round() / 100.0)))
+}
+
+fn forward_voice(
+    voice: &VoiceLink,
+    stream: &mut TcpStream,
+    subscribed: bool,
+    states_subscribed: bool,
+    wake_sent: &mut Option<Instant>,
+) -> io::Result<()> {
     use crate::voice::{FromApi, ToApi};
     while let Ok(msg) = voice.to_api.try_recv() {
         match msg {
+            ToApi::WakeInfo { level_dbfs, score, snr_db } => {
+                *LAST_WAKE.lock().unwrap() = Some((level_dbfs, score, snr_db));
+                if states_subscribed {
+                    send_wake_info(stream, level_dbfs, score, snr_db)?;
+                    *wake_sent = Some(Instant::now());
+                }
+            }
             ToApi::Start { conversation_id, wake_word_phrase } => {
                 if !subscribed {
                     let _ = voice.from_api.send(FromApi::Started { error: true });
                     continue;
+                }
+                if let Some(t) = wake_sent.take() {
+                    eprintln!("nspanel-app: wake level sent {} µs before the pipeline request", t.elapsed().as_micros());
                 }
                 send(stream, 90, &VoiceAssistantRequest {
                     start: true,
@@ -531,6 +568,7 @@ fn serve(
     let mut sent: HashMap<u32, Value> = HashMap::new();
     let mut last_rx = Instant::now();
     let mut ping_sent: Option<Instant> = None;
+    let mut wake_sent: Option<Instant> = None;
     let mut chunk = [0u8; 4096];
     loop {
         match stream.read(&mut chunk) {
@@ -586,6 +624,10 @@ fn serve(
                 20 => {
                     subscribed = true;
                     sent.clear();
+                    let last = *LAST_WAKE.lock().unwrap();
+                    if let Some((level_dbfs, score, snr_db)) = last {
+                        send_wake_info(&mut stream, level_dbfs, score, snr_db)?;
+                    }
                 }
                 33 | 51 | 54 | 62 => handle_command(kind, &payload, &snapshot, control),
                 89 | 91 | 92 | 106 | 115 | 119 | 121 | 123 => {
@@ -595,7 +637,7 @@ fn serve(
                 _ => {}
             }
         }
-        forward_voice(voice, &mut stream, voice_subscribed)?;
+        forward_voice(voice, &mut stream, voice_subscribed, subscribed, &mut wake_sent)?;
         // Push changed states.
         let changed = notify.try_iter().count() > 0;
         if subscribed && (changed || sent.is_empty()) {

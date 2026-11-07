@@ -8,6 +8,8 @@
 #   REPO   this repository               KSRC  mainline kernel source tree
 #   BRSRC  Buildroot source tree         OUT   output directory
 #   JOBS   parallel jobs                 NSPANEL_SSH_PUBKEY_FILE  key for root SSH login
+#   STOCK_RESOURCE  the stock resource partition from a panel backup (default:
+#                   the first /root/nspanel-backups/*/resource.img)
 set -euo pipefail
 
 # WSL appends the Windows PATH (with spaces), which Buildroot refuses.
@@ -22,6 +24,18 @@ BREXT="${BREXT:-/root/nspanel/br2-external}"
 JOBS="${JOBS:-$(nproc)}"
 export NSPANEL_SSH_PUBKEY_FILE="${NSPANEL_SSH_PUBKEY_FILE:-/root/.ssh/nspanel_dev.pub}"
 DTB_NAME=px30-sonoff-nspanel-pro-86
+# Backlight from the bootloader logo on (the boot animation and S20backlight
+# use the same value).
+BOOT_BRIGHTNESS=180
+
+STOCK_RESOURCE="${STOCK_RESOURCE:-$(ls /root/nspanel-backups/*/resource.img 2>/dev/null | head -1 || true)}"
+if [ -z "$STOCK_RESOURCE" ] || [ ! -f "$STOCK_RESOURCE" ]; then
+  echo "ERROR: no stock resource partition found. Back up a panel first (install guide,"
+  echo "step 6) or set STOCK_RESOURCE=/path/to/resource.img. The stock U-Boot needs its own"
+  echo "device tree from it: for the boot logo and for loading the image in about 2 s."
+  exit 1
+fi
+echo "== stock resource partition: $STOCK_RESOURCE"
 
 mkdir -p "$OUT" "$BROUT"
 
@@ -60,18 +74,22 @@ fi
            CFG80211 MAC80211 RTW88_8723DS PWRSEQ_SIMPLE RESET_GPIO EXT4_FS \
            TOUCHSCREEN_HYNITRON_CSTXXX INPUT_EVDEV I2C_CHARDEV IIO STK3310 \
            SND SND_SOC SND_SOC_ROCKCHIP_I2S SND_SOC_RK817 SND_SIMPLE_CARD \
-           SND_SOC_ROCKCHIP_PDM SND_SOC_DMIC; do
+           SND_SOC_ROCKCHIP_PDM SND_SOC_DMIC DW_WATCHDOG WATCHDOG_HANDLE_BOOT_ENABLED; do
     grep -q "^CONFIG_$o=y" .config || { echo "NOT BUILT IN: CONFIG_$o"; missing=1; }
   done
   [ "$missing" -eq 0 ] || exit 1
   echo "== kernel: build"
   make -j"$JOBS" Image "rockchip/$DTB_NAME.dtb" 2>&1 | grep -E "error|Error" || true
   ls -la arch/arm64/boot/Image "arch/arm64/boot/dts/rockchip/$DTB_NAME.dtb"
-  # Bootloader logo (assets/bootlogo.bmp as logo.bmp) is not packed yet: the
-  # first attempt (vendor display nodes in the DTB) hung the stock U-Boot with
-  # a black screen; the next try needs the serial console.
-  python3 "$REPO/tools/pack_rk_resource.py" "$OUT/resource.img" "rk-kernel.dtb=arch/arm64/boot/dts/rockchip/$DTB_NAME.dtb"
-  python3 "$REPO/tools/arm64_branch_pad.py" arch/arm64/boot/Image "$OUT/kernel.bin" --offset 0x180000
+  # The stock U-Boot gets the stock device tree and the boot logo (resource
+  # image in the boot image's second stage); the chain loader in front of the
+  # kernel hands the kernel its own device tree (tools/chainload).
+  bash "$REPO/tools/make_uboot_dtb.sh" "$STOCK_RESOURCE" scripts/dtc/dtc "$BOOT_BRIGHTNESS" "$OUT/uboot.dtb"
+  python3 "$REPO/tools/pack_rk_resource.py" "$OUT/resource.img" \
+    "rk-kernel.dtb=$OUT/uboot.dtb" "logo.bmp=$REPO/assets/bootlogo.bmp"
+  bash "$REPO/tools/chainload/build.sh" "$KSRC" "$OUT/chain.bin"
+  python3 "$REPO/tools/arm64_chain_pack.py" "$OUT/chain.bin" "arch/arm64/boot/dts/rockchip/$DTB_NAME.dtb" \
+    arch/arm64/boot/Image "$OUT/kernel.bin"
 )
 
 ########## root filesystem ##########

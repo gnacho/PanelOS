@@ -51,7 +51,8 @@
 		power-supply = <&vcc3v3_lcd>;
 		brightness-levels = <0 255>;
 		num-interpolated-steps = <255>;
-		default-brightness-level = <128>;
+		/* Same as the bootloader logo and S20backlight: no jump at boot. */
+		default-brightness-level = <180>;
 	};
 
 	/*
@@ -493,5 +494,14 @@
 };
 
 &vopl_mmu {
+	status = "okay";
+};
+
+/*
+ * The chain loader in front of the kernel (tools/chainload) starts this
+ * watchdog when this node is enabled; the kernel then keeps it fed until user
+ * space takes over. A boot that hangs before that resets the panel.
+ */
+&wdt {
 	status = "okay";
 };

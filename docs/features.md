@@ -8,7 +8,7 @@
 ## Look and feel
 
 - The present look is a first working version; the design will be redone from scratch, so for now function comes first and nothing is polished.
-- **Boot screen:** own boot animation instead of kernel text, rendered pixel-exact from `assets/logo.svg` and `assets/logotype.svg` (`tools/splash/`). The logotype (white letters, the red logo as the first A) turns into the round logo, the white line draws itself, then the small logotype and the slogan appear under the logo. Until Wi-Fi is up, a light band runs across the dimmed small logotype (30 s at most); then the UI takes over. Details and timings in docs/bringup.md.
+- **Boot screen:** the PanelOS logo already in the bootloader (`assets/bootlogo.bmp`), then the own boot animation instead of kernel text, rendered pixel-exact from `assets/logo.svg` and `assets/logotype.svg` (`tools/splash/`). The logotype (white letters, the red logo as the first A) turns into the round logo, the white line draws itself, then the small logotype and the slogan appear under the logo. Until Wi-Fi is up and the app has the clock and the first Home Assistant data, a light band runs across the dimmed small logotype; then the UI takes over with current content. Power on to the dashboard in about 12 s (stock firmware: about 53 s). Details and timings in docs/bringup.md.
 
 - The app does not run Home Assistant's card code. It reads the content: the dashboard configuration (which cards, which entities, order, titles) and the entity states, and draws everything itself. So the look is entirely the app's own.
 - Default look close to Home Assistant's default theme; further themes selectable on the panel (and from Home Assistant).

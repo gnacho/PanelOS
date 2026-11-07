@@ -32,6 +32,9 @@ pub type EchoRef = Arc<Mutex<VecDeque<i16>>>;
 
 /// voice thread → ESPHome API thread
 pub enum ToApi {
+    /// Level (dBFS), SNR (dB, None without enough background) and model score
+    /// (0..1) of a wake word, sent right before its `Start`.
+    WakeInfo { level_dbfs: f32, score: f32, snr_db: Option<f32> },
     Start { conversation_id: String, wake_word_phrase: String },
     Audio(Vec<u8>),
     Stop,
@@ -118,6 +121,7 @@ extern "C" {
     fn mww_set_enabled(e: *mut MwwEngine, index: c_int, enabled: c_int);
     fn mww_reset(e: *mut MwwEngine);
     fn mww_process(e: *mut MwwEngine, samples: *const i16, count: usize) -> c_int;
+    fn mww_last_score(e: *mut MwwEngine) -> f32;
 }
 
 struct Engine {
@@ -314,6 +318,83 @@ impl Engine {
     /// The model found by the last `process` call.
     fn last_detection(&self) -> Option<&WakeWord> {
         self.last.and_then(|i| self.words.get(i))
+    }
+
+    /// Window-averaged probability (0..1) of the last detection.
+    fn last_score(&self) -> f32 {
+        // SAFETY: valid engine.
+        unsafe { mww_last_score(self.ptr) }
+    }
+}
+
+/// What the wake word model heard around a detection (the processed
+/// microphone signal), sent with every wake word before the run starts, so
+/// that Home Assistant can let the satellite that heard the command best
+/// answer when several wake at once:
+/// - level: RMS of the last second, dBFS;
+/// - SNR: loudest 100 ms of the last second over the RMS of the second
+///   before it, dB (the same definition on every satellite).
+struct WakeLevel {
+    window: VecDeque<i16>,
+}
+
+impl WakeLevel {
+    const SECOND: usize = 16000; // 1 s at 16 kHz
+    const SAMPLES: usize = 2 * Self::SECOND; // the last second and the one before
+    const PEAK: usize = 1600; // 100 ms
+    const STEP: usize = 160; // the 100 ms window moves in 10 ms steps
+    /// Background shorter than this (right after a run): no SNR.
+    const MIN_BACKGROUND: usize = 3200;
+
+    fn new() -> Self {
+        Self { window: VecDeque::with_capacity(Self::SAMPLES) }
+    }
+
+    fn push(&mut self, samples: &[i16]) {
+        for &s in samples {
+            if self.window.len() == Self::SAMPLES {
+                self.window.pop_front();
+            }
+            self.window.push_back(s);
+        }
+    }
+
+    fn mean_square<'a>(samples: impl Iterator<Item = &'a i16>) -> f64 {
+        let (mut sum, mut n) = (0.0f64, 0usize);
+        for &s in samples {
+            sum += (s as f64).powi(2);
+            n += 1;
+        }
+        sum / n.max(1) as f64
+    }
+
+    /// RMS of the last second, dBFS.
+    fn dbfs(&self) -> f32 {
+        let skip = self.window.len().saturating_sub(Self::SECOND);
+        let ms = Self::mean_square(self.window.iter().skip(skip));
+        (10.0 * (ms.max(1.0) / (32768.0f64 * 32768.0)).log10()) as f32
+    }
+
+    /// Loudest 100 ms of the last second over the second before it, dB.
+    fn snr_db(&self) -> Option<f32> {
+        let len = self.window.len();
+        let start = len.saturating_sub(Self::SECOND);
+        if start < Self::MIN_BACKGROUND {
+            return None;
+        }
+        let background = Self::mean_square(self.window.iter().take(start)).max(1.0);
+        // energy per 10 ms step of the last second, then the loudest 100 ms run
+        let steps: Vec<f64> = (start..len)
+            .step_by(Self::STEP)
+            .map(|i| self.window.range(i..(i + Self::STEP).min(len)).map(|&s| (s as f64).powi(2)).sum())
+            .collect();
+        let per = Self::PEAK / Self::STEP;
+        let loudest = steps
+            .windows(per.min(steps.len()).max(1))
+            .map(|w| w.iter().sum::<f64>())
+            .fold(0.0f64, f64::max)
+            / Self::PEAK as f64;
+        Some((10.0 * (loudest.max(1.0) / background).log10()) as f32)
     }
 }
 
@@ -680,6 +761,7 @@ pub fn spawn(
         let mut speech_seen = false;
         let mut stream_start = Instant::now();
         let mut detector = SpeechStart::new();
+        let mut wake_level = WakeLevel::new();
         // After the panel ended a silent follow-up: Home Assistant's late
         // error events are not shown.
         let mut quiet_until: Option<Instant> = None;
@@ -948,6 +1030,7 @@ pub fn spawn(
                         follow_up_pending = false;
                         follow_up_run = true;
                         engine.reset();
+                        wake_level = WakeLevel::new();
                         eprintln!("nspanel-app: voice: follow-up listening");
                         if test_follow_up.is_none() {
                             if let Ok(bytes) = std::fs::read("/tmp/nspanel-voice-followup.wav") {
@@ -973,6 +1056,7 @@ pub fn spawn(
                     } else if !muted && (!speaking || !aec.ptr.is_null()) {
                         // With echo cancellation the wake word also works while
                         // the panel speaks: it cuts the answer off.
+                        wake_level.push(chunk);
                         if let Some(word) = engine.process(chunk).cloned().filter(|w| INTERNAL_WORDS.contains(&w.id.as_str())) {
                             // "Stop": end the answer or the ringing, no conversation.
                             eprintln!("nspanel-app: stop word '{}'", word.phrase);
@@ -982,7 +1066,17 @@ pub fn spawn(
                             engine.reset();
                             ui(VoiceUi::Stopped);
                         } else if let Some(word) = engine.last_detection().cloned() {
-                            eprintln!("nspanel-app: wake word '{}'{}", word.phrase, if speaking { " (during playback)" } else { "" });
+                            let (level_dbfs, score, snr_db) = (wake_level.dbfs(), engine.last_score(), wake_level.snr_db());
+                            eprintln!(
+                                "nspanel-app: wake word '{}'{} level {level_dbfs:.1} dBFS snr {} score {score:.2}",
+                                word.phrase,
+                                if speaking { " (during playback)" } else { "" },
+                                snr_db.map(|v| format!("{v:.1} dB")).unwrap_or_else(|| "n/a".into())
+                            );
+                            // Before the run: Home Assistant has the values when the pipeline starts.
+                            let _ = to_api.send(ToApi::WakeInfo { level_dbfs, score, snr_db });
+                            // The next wake word measures only audio heard after this run.
+                            wake_level = WakeLevel::new();
                             if speaking {
                                 player.stop();
                                 expecting_tts = None;

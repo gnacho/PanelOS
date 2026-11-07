@@ -18,7 +18,7 @@ Measured on one Sonoff NSPanel Pro 86 unit (stock firmware 3.0.0, Android 8.1, v
 | PMIC + audio codec | Rockchip RK809 | i2c-0 0x20 | rk808, rk809-codec | power key is input "rk8xx_pwrkey"; codec on I2S1 (MCLK GPIO2_C3, SCLK C2, LRCK C1, SDO C4, SDI C5); its ADC input is the speaker echo reference, not a microphone |
 | Microphones | digital (PDM) | SoC PDM controller ff0a0000, data line 1 = GPIO3_D0 | AISpeech voice HAL (AEC: 2 mics + 1 reference) | verified by a speech test (channels 2+3); clock output (GPIO2_C6 or GPIO3_C7) not identified yet |
 | Wi-Fi + Bluetooth | Realtek RTL8723DS | SDIO (024c:d723), BT on UART | 8723ds (out of tree) | mainline: rtw88 8723DS SDIO (works) |
-| Zigbee | Silicon Labs radio | UART (one of ttyS3/4/5) | userspace | optional, router role at most |
+| Zigbee | Silicon Labs EFR32MG21 (module SM-044 V1.1) | UART (one of ttyS3/4/5) | userspace | ships with EmberZNet 6.10.1 NCP firmware, see [Zigbee module](#zigbee-module); optional, router role at most |
 | Ethernet MAC | rk_gmac-dwmac | | | present in DT, no connector expected |
 | Backlight | PWM | /sys/class/backlight/backlight | pwm-backlight | 0..255 |
 | Thermal | soc-thermal, gpu-thermal | /sys/class/thermal | | |
@@ -33,8 +33,21 @@ Board marking on a pre-production unit: `ST-PX30-T6E-V1.0`, dated 2021-07. Detai
 - `OTG`: micro-USB port on the bottom edge of the board, used for ADB and Rockchip USB flashing.
 - `BOOT`: tactile button on the right side, next to the `LCD` connector. Verified: holding it while plugging in the OTG USB cable (no other power) makes the panel enumerate as `2207:330d` "USB download gadget": the vendor U-Boot's rockusb Loader mode (`rkdeveloptool ld`), not the boot ROM's mask ROM mode. Loader mode depends on an intact U-Boot on the eMMC.
 - Power over the OTG port: a laptop USB port is enough for U-Boot download mode, but **not for a full boot** (the stock Android hangs on the Sonoff logo indefinitely). From a 2 A USB charger it boots normally. For work that needs data and full power at the same time, use a powered USB hub.
-- Debug UART pads at the top left: `GND`, `RX`, `TX`, `VCC` (plus `RST`). Stock console: UART2 (`ff160000`), **1500000 baud, 8N1**, 3.3 V logic (vendor bootargs `console=ttyFIQ0 earlyprintk=uart8250,mmio32,0xff160000`). Needs a USB-UART adapter that supports 1.5 Mbaud (FT232, CH340, CP2102N).
+- The labelled pads at the top left (`GND`, `RX`, `TX`, `VCC`, `RST`) belong to the Zigbee module next to them (module "SM-044 V1.1", Silicon Labs EFR32MG21 chip): they are its serial and reset pads (see [Zigbee module](#zigbee-module)). `GND` is the pad directly below its label and is connected to a GND pin of the 8-pin base connector. They are **not** the SoC's console: with a USB-UART adapter on them nothing arrives while the kernel writes to its console.
+- SoC console: UART2 (`ff160000`), **1500000 baud, 8N1**, 3.3 V logic (vendor bootargs `console=ttyFIQ0 earlyprintk=uart8250,mmio32,0xff160000`). Its TX comes out on two pins: GPIO1_D2 (UART2_M0, used by the kernel DT and by the vendor DT's fiq-debugger) and GPIO2_B4 (UART2_M1; the kernel never touches it, so the stock boot chain sets this mux). Both were confirmed by writing zeros to `/dev/ttyS2` and reading the pin levels. Neither line reaches any test pad or pin on either side of the board (`IO1`/`IO2` included), so the console is not usable without a board layout. The method used, for other board revisions: write zeros to `/dev/ttyS2` for 2 s, pause 2 s, repeat; a TX point then alternates between 3.3 V and about 0.3 V on a multimeter. A USB-UART adapter must support 1.5 Mbaud (FT232, CH340, CP2102N).
 - On reassembly, seat the light/proximity sensor board (marked `ALS`, top centre) correctly.
+
+## Zigbee module
+
+Read through the module's pads with a 3.3 V USB-UART adapter while the panel ran from its charger. Only queries were sent; nothing was written to the module.
+
+- Pads: `TX` is the module's output, `RX` its input (adapter TXD to `RX`, adapter RXD to `TX`, plus `GND`). `VCC` stays unconnected while the panel is powered.
+- Serial line: 115200 baud, 8N1, ASH framing. The module sends XON (`0x11`), so it uses software flow control; no RTS/CTS lines are needed.
+- Firmware: EmberZNet 6.10.1.0 (build 216, GA release) as an NCP, EZSP protocol version 8.
+- Bootloader: Gecko Bootloader v1.12.00 with the serial XMODEM menu (`1. upload gbl`, `2. run`, `3. ebl info`) at 115200 baud. The running firmware enters it with the EZSP command `launchStandaloneBootloader`; menu item `2` starts the firmware again. The menu offers a GBL upload, so replacing the firmware should not need SWD (not tried yet).
+- EZSP `getStandaloneBootloaderVersionPlatMicroPhy` returns bootloader version `0x1C00`, platform 4, micro 24, phy 15.
+- Manufacturing tokens `MFG_STRING`, `MFG_BOARD_NAME`, `MFG_MANUF_ID` and `MFG_CUSTOM_VERSION` are empty (all `0xFF`).
+- Which SoC UART the module is wired to is not known yet. The vendor DT enables UART1, UART4 and UART5; UART1 (GPIO1_C0/C1) belongs to Bluetooth. Holding the module's `RX` line low from the adapter changed none of the SoC's GPIO input levels, the UART4 (GPIO1_D4/D5) and UART5 (GPIO3_A1/A2) pins included. The PanelOS device tree enables only the console UART, so the SoC leaves the module's lines alone.
 
 ## Display panel
 

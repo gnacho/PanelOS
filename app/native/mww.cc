@@ -51,6 +51,7 @@ int8_t quantise(uint16_t feature) {
 struct MwwEngine {
   FrontendState frontend;
   std::vector<Model> models;
+  float last_score = 0.0f;  // window-averaged probability of the last detection, 0..1
 };
 
 extern "C" {
@@ -170,6 +171,7 @@ int mww_process(MwwEngine* e, const int16_t* samples, size_t count) {
             for (auto r : m.recent) sum += r;
             if (sum > m.cutoff * 255.0f * m.window && detected < 0) {
               detected = static_cast<int>(&m - e->models.data());
+              e->last_score = sum / (255.0f * m.window);
               m.recent.clear();
               m.refractory = 1000 / (m.stride * kStepMs);
             }
@@ -181,6 +183,9 @@ int mww_process(MwwEngine* e, const int16_t* samples, size_t count) {
   }
   return detected;
 }
+
+// Window-averaged probability (0..1) of the last detection.
+float mww_last_score(MwwEngine* e) { return e ? e->last_score : 0.0f; }
 
 void mww_destroy(MwwEngine* e) {
   if (!e) return;

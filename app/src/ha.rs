@@ -180,7 +180,13 @@ fn session(
         Err(TokenError::Retry(e)) => return Err(e),
     };
 
-    let (mut ws, _) = tungstenite::connect(ws_url).map_err(|e| format!("connect: {e}"))?;
+    let (mut ws, response) = tungstenite::connect(ws_url).map_err(|e| format!("connect: {e}"))?;
+    // No battery-backed clock: until NTP has run, take Home Assistant's time.
+    if let Some(date) = response.headers().get("date").and_then(|v| v.to_str().ok()) {
+        if crate::clock::set_from_http_date(date) {
+            eprintln!("nspanel-app: clock set from Home Assistant ({date})");
+        }
+    }
     set_timeout(&mut ws, Some(Duration::from_secs(15)));
     let hello = read_json(&mut ws)?.ok_or("no greeting")?;
     if hello["type"] != "auth_required" {
@@ -384,12 +390,19 @@ pub fn spawn(
                 }
                 // The app starts before Wi-Fi is up: no address yet is
                 // not an error worth showing.
-                let text = if e.contains("os error 101") || e.contains("Network is unreachable") {
+                let offline = e.contains("os error 101") || e.contains("Network is unreachable");
+                let text = if offline {
                     "Waiting for the network…".to_string()
                 } else {
                     format!("Home Assistant: {e}")
                 };
                 emit(Event::Status { text, connected: false });
+                if offline {
+                    // Try again soon, without a growing delay: the first
+                    // screen waits for this connection.
+                    std::thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
             }
             if started.elapsed() > Duration::from_secs(60) {
                 delay = 2;

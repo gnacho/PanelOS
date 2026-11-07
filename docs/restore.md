@@ -2,7 +2,7 @@
 
 This guide helps when you want the stock firmware back, or when the panel does not start. It uses the computer and the backup from the [install guide](install.md); type the commands the same way (see "How to type the commands" there).
 
-First open the Ubuntu window (or your Linux terminal), become root and set the panel's values again. Replace the examples; `BACKUP` is the folder that step 7 of the install guide created for this panel (`ls /root/nspanel-backups` lists them):
+First open the Ubuntu window (or your Linux terminal), become root and set the panel's values again. Replace the examples; `BACKUP` is the folder that step 6 of the install guide created for this panel (`ls /root/nspanel-backups` lists them):
 
 ```
 sudo -i
@@ -137,7 +137,7 @@ Do not write the `uboot`, `trust` or other partitions unless you know exactly wh
 
 ## Test the restore before you need it
 
-Do this right after the backup (install guide, step 7), while the panel still runs the stock firmware. Both tests write only the recovery partition, with exactly the content it already has. The stock firmware starts without the recovery partition, and it restores its own recovery at every start anyway, so nothing is at risk.
+Do this right after the backup (install guide, step 6), while the panel still runs the stock firmware. Both tests write only the recovery partition, with exactly the content it already has. The stock firmware starts without the recovery partition, and it restores its own recovery at every start anyway, so nothing is at risk.
 
 ### Quick test over ADB (the panel stays closed)
 
