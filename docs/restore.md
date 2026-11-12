@@ -27,7 +27,7 @@ Which case is yours?
 ## A. From PanelOS back to the stock firmware
 
 ```
-ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL "nspanel-bootmode android && nohup reboot >/dev/null 2>&1 </dev/null &"
+ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/panelos_known_hosts root@$PANEL "nspanel-bootmode android && nohup reboot >/dev/null 2>&1 </dev/null &"
 ```
 
 The answer starts with `default boot: normal`. The panel restarts and the stock firmware (with the Sonoff logo) comes up. It also restores its own recovery partition, so PanelOS is gone afterwards. Developer mode and ADB stay on.

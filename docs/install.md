@@ -205,7 +205,7 @@ The command writes the image, checks it, and restarts the panel. On the panel yo
 
 1. after a few seconds the **PanelOS logo** (the stock bootloader loads PanelOS), then a short black moment,
 2. the **PanelOS animation**, then a light band running across the logo until Wi-Fi is up,
-3. the message **"Not configured"** (step 10 fixes that).
+3. the setup screen **"Connect to Home Assistant"** (step 10).
 
 You do this step **once**.
 
@@ -216,26 +216,27 @@ If the panel starts the stock firmware again (the Sonoff screen) instead of Pane
 Do this while PanelOS is running (after the animation):
 
 ```
-ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL nspanel-bootmode open
+ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/panelos_known_hosts root@$PANEL nspanel-bootmode open
 ```
 
 The answer starts with `default boot: open system`. From now on the panel starts PanelOS every time, also after a power cut.
 
+The first SSH command stores the panel's SSH host key in `/root/.ssh/panelos_known_hosts`; later commands check it. The panel keeps the key across reboots and updates; should it ever change on purpose (e.g. after restoring the stock firmware), remove the old one with `ssh-keygen -R $PANEL -f /root/.ssh/panelos_known_hosts`.
+
 ## 10. Tell the panel where Home Assistant is
 
-Store the address of Home Assistant: its IP address, plus `:8123` if your Home Assistant uses that port (installations from before 2026.8 and Docker installations do; without a port the panel uses port 80). **Set again after reopening.**
+On the panel's setup screen **"Connect to Home Assistant"**:
+
+- If your Home Assistant is listed (the panel found it on the network), tap it.
+- Otherwise type its IP address on the keypad, plus `:8123` if your Home Assistant uses that port (installations from before 2026.8 and Docker installations do; Home Assistant OS installed since 2026.8 uses port 80). Without a port the panel tries 8123 first, then 80. Tap **Connect**.
+
+The panel checks that Home Assistant answers at that address, saves it, and shows a **QR code** a moment later. If it says that Home Assistant did not answer, check the IP address and the port.
+
+Alternatively, from the computer (with `HA=http://<Home Assistant IP address>:8123`):
 
 ```
-HA=http://<Home Assistant IP address>:8123
+ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/panelos_known_hosts root@$PANEL "echo '{\"ha_url\": \"$HA\"}' > /mnt/persist/nspanel/app.json && nohup reboot >/dev/null 2>&1 </dev/null &"
 ```
-
-Then save it on the panel and restart it:
-
-```
-ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL "echo '{\"ha_url\": \"$HA\"}' > /mnt/persist/nspanel/app.json && nohup reboot >/dev/null 2>&1 </dev/null &"
-```
-
-The panel restarts (logo, animation), then shows a **QR code**.
 
 ## 11. Log in to Home Assistant
 
@@ -245,8 +246,8 @@ The panel restarts (logo, animation), then shows a **QR code**.
 
 ## 12. Add the panel to Home Assistant
 
-1. In Home Assistant: **Settings → Devices & services → Add integration → ESPHome**.
-2. Host: the panel's IP address. Port: `6053`. Leave the encryption key empty.
+1. If Home Assistant and the panel are in the same network segment, Home Assistant finds the panel by itself (mDNS): **Settings → Devices & services** shows "NSPanel Pro" under Discovered; tap **Add**. Otherwise: **Settings → Devices & services → Add integration → ESPHome**.
+2. Host: the panel's IP address (pre-filled when discovered). Port: `6053`. Leave the encryption key empty: Home Assistant gives the panel a key by itself right after adding it and connects encrypted from then on.
 3. The panel appears as a device with its settings, sensors and the voice assistant (Assist satellite). Choose the wake words and the assistant on the device page.
 
 Optional: the assistant mode (smart-display home screen) is configured with the PanelOS Home Assistant integration; see [home_assistant.md](home_assistant.md).
@@ -280,7 +281,7 @@ Until PanelOS can update itself (planned: updates from Home Assistant's Settings
    ```
 
    ```
-   ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$PANEL "nohup reboot >/dev/null 2>&1 </dev/null &"
+   ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/root/.ssh/panelos_known_hosts root@$PANEL "nohup reboot >/dev/null 2>&1 </dev/null &"
    ```
 
    Then the next panel: set `PANEL` again and repeat these three commands.
@@ -292,5 +293,6 @@ See [restore.md](restore.md), case A.
 ## If something goes wrong
 
 - **The panel shows the Sonoff screen / stock firmware again:** PanelOS was not made the default (step 9) or found no network. Repeat from step 8.
-- **"Not configured" on the screen:** step 10 is missing or the address is wrong; repeat step 10.
+- **The setup screen says Home Assistant did not answer:** check the IP address and the port (`:8123` or none) in Home Assistant under Settings → System → Network.
+- **"Waiting for the network…" or "Home Assistant not reachable, retrying…" in the status line:** the panel keeps trying by itself, no restart needed; check the Wi-Fi and that Home Assistant runs.
 - **The screen stays black for minutes:** unplug the power for 10 seconds. If it still does not start, follow [restore.md](restore.md), case C.

@@ -342,20 +342,56 @@ fn session(
             send_json(&mut ws, &json!({"id": panel_id, "type": "nspanel_pro/subscribe", "panel_id": PANEL_ID}))?;
         }
 
-        // Keep-alive: Home Assistant answers {"type":"ping"} with a pong.
-        if ping_sent.is_none() && last_rx.elapsed() > Duration::from_secs(30) {
+        // Keep-alive: Home Assistant answers {"type":"ping"} with a pong. A
+        // vanished server is noticed within about 30 s.
+        if ping_sent.is_none() && last_rx.elapsed() > Duration::from_secs(20) {
             next_id += 1;
             send_json(&mut ws, &json!({"id": next_id, "type": "ping"}))?;
             ping_sent = Some(Instant::now());
         }
         if let Some(t) = ping_sent {
-            if t.elapsed() > Duration::from_secs(15) {
+            if t.elapsed() > Duration::from_secs(10) {
                 return Err("no answer to ping".into());
             }
         }
     }
 }
 
+/// Why a session failed, for the status line and the retry delay.
+#[derive(Clone, Copy, PartialEq)]
+enum Failure {
+    /// No network (Wi-Fi not up yet, or gone).
+    Offline,
+    /// The network is there, Home Assistant does not answer.
+    Unreachable,
+    /// Home Assistant answered with an error (login, dashboard, …).
+    Other,
+}
+
+fn classify(e: &str) -> Failure {
+    if e.contains("os error 101") || e.contains("Network is unreachable") {
+        Failure::Offline
+    } else if e.starts_with("connect:")
+        || e.contains("Connection Failed")
+        || e.contains("os error 111")
+        || e.contains("os error 113")
+        || e.contains("timed out")
+        || e.contains("Connection reset")
+    {
+        Failure::Unreachable
+    } else {
+        Failure::Other
+    }
+}
+
+/// Runs the client for good: Home Assistant may be away for hours (power cut,
+/// server down), and the panel must come back by itself.
+///
+/// Retry delays: without network every 0.5 s during the first minute after
+/// the start (Wi-Fi comes up a few seconds after the app, and the first screen
+/// waits for this connection), then every 5 s; while Home Assistant does not
+/// answer 2, 4, 8, then every 10 s. A failure is logged when its cause
+/// changes, not on every try, and the recovery with the length of the outage.
 pub fn spawn(
     ws_url: String,
     shared: Arc<Shared>,
@@ -364,51 +400,71 @@ pub fn spawn(
     emit: impl Fn(Event) + Send + 'static,
 ) {
     std::thread::spawn(move || {
+        let client_started = Instant::now();
         let mut delay = 2;
         let mut reloading = false;
+        // Current outage: since when, and the last logged cause. Cells: the
+        // session reports its connection through the emit callback.
+        let failing_since: std::cell::Cell<Option<Instant>> = std::cell::Cell::new(None);
+        let last_logged: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
         loop {
-            if !reloading {
+            if !reloading && failing_since.get().is_none() {
                 emit(Event::Status { text: "Connecting to Home Assistant…".into(), connected: false });
             }
             let started = Instant::now();
-            let result = session(&ws_url, &shared, &auth, &commands, &emit);
+            let result = session(&ws_url, &shared, &auth, &commands, &|event| {
+                if let Event::Status { connected: true, .. } = event {
+                    if let Some(since) = failing_since.take() {
+                        eprintln!("nspanel-app: Home Assistant connected again after {} s", since.elapsed().as_secs());
+                    }
+                    last_logged.borrow_mut().take();
+                }
+                emit(event)
+            });
             // Ok means the dashboard or the settings changed: reconnect at once, quietly.
             reloading = result.is_ok();
             if reloading {
                 eprintln!("nspanel-app: reloading the dashboard");
                 continue;
             }
-            if let Err(e) = &result {
+            let Err(e) = &result else { continue };
+            if !auth.is_paired() {
                 eprintln!("nspanel-app: Home Assistant session ended: {e}");
-                if !auth.is_paired() {
-                    emit(Event::NeedPairing);
-                    // Wait until a new login is stored.
-                    while !auth.is_paired() {
-                        std::thread::sleep(Duration::from_secs(1));
-                    }
-                    continue;
+                emit(Event::NeedPairing);
+                // Wait until a new login is stored.
+                while !auth.is_paired() {
+                    std::thread::sleep(Duration::from_secs(1));
                 }
-                // The app starts before Wi-Fi is up: no address yet is
-                // not an error worth showing.
-                let offline = e.contains("os error 101") || e.contains("Network is unreachable");
-                let text = if offline {
-                    "Waiting for the network…".to_string()
-                } else {
-                    format!("Home Assistant: {e}")
-                };
-                emit(Event::Status { text, connected: false });
-                if offline {
-                    // Try again soon, without a growing delay: the first
-                    // screen waits for this connection.
-                    std::thread::sleep(Duration::from_millis(500));
-                    continue;
-                }
+                continue;
+            }
+            let failure = classify(e);
+            let cause = match failure {
+                Failure::Offline => "no network".to_string(),
+                _ => e.clone(),
+            };
+            if last_logged.borrow().as_deref() != Some(cause.as_str()) {
+                eprintln!("nspanel-app: Home Assistant session ended: {e}");
+                *last_logged.borrow_mut() = Some(cause);
+            }
+            if failing_since.get().is_none() {
+                failing_since.set(Some(Instant::now()));
+            }
+            let text = match failure {
+                Failure::Offline => "Waiting for the network…".to_string(),
+                Failure::Unreachable => "Home Assistant not reachable, retrying…".to_string(),
+                Failure::Other => format!("Home Assistant: {e}"),
+            };
+            emit(Event::Status { text, connected: false });
+            if failure == Failure::Offline {
+                let wait = if client_started.elapsed() < Duration::from_secs(60) { 500 } else { 5000 };
+                std::thread::sleep(Duration::from_millis(wait));
+                continue;
             }
             if started.elapsed() > Duration::from_secs(60) {
                 delay = 2;
             }
             std::thread::sleep(Duration::from_secs(delay));
-            delay = (delay * 2).min(30);
+            delay = (delay * 2).min(10);
         }
     });
 }

@@ -9,7 +9,7 @@
 use std::ffi::CString;
 use std::os::raw::{c_char, c_int};
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -426,6 +426,15 @@ pub enum Sound {
     Beep,
 }
 
+/// Longest sound the panel plays from a file (an answer or announcement).
+const MAX_AUDIO_SECS: usize = 180;
+
+/// Sample rate and channels the panel plays, and the most data for them.
+fn playable(rate: u32, channels: u16) -> Option<usize> {
+    ((8000..=48000).contains(&rate) && (1..=2).contains(&channels))
+        .then(|| rate as usize * channels as usize * 2 * MAX_AUDIO_SECS)
+}
+
 /// 16-bit PCM WAV → (rate, channels, samples bytes).
 pub fn parse_wav(bytes: &[u8]) -> Option<(u32, u16, Vec<u8>)> {
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
@@ -442,13 +451,15 @@ pub fn parse_wav(bytes: &[u8]) -> Option<(u32, u16, Vec<u8>)> {
             rate = u32::from_le_bytes(bytes[body + 4..body + 8].try_into().ok()?);
             bits = u16::from_le_bytes([bytes[body + 14], bytes[body + 15]]);
         } else if id == b"data" {
-            let end = if len == 0 || len == u32::MAX as usize { bytes.len() } else { (body + len).min(bytes.len()) };
-            if bits != 16 || channels == 0 || rate == 0 {
+            let end = if len == 0 || len == u32::MAX as usize { bytes.len() } else { body.saturating_add(len).min(bytes.len()) };
+            if bits != 16 {
                 return None;
             }
-            return Some((rate, channels, bytes[body..end].to_vec()));
+            let max = playable(rate, channels)?;
+            let end = end.min(body + max);
+            return Some((rate, channels, bytes[body.min(end)..end].to_vec()));
         }
-        pos = body + len + (len & 1);
+        pos = body.saturating_add(len).saturating_add(len & 1);
     }
     None
 }
@@ -456,16 +467,21 @@ pub fn parse_wav(bytes: &[u8]) -> Option<(u32, u16, Vec<u8>)> {
 /// MP3 → (rate, channels, 16-bit samples as bytes).
 fn decode_mp3(bytes: &[u8]) -> Option<(u32, u16, Vec<u8>)> {
     let mut dec = minimp3::Decoder::new(bytes);
-    let (mut rate, mut channels, mut out) = (0u32, 0u16, Vec::new());
+    let (mut rate, mut channels, mut out, mut max) = (0u32, 0u16, Vec::new(), 0usize);
     loop {
         match dec.next_frame() {
             Ok(f) => {
                 if rate == 0 {
                     rate = f.sample_rate as u32;
                     channels = f.channels as u16;
+                    max = playable(rate, channels)?;
                 }
                 if f.sample_rate as u32 == rate && f.channels as u16 == channels {
                     out.extend(f.data.iter().flat_map(|s| s.to_le_bytes()));
+                }
+                if out.len() >= max {
+                    out.truncate(max);
+                    break;
                 }
             }
             Err(minimp3::Error::Eof) => break,
@@ -507,6 +523,8 @@ pub struct Player {
     /// sounds queued before the stop carry an older number.
     stop_gen: Arc<std::sync::atomic::AtomicU64>,
     pub echo: EchoRef,
+    /// Times the speaker ran dry (ALSA underrun) while playing: audible gaps.
+    pub underruns: Arc<AtomicU32>,
 }
 
 fn chime() -> Vec<i16> {
@@ -556,6 +574,8 @@ impl Player {
         let stop2 = stop_gen.clone();
         let echo: EchoRef = Arc::new(Mutex::new(VecDeque::new()));
         let echo2 = echo.clone();
+        let underruns = Arc::new(AtomicU32::new(0));
+        let underruns2 = underruns.clone();
         std::thread::spawn(move || {
             let mut pcm: Option<PCM> = None;
             loop {
@@ -629,13 +649,14 @@ impl Player {
                             offset += frames * 2;
                         }
                         Err(_) => {
+                            underruns2.fetch_add(1, Ordering::SeqCst);
                             let _ = p.prepare();
                         }
                     }
                 }
             }
         });
-        Self { tx, busy, stop_gen, echo }
+        Self { tx, busy, stop_gen, echo, underruns }
     }
 
     pub fn play(&self, s: Sound) {
@@ -667,9 +688,35 @@ pub struct VoiceControl {
     pub ha_url: String,
 }
 
-/// Downloads a WAV file and plays it; returns once it has been played.
-fn fetch_and_play(url: &str, player: &Player) -> Result<(), String> {
-    let resp = ureq::get(url).timeout(Duration::from_secs(20)).call().map_err(|e| e.to_string())?;
+/// Host part of an http(s) URL (without user info and port).
+fn url_host(url: &str) -> Option<&str> {
+    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host_port = authority.rsplit('@').next()?;
+    Some(if let Some(v6) = host_port.strip_prefix('[') { v6.split(']').next()? } else { host_port.split(':').next()? })
+}
+
+/// Sound is only fetched from Home Assistant's host (any port: e.g. Music
+/// Assistant next to it), by name or by the same address.
+fn from_home_assistant(url: &str, ha_url: &str) -> bool {
+    use std::net::ToSocketAddrs;
+    let (Some(host), Some(ha_host)) = (url_host(url), url_host(ha_url)) else { return false };
+    if host.eq_ignore_ascii_case(ha_host) {
+        return true;
+    }
+    let ips = |h: &str| (h, 80).to_socket_addrs().map(|a| a.map(|s| s.ip()).collect::<Vec<_>>()).unwrap_or_default();
+    let ha_ips = ips(ha_host);
+    ips(host).iter().any(|ip| ha_ips.contains(ip))
+}
+
+/// Downloads a WAV or MP3 file from Home Assistant and plays it; returns once
+/// it has been played.
+fn fetch_and_play(url: &str, ha_url: &str, player: &Player) -> Result<(), String> {
+    if !from_home_assistant(url, ha_url) {
+        return Err("not on Home Assistant's host".into());
+    }
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(20)).build();
+    let resp = agent.get(url).call().map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     std::io::Read::read_to_end(&mut std::io::Read::take(resp.into_reader(), 16 * 1024 * 1024), &mut bytes)
         .map_err(|e| e.to_string())?;
@@ -683,17 +730,45 @@ fn fetch_and_play(url: &str, player: &Player) -> Result<(), String> {
     Ok(())
 }
 
+/// One announcement download at a time.
+static ANNOUNCING: AtomicBool = AtomicBool::new(false);
+
+/// A voice run is going on, or an answer is awaited or being fetched.
+static RUN_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+/// The voice satellite is busy: a run, an awaited or fetched answer, or an
+/// announcement. Sound that is already playing is `Player::busy`.
+pub fn busy() -> bool {
+    RUN_ACTIVE.load(Ordering::Relaxed) || ANNOUNCING.load(Ordering::Relaxed)
+}
+
 /// Downloads and plays an announcement; reports the result back to Home Assistant.
 fn announce(media_id: String, ha_url: String, player: Arc<Player>, to_api: Sender<ToApi>) {
+    if ANNOUNCING.swap(true, Ordering::SeqCst) {
+        eprintln!("nspanel-app: announcement refused (another one is playing)");
+        let _ = to_api.send(ToApi::AnnounceFinished { success: false });
+        return;
+    }
     std::thread::spawn(move || {
         let url = if media_id.starts_with("http") { media_id } else { format!("{ha_url}{media_id}") };
-        let result = fetch_and_play(&url, &player);
+        let result = fetch_and_play(&url, &ha_url, &player);
         if let Err(e) = &result {
             eprintln!("nspanel-app: announcement {url}: {e}");
         }
+        ANNOUNCING.store(false, Ordering::SeqCst);
         let _ = to_api.send(ToApi::AnnounceFinished { success: result.is_ok() });
     });
 }
+
+/// Longest a run streams the microphones to Home Assistant.
+const MAX_STREAM: Duration = Duration::from_secs(30);
+/// A streamed answer starts once this much audio is in (16 kHz, 16-bit:
+/// 0.8 s), so a short stall in the stream does not cut the speech: Home
+/// Assistant sends it about as fast as it is spoken, with waits of up to
+/// about 0.7 s between chunks.
+const TTS_PREBUFFER_BYTES: usize = 16000 * 2 * 8 / 10;
+/// ...or after this long, whatever has arrived.
+const TTS_PREBUFFER_WAIT: Duration = Duration::from_millis(1500);
 
 /// Runs the voice satellite thread.
 pub fn spawn(
@@ -749,6 +824,18 @@ pub fn spawn(
         // streams 16 kHz WAV), the panel fetches the TTS URL itself.
         let mut tts_url: Option<String> = None;
         let mut tts_chunks = 0usize;
+        // Streamed answer: when chunks arrive, how much audio, the longest
+        // wait between two chunks (for finding gaps in the playback).
+        let mut tts_first: Option<Instant> = None;
+        let mut tts_last: Option<Instant> = None;
+        let mut tts_bytes = 0usize;
+        let mut tts_max_gap = Duration::ZERO;
+        let mut underruns_before = 0u32;
+        // Streamed answer audio held back until TTS_PREBUFFER_BYTES are in.
+        let mut tts_hold: Option<(Vec<u8>, Instant)> = None;
+        // The run ended while the answer is still spoken: back to the idle
+        // screen when the speech ends, not before.
+        let mut idle_after_speech = false;
         let fetching = Arc::new(AtomicBool::new(false));
         // Development: /tmp/nspanel-voice-followup.wav is sent as the speech of
         // the next follow-up run (to reproduce conversations without a person).
@@ -872,7 +959,9 @@ pub fn spawn(
                                     }
                                 }
                             }
-                            6 => {
+                            // Intent end; ignored when no run is going on (a follow-up
+                            // only ever continues a conversation of the panel's own).
+                            6 if state != State::Idle => {
                                 if let Some(id) = get("conversation_id") {
                                     conversation_id = id;
                                 }
@@ -886,7 +975,13 @@ pub fn spawn(
                             // TTS stream start, TTS end (URL), stream end
                             98 => {
                                 expecting_tts = Some(Instant::now());
+                                tts_hold = Some((Vec::new(), Instant::now()));
                                 tts_chunks = 0;
+                                tts_first = None;
+                                tts_last = None;
+                                tts_bytes = 0;
+                                tts_max_gap = Duration::ZERO;
+                                underruns_before = player.underruns.load(Ordering::SeqCst);
                             }
                             8 => {
                                 expecting_tts = Some(Instant::now());
@@ -894,12 +989,25 @@ pub fn spawn(
                             }
                             99 => {
                                 expecting_tts = None;
+                                if let Some((held, _)) = tts_hold.take() {
+                                    if !held.is_empty() {
+                                        player.play(Sound::Pcm16k(held));
+                                    }
+                                }
+                                if let (Some(first), Some(last)) = (tts_first, tts_last) {
+                                    eprintln!(
+                                        "nspanel-app: tts stream: {tts_chunks} chunks, {:.1} s of audio in {:.1} s, longest wait between chunks {} ms",
+                                        tts_bytes as f64 / 32000.0,
+                                        last.duration_since(first).as_secs_f64(),
+                                        tts_max_gap.as_millis()
+                                    );
+                                }
                                 if tts_chunks == 0 {
                                     if let Some(url) = tts_url.take() {
                                         fetching.store(true, Ordering::SeqCst);
-                                        let (player, fetching) = (player.clone(), fetching.clone());
+                                        let (player, fetching, ha_url) = (player.clone(), fetching.clone(), control.ha_url.clone());
                                         std::thread::spawn(move || {
-                                            if let Err(e) = fetch_and_play(&url, &player) {
+                                            if let Err(e) = fetch_and_play(&url, &ha_url, &player) {
                                                 eprintln!("nspanel-app: answer audio {url}: {e}");
                                             }
                                             fetching.store(false, Ordering::SeqCst);
@@ -908,8 +1016,8 @@ pub fn spawn(
                                 }
                                 tts_url = None;
                             }
-                            // Run end
-                            2 => {
+                            // Run end (ignored when no run is going on)
+                            2 if state != State::Idle => {
                                 state = State::Idle;
                                 test_audio = None;
                                 ring_run = false;
@@ -921,13 +1029,21 @@ pub fn spawn(
                                     if follow_up_pending { "yes (continue_conversation)" } else { "no" }
                                 );
                                 if !follow_up_pending {
-                                    ui(VoiceUi::Idle);
+                                    let speaking_now = player.busy.load(Ordering::SeqCst)
+                                        || expecting_tts.is_some()
+                                        || fetching.load(Ordering::SeqCst);
+                                    if speaking_now {
+                                        idle_after_speech = true;
+                                    } else {
+                                        ui(VoiceUi::Idle);
+                                    }
                                 }
                             }
                             // Error
                             0 => {
                                 state = State::Idle;
                                 follow_up_pending = false;
+                                idle_after_speech = false;
                                 ring_run = false;
                                 follow_up_run = false;
                                 let message = get("message").or_else(|| get("code")).unwrap_or_default();
@@ -943,9 +1059,26 @@ pub fn spawn(
                         }
                     }
                     FromApi::TtsAudio(bytes) => {
-                        expecting_tts.get_or_insert_with(Instant::now);
+                        // More may come until 20 s after the last chunk.
+                        expecting_tts = Some(Instant::now());
                         tts_chunks += 1;
-                        player.play(Sound::Pcm16k(bytes));
+                        let now = Instant::now();
+                        if let Some(last) = tts_last {
+                            tts_max_gap = tts_max_gap.max(now - last);
+                        }
+                        tts_first.get_or_insert(now);
+                        tts_last = Some(now);
+                        tts_bytes += bytes.len();
+                        match tts_hold.as_mut() {
+                            Some((held, _)) => {
+                                held.extend_from_slice(&bytes);
+                                if held.len() >= TTS_PREBUFFER_BYTES {
+                                    let (held, _) = tts_hold.take().unwrap();
+                                    player.play(Sound::Pcm16k(held));
+                                }
+                            }
+                            None => player.play(Sound::Pcm16k(bytes)),
+                        }
                     }
                     FromApi::SetWakeWords(ids) => {
                         engine.set_active(&ids, stop_word);
@@ -957,8 +1090,13 @@ pub fn spawn(
                     }
                 }
             }
+            if tts_hold.as_ref().is_some_and(|(held, since)| !held.is_empty() && since.elapsed() > TTS_PREBUFFER_WAIT) {
+                let (held, _) = tts_hold.take().unwrap();
+                player.play(Sound::Pcm16k(held));
+            }
             if expecting_tts.is_some_and(|t| t.elapsed() > Duration::from_secs(20)) {
                 expecting_tts = None;
+                tts_hold = None;
             }
 
             if state == State::Idle && test_audio.is_none() {
@@ -987,6 +1125,10 @@ pub fn spawn(
                 }
             }
 
+            RUN_ACTIVE.store(
+                state != State::Idle || expecting_tts.is_some() || fetching.load(Ordering::SeqCst),
+                Ordering::Relaxed,
+            );
             match state {
                 State::Idle => {
                     let speaking =
@@ -994,6 +1136,15 @@ pub fn spawn(
                     if was_speaking && !speaking {
                         if let Some(db) = aec.take_reduction() {
                             eprintln!("nspanel-app: aec: microphone level {db:.1} dB lower while the panel spoke");
+                        }
+                        let underruns = player.underruns.load(Ordering::SeqCst);
+                        if underruns != underruns_before {
+                            eprintln!("nspanel-app: speaker: ran dry {} times while the panel spoke", underruns - underruns_before);
+                        }
+                        underruns_before = underruns;
+                        if idle_after_speech {
+                            idle_after_speech = false;
+                            ui(VoiceUi::Idle);
                         }
                     }
                     was_speaking = speaking;
@@ -1062,6 +1213,8 @@ pub fn spawn(
                             eprintln!("nspanel-app: stop word '{}'", word.phrase);
                             player.stop();
                             expecting_tts = None;
+                            tts_hold = None;
+                            idle_after_speech = false;
                             follow_up_pending = false;
                             engine.reset();
                             ui(VoiceUi::Stopped);
@@ -1082,6 +1235,8 @@ pub fn spawn(
                                 expecting_tts = None;
                                 follow_up_pending = false;
                             }
+                            tts_hold = None;
+                            idle_after_speech = false;
                             player.play(Sound::Chime);
                             engine.reset();
                             follow_up_run = false;
@@ -1142,7 +1297,9 @@ pub fn spawn(
                         let bytes: Vec<u8> = chunk.iter().flat_map(|s| s.to_le_bytes()).collect();
                         let _ = to_api.send(ToApi::Audio(bytes));
                     }
-                    if since.elapsed() > Duration::from_secs(15) {
+                    // 15 s without news from Home Assistant, or MAX_STREAM in
+                    // all (events cannot keep the microphones open longer).
+                    if since.elapsed() > Duration::from_secs(15) || stream_start.elapsed() > MAX_STREAM {
                         let _ = to_api.send(ToApi::Stop);
                         state = State::Waiting;
                     }

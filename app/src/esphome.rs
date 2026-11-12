@@ -1,15 +1,22 @@
-//! ESPHome native API server (TCP 6053, plaintext for now): Home Assistant's
-//! built-in ESPHome integration adds the panel as a device with its settings
-//! and sensors as entities. One client (Home Assistant) at a time.
+//! ESPHome native API server (TCP 6053): Home Assistant's built-in ESPHome
+//! integration adds the panel as a device with its settings and sensors as
+//! entities.
 //!
-//! Frame: 0x00, varint payload length, varint message type, protobuf payload.
+//! Only Home Assistant's address (and `api_allow` in app.json) may connect.
+//! The connection is encrypted once Home Assistant has handed the panel a key
+//! (`api_link.rs`). Each connection gets its own thread for the handshake,
+//! hello, device info and key setting; the first other message makes it the
+//! main session (entities, states, voice), and an older main session ends.
 
 use std::collections::HashMap;
-use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io;
+use std::net::{IpAddr, TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+use crate::api_link::{self, Conn};
 
 use prost::Message;
 
@@ -20,6 +27,11 @@ pub mod proto {
 use proto::*;
 
 pub const PORT: u16 = 6053;
+/// Device identity, the same in the API and in the mDNS announcement.
+pub const DEVICE_NAME: &str = "nspanel-pro";
+pub const FRIENDLY_NAME: &str = "NSPanel Pro";
+pub const ESPHOME_VERSION: &str = "2026.10.0";
+pub const PROJECT_NAME: &str = "bazsc20ne.nspanel-pro";
 
 /// What the panel reports to Home Assistant; updated by the UI thread.
 #[derive(Debug, Clone, Default)]
@@ -125,6 +137,8 @@ const ENTITIES: &[(Id, u32, &str, &str, &str)] = &[
 
 /// Last wake word level and score, for a (re)connecting Home Assistant.
 static LAST_WAKE: Mutex<Option<(f32, f32, Option<f32>)>> = Mutex::new(None);
+/// Streamed answer audio as the API receives it: last frame, longest wait.
+static TTS_RX: Mutex<(Option<Instant>, Duration)> = Mutex::new((None, Duration::ZERO));
 
 const CONFIG: i32 = EntityCategory::Config as i32;
 const DIAGNOSTIC: i32 = EntityCategory::Diagnostic as i32;
@@ -181,58 +195,28 @@ fn value_of(id: Id, s: &DeviceState) -> Option<Value> {
     })
 }
 
-fn encode_varint(mut v: u64, out: &mut Vec<u8>) {
-    loop {
-        let byte = (v & 0x7f) as u8;
-        v >>= 7;
-        if v == 0 {
-            out.push(byte);
-            return;
-        }
-        out.push(byte | 0x80);
-    }
+fn send<M: Message>(stream: &mut Conn, msg_type: u32, msg: &M) -> io::Result<()> {
+    stream.send(msg_type, msg)
 }
 
-fn send<M: Message>(stream: &mut TcpStream, msg_type: u32, msg: &M) -> io::Result<()> {
-    let payload = msg.encode_to_vec();
-    let mut frame = Vec::with_capacity(payload.len() + 8);
-    frame.push(0);
-    encode_varint(payload.len() as u64, &mut frame);
-    encode_varint(msg_type as u64, &mut frame);
-    frame.extend_from_slice(&payload);
-    stream.write_all(&frame)
-}
-
-/// Takes one complete frame off the front of the buffer.
-fn take_frame(buf: &mut Vec<u8>) -> io::Result<Option<(u32, Vec<u8>)>> {
-    fn varint(b: &[u8], pos: &mut usize) -> Option<u64> {
-        let mut v = 0u64;
-        for shift in (0..64).step_by(7) {
-            let byte = *b.get(*pos)?;
-            *pos += 1;
-            v |= ((byte & 0x7f) as u64) << shift;
-            if byte & 0x80 == 0 {
-                return Some(v);
-            }
-        }
-        None
+/// The ESPHome service for the mDNS announcement. Home Assistant matches the
+/// `mac` record (lower case, no colons) with the configured device, so a
+/// known panel only gets its address updated.
+pub fn mdns_service() -> crate::mdns::Service {
+    let mac = mac_plain();
+    crate::mdns::Service {
+        name: DEVICE_NAME.into(),
+        kind: "_esphomelib._tcp".into(),
+        port: PORT,
+        txt: vec![
+            format!("friendly_name={FRIENDLY_NAME}"),
+            format!("version={ESPHOME_VERSION}"),
+            format!("mac={mac}"),
+            "network=wifi".into(),
+            format!("project_name={PROJECT_NAME}"),
+            format!("project_version={}", env!("CARGO_PKG_VERSION")),
+        ],
     }
-    if buf.is_empty() {
-        return Ok(None);
-    }
-    if buf[0] != 0 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "encrypted or invalid frame (expected plaintext)"));
-    }
-    let mut pos = 1;
-    let Some(len) = varint(buf, &mut pos) else { return Ok(None) };
-    let Some(kind) = varint(buf, &mut pos) else { return Ok(None) };
-    let end = pos + len as usize;
-    if buf.len() < end {
-        return Ok(None);
-    }
-    let payload = buf[pos..end].to_vec();
-    buf.drain(..end);
-    Ok(Some((kind as u32, payload)))
 }
 
 fn mac_address() -> String {
@@ -241,7 +225,12 @@ fn mac_address() -> String {
         .unwrap_or_else(|_| "00:00:00:00:00:00".into())
 }
 
-fn list_entities(stream: &mut TcpStream, s: &DeviceState) -> io::Result<()> {
+/// MAC as ESPHome writes it in mDNS and the Noise hello: lower case, no colons.
+fn mac_plain() -> String {
+    mac_address().replace(':', "").to_lowercase()
+}
+
+fn list_entities(stream: &mut Conn, s: &DeviceState) -> io::Result<()> {
     for &(id, key, object_id, name, icon) in ENTITIES {
         let common = |category: i32| (object_id.to_string(), key, name.to_string(), icon.to_string(), category);
         match id {
@@ -259,7 +248,7 @@ fn list_entities(stream: &mut TcpStream, s: &DeviceState) -> io::Result<()> {
                 })?;
             }
             Id::Brightness | Id::Volume => {
-                let (min, step, category) = if id == Id::Volume { (0.0, 5.0, 0) } else { (5.0, 1.0, CONFIG) };
+                let (min, step, category) = if id == Id::Volume { (0.0, 5.0, 0) } else { (1.0, 1.0, CONFIG) };
                 let (object_id, key, name, icon, category) = common(category);
                 send(stream, 49, &ListEntitiesNumberResponse {
                     object_id, key, name, icon, min_value: min, max_value: 100.0, step,
@@ -315,7 +304,7 @@ fn list_entities(stream: &mut TcpStream, s: &DeviceState) -> io::Result<()> {
     send(stream, 19, &ListEntitiesDoneResponse {})
 }
 
-fn send_state(stream: &mut TcpStream, id: Id, key: u32, value: &Value) -> io::Result<()> {
+fn send_state(stream: &mut Conn, id: Id, key: u32, value: &Value) -> io::Result<()> {
     match (id, value) {
         (Id::Theme | Id::Screensaver | Id::ScreensaverStyle | Id::Dashboard | Id::DisplayMode, Value::Str(v)) => {
             send(stream, 53, &SelectStateResponse { key, state: v.clone(), missing_state: v.is_empty(), ..Default::default() })
@@ -420,7 +409,7 @@ fn wake_word_config(voice: &VoiceLink) -> VoiceAssistantConfigurationResponse {
     }
 }
 
-fn handle_voice(kind: u32, payload: &[u8], voice: &VoiceLink, stream: &mut TcpStream, control: &dyn Fn(Control), subscribed: &mut bool) -> io::Result<()> {
+fn handle_voice(kind: u32, payload: &[u8], voice: &VoiceLink, stream: &mut Conn, control: &dyn Fn(Control), subscribed: &mut bool) -> io::Result<()> {
     use crate::voice::FromApi;
     match kind {
         89 => {
@@ -432,8 +421,11 @@ fn handle_voice(kind: u32, payload: &[u8], voice: &VoiceLink, stream: &mut TcpSt
         121 => send(stream, 122, &wake_word_config(voice))?,
         123 => {
             if let Ok(m) = VoiceAssistantSetConfiguration::decode(payload) {
-                let _ = voice.from_api.send(FromApi::SetWakeWords(m.active_wake_words.clone()));
-                control(Control::Setting("wake_words".into(), m.active_wake_words.join(",")));
+                // Only installed models, at most the two the panel offers.
+                let available: Vec<String> = wake_word_config(voice).available_wake_words.into_iter().map(|w| w.id).collect();
+                let ids: Vec<String> = m.active_wake_words.into_iter().filter(|id| available.contains(id)).take(2).collect();
+                let _ = voice.from_api.send(FromApi::SetWakeWords(ids.clone()));
+                control(Control::Setting("wake_words".into(), ids.join(",")));
             }
         }
         91 => {
@@ -451,12 +443,26 @@ fn handle_voice(kind: u32, payload: &[u8], voice: &VoiceLink, stream: &mut TcpSt
                     .map(|(k, v)| format!("{k}={}", v.chars().take(100).collect::<String>()))
                     .collect();
                 eprintln!("nspanel-app: Assist event {} {}", m.event_type, short.join(" "));
+                if m.event_type == 99 {
+                    let mut rx = TTS_RX.lock().unwrap();
+                    if rx.0.is_some() {
+                        eprintln!("nspanel-app: API: longest wait between answer audio frames {} ms", rx.1.as_millis());
+                    }
+                    *rx = (None, Duration::ZERO);
+                }
                 let _ = voice.from_api.send(FromApi::Event { kind: m.event_type, data });
             }
         }
         106 => {
             if let Ok(m) = VoiceAssistantAudio::decode(payload) {
                 if !m.data.is_empty() {
+                    let mut rx = TTS_RX.lock().unwrap();
+                    let now = Instant::now();
+                    if let Some(last) = rx.0 {
+                        rx.1 = rx.1.max(now - last);
+                    }
+                    rx.0 = Some(now);
+                    drop(rx);
                     let _ = voice.from_api.send(FromApi::TtsAudio(m.data));
                 }
             }
@@ -488,7 +494,7 @@ fn handle_voice(kind: u32, payload: &[u8], voice: &VoiceLink, stream: &mut TcpSt
 }
 
 /// SNR first (Home Assistant's arbitration reads it), then level and score.
-fn send_wake_info(stream: &mut TcpStream, level_dbfs: f32, score: f32, snr_db: Option<f32>) -> io::Result<()> {
+fn send_wake_info(stream: &mut Conn, level_dbfs: f32, score: f32, snr_db: Option<f32>) -> io::Result<()> {
     send_state(stream, Id::WakeSnr, 22, &Value::Float(snr_db.map(|v| (v * 10.0).round() / 10.0)))?;
     send_state(stream, Id::WakeLevel, 20, &Value::Float(Some((level_dbfs * 10.0).round() / 10.0)))?;
     send_state(stream, Id::WakeScore, 21, &Value::Float(Some((score * 100.0).round() / 100.0)))
@@ -496,7 +502,7 @@ fn send_wake_info(stream: &mut TcpStream, level_dbfs: f32, score: f32, snr_db: O
 
 fn forward_voice(
     voice: &VoiceLink,
-    stream: &mut TcpStream,
+    stream: &mut Conn,
     subscribed: bool,
     states_subscribed: bool,
     wake_sent: &mut Option<Instant>,
@@ -550,16 +556,78 @@ fn forward_voice(
     Ok(())
 }
 
+fn device_info() -> DeviceInfoResponse {
+    DeviceInfoResponse {
+        name: DEVICE_NAME.into(),
+        friendly_name: FRIENDLY_NAME.into(),
+        mac_address: mac_address(),
+        esphome_version: ESPHOME_VERSION.into(),
+        compilation_time: env!("NSPANEL_BUILD_TIME").into(),
+        model: "NSPanel Pro 86 (open firmware)".into(),
+        manufacturer: "Sonoff".into(),
+        project_name: PROJECT_NAME.into(),
+        project_version: env!("CARGO_PKG_VERSION").into(),
+        voice_assistant_feature_flags: VOICE_FEATURES,
+        // Home Assistant hands a keyless panel a key over a Noise session
+        // with the all-zero key, then connects encrypted.
+        api_encryption_supported: true,
+        api_encryption_provisionable: api_link::load_key().is_none(),
+        ..Default::default()
+    }
+}
+
+enum Basic {
+    Done,
+    Close,
+    /// Needs the main session.
+    Other,
+}
+
+/// Messages any connection may send: hello, authentication (always
+/// accepted, as on ESPHome since 2026.1), disconnect, ping, device info and
+/// the API key.
+fn handle_basic(stream: &mut Conn, kind: u32, payload: &[u8]) -> io::Result<Basic> {
+    match kind {
+        1 => {
+            let hello = HelloRequest::decode(payload).unwrap_or_default();
+            eprintln!("nspanel-app: ESPHome API client '{}' {}.{}", hello.client_info, hello.api_version_major, hello.api_version_minor);
+            send(stream, 2, &HelloResponse {
+                api_version_major: 1,
+                api_version_minor: 12,
+                server_info: format!("nspanel-app {}", env!("CARGO_PKG_VERSION")),
+                name: DEVICE_NAME.into(),
+            })?;
+        }
+        3 => send(stream, 4, &AuthenticationResponse { invalid_password: false })?,
+        5 => {
+            send(stream, 6, &DisconnectResponse {})?;
+            return Ok(Basic::Close);
+        }
+        7 => send(stream, 8, &PingResponse {})?,
+        8 => {}
+        9 => send(stream, 10, &device_info())?,
+        124 => {
+            let ok = NoiseEncryptionSetKeyRequest::decode(payload).map(|m| api_link::set_key(stream, &m.key)).unwrap_or(false);
+            send(stream, 125, &NoiseEncryptionSetKeyResponse { success: ok })?;
+            if ok {
+                // Sessions opened before a key change end (as on ESPHome).
+                return Ok(Basic::Close);
+            }
+        }
+        _ => return Ok(Basic::Other),
+    }
+    Ok(Basic::Done)
+}
+
 fn serve(
-    mut stream: TcpStream,
+    mut stream: Conn,
     state: &Arc<Mutex<DeviceState>>,
     notify: &Receiver<()>,
     control: &dyn Fn(Control),
     voice: &VoiceLink,
+    takeover: &AtomicBool,
 ) -> io::Result<()> {
-    stream.set_nodelay(true)?;
-    stream.set_read_timeout(Some(Duration::from_millis(15)))?;
-    let mut buf = Vec::new();
+    stream.set_read_timeout(Duration::from_millis(15))?;
     let mut subscribed = false;
     let mut voice_subscribed = false;
     // Select options are only read by Home Assistant when it lists the
@@ -569,54 +637,30 @@ fn serve(
     let mut last_rx = Instant::now();
     let mut ping_sent: Option<Instant> = None;
     let mut wake_sent: Option<Instant> = None;
-    let mut chunk = [0u8; 4096];
     loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => return Ok(()),
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                last_rx = Instant::now();
-                ping_sent = None;
-            }
-            Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {}
-            Err(e) => return Err(e),
+        if stream.read_some()? {
+            last_rx = Instant::now();
+            ping_sent = None;
         }
-        while let Some((kind, payload)) = take_frame(&mut buf)? {
+        if takeover.load(Ordering::SeqCst) {
+            eprintln!("nspanel-app: ESPHome API: a newer connection takes over");
+            return Ok(());
+        }
+        if stream.outdated() {
+            eprintln!("nspanel-app: ESPHome API: the key changed, session ends");
+            return Ok(());
+        }
+        while let Some((kind, payload)) = stream.take_frame()? {
             if std::env::var_os("NSPANEL_API_DEBUG").is_some() && kind != 106 {
                 eprintln!("nspanel-app: API rx type {kind} ({} bytes)", payload.len());
             }
+            match handle_basic(&mut stream, kind, &payload)? {
+                Basic::Close => return Ok(()),
+                Basic::Done => continue,
+                Basic::Other => {}
+            }
             let snapshot = state.lock().unwrap().clone();
             match kind {
-                1 => {
-                    let hello = HelloRequest::decode(&payload[..]).unwrap_or_default();
-                    eprintln!("nspanel-app: ESPHome API client '{}' {}.{}", hello.client_info, hello.api_version_major, hello.api_version_minor);
-                    send(&mut stream, 2, &HelloResponse {
-                        api_version_major: 1,
-                        api_version_minor: 12,
-                        server_info: format!("nspanel-app {}", env!("CARGO_PKG_VERSION")),
-                        name: "nspanel-pro".into(),
-                    })?;
-                }
-                3 => send(&mut stream, 4, &AuthenticationResponse { invalid_password: false })?,
-                5 => {
-                    send(&mut stream, 6, &DisconnectResponse {})?;
-                    return Ok(());
-                }
-                7 => send(&mut stream, 8, &PingResponse {})?,
-                8 => {}
-                9 => send(&mut stream, 10, &DeviceInfoResponse {
-                    name: "nspanel-pro".into(),
-                    friendly_name: "NSPanel Pro".into(),
-                    mac_address: mac_address(),
-                    esphome_version: "2026.10.0".into(),
-                    compilation_time: env!("NSPANEL_BUILD_TIME").into(),
-                    model: "NSPanel Pro 86 (open firmware)".into(),
-                    manufacturer: "Sonoff".into(),
-                    project_name: "bazsc20ne.nspanel-pro".into(),
-                    project_version: env!("CARGO_PKG_VERSION").into(),
-                    voice_assistant_feature_flags: VOICE_FEATURES,
-                    ..Default::default()
-                })?,
                 11 => {
                     listed_dashboards = Some(dashboard_titles(&snapshot));
                     list_entities(&mut stream, &snapshot)?;
@@ -666,12 +710,81 @@ fn serve(
     }
 }
 
+/// Connections handled at the same time (Home Assistant uses one, plus one
+/// briefly when it hands over the API key).
+const MAX_CONNECTIONS: usize = 3;
+/// A connection that has not become the main session ends after this long without a message.
+const SIDE_IDLE: Duration = Duration::from_secs(60);
+
+struct MainParts {
+    notify: Receiver<()>,
+    voice: VoiceLink,
+    control: Box<dyn Fn(Control) + Send>,
+}
+
+fn connection(
+    stream: TcpStream,
+    state: &Arc<Mutex<DeviceState>>,
+    main: &Mutex<MainParts>,
+    takeover: &AtomicBool,
+) -> io::Result<()> {
+    let mut conn = Conn::accept(stream, DEVICE_NAME, &mac_plain())?;
+    eprintln!(
+        "nspanel-app: ESPHome API connection from {} ({})",
+        conn.peer(),
+        if conn.keyed {
+            "encrypted"
+        } else if conn.encrypted() {
+            "encrypted with the provisioning key"
+        } else {
+            "plaintext, no key yet"
+        }
+    );
+    conn.set_read_timeout(Duration::from_millis(200))?;
+    let mut last = Instant::now();
+    loop {
+        if conn.read_some()? {
+            last = Instant::now();
+        } else if last.elapsed() > SIDE_IDLE {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, "idle"));
+        }
+        if conn.outdated() {
+            return Ok(());
+        }
+        while let Some((kind, payload)) = conn.take_frame()? {
+            match handle_basic(&mut conn, kind, &payload)? {
+                Basic::Close => return Ok(()),
+                Basic::Done => {}
+                Basic::Other => {
+                    // Becomes the main session; an older one ends first.
+                    conn.push_front((kind, payload));
+                    takeover.store(true, Ordering::SeqCst);
+                    let parts = main.lock().unwrap_or_else(|e| e.into_inner());
+                    takeover.store(false, Ordering::SeqCst);
+                    let result = serve(conn, state, &parts.notify, &*parts.control, &parts.voice, takeover);
+                    // A conversation in progress cannot finish without Home Assistant.
+                    let _ = parts.voice.from_api.send(crate::voice::FromApi::Event {
+                        kind: 0,
+                        data: vec![("message".into(), "Home Assistant disconnected".into())],
+                    });
+                    while parts.voice.to_api.try_recv().is_ok() {}
+                    return result;
+                }
+            }
+        }
+    }
+}
+
 pub fn spawn(
     state: Arc<Mutex<DeviceState>>,
     notify: Receiver<()>,
     voice: VoiceLink,
+    allowed: impl Fn() -> Vec<IpAddr> + Send + 'static,
     control: impl Fn(Control) + Send + 'static,
 ) {
+    let main = Arc::new(Mutex::new(MainParts { notify, voice, control: Box::new(control) }));
+    let takeover = Arc::new(AtomicBool::new(false));
+    let active = Arc::new(AtomicUsize::new(0));
     std::thread::spawn(move || {
         let listener = match TcpListener::bind(("0.0.0.0", PORT)) {
             Ok(l) => l,
@@ -688,19 +801,34 @@ pub fn spawn(
         while state.lock().unwrap().dashboards.is_empty() && started.elapsed() < Duration::from_secs(20) {
             std::thread::sleep(Duration::from_millis(200));
         }
+        let mut refused: Option<(IpAddr, Instant)> = None;
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
-            let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-            eprintln!("nspanel-app: ESPHome API connection from {peer}");
-            if let Err(e) = serve(stream, &state, &notify, &control, &voice) {
-                eprintln!("nspanel-app: ESPHome API connection ended: {e}");
+            let Ok(peer) = stream.peer_addr() else { continue };
+            if !allowed().iter().any(|ip| api_link::same_host(*ip, peer.ip())) {
+                // Logged once a minute per host.
+                if refused.is_none_or(|(ip, t)| ip != peer.ip() || t.elapsed() > Duration::from_secs(60)) {
+                    eprintln!("nspanel-app: ESPHome API connection from {peer} refused (not Home Assistant; app.json api_allow adds hosts)");
+                    refused = Some((peer.ip(), Instant::now()));
+                }
+                continue;
             }
-            // A conversation in progress cannot finish without Home Assistant.
-            let _ = voice.from_api.send(crate::voice::FromApi::Event {
-                kind: 0,
-                data: vec![("message".into(), "Home Assistant disconnected".into())],
+            if active.load(Ordering::SeqCst) >= MAX_CONNECTIONS {
+                eprintln!("nspanel-app: ESPHome API connection from {peer} refused ({MAX_CONNECTIONS} open)");
+                continue;
+            }
+            active.fetch_add(1, Ordering::SeqCst);
+            let (state, main, takeover, active) = (state.clone(), main.clone(), takeover.clone(), active.clone());
+            std::thread::spawn(move || {
+                // A malformed message must not take the API down: a panic ends this connection only.
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| connection(stream, &state, &main, &takeover)));
+                match result {
+                    Ok(Ok(())) => eprintln!("nspanel-app: ESPHome API connection from {peer} ended"),
+                    Ok(Err(e)) => eprintln!("nspanel-app: ESPHome API connection from {peer} ended: {e}"),
+                    Err(_) => eprintln!("nspanel-app: ESPHome API connection from {peer} ended by a panic"),
+                }
+                active.fetch_sub(1, Ordering::SeqCst);
             });
-            while voice.to_api.try_recv().is_ok() {}
         }
     });
 }

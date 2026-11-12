@@ -22,13 +22,17 @@ pub struct CameraControl {
 
 pub fn decode(jpeg: &[u8]) -> Result<slint::SharedPixelBuffer<slint::Rgb8Pixel>, String> {
     let mut dec = jpeg_decoder::Decoder::new(jpeg);
-    let pixels = dec.decode().map_err(|e| e.to_string())?;
+    dec.read_info().map_err(|e| e.to_string())?;
     let info = dec.info().ok_or("no image info")?;
+    if info.width as u32 * info.height as u32 > 4096 * 4096 {
+        return Err(format!("image too large ({}x{})", info.width, info.height));
+    }
+    let pixels = dec.decode().map_err(|e| e.to_string())?;
     let (w, h) = (info.width as u32, info.height as u32);
     let mut buf = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::new(w, h);
     let out = buf.make_mut_bytes();
     match info.pixel_format {
-        jpeg_decoder::PixelFormat::RGB24 => out.copy_from_slice(&pixels[..out.len()]),
+        jpeg_decoder::PixelFormat::RGB24 => out.copy_from_slice(pixels.get(..out.len()).ok_or("short image data")?),
         jpeg_decoder::PixelFormat::L8 => {
             for (i, g) in pixels.iter().enumerate().take((w * h) as usize) {
                 out[i * 3..i * 3 + 3].copy_from_slice(&[*g, *g, *g]);

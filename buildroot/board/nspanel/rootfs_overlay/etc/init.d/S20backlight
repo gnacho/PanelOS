@@ -6,7 +6,9 @@ BL=/sys/class/backlight/backlight
 case "$1" in
 start)
 	if [ -w "$BL/brightness" ]; then
-		echo 180 > "$BL/brightness"
+		# 70.6 %, the brightness of the bootloader logo and the boot animation
+		max=$(cat "$BL/max_brightness" 2>/dev/null || echo 255)
+		echo $((max * 706 / 1000)) > "$BL/brightness"
 		echo "<5>nspanel: backlight on" > /dev/kmsg
 	fi
 	;;

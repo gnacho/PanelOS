@@ -1,0 +1,21 @@
+#!/bin/sh
+# Keep the SSH host key on the persistent partition: it stays the same across
+# reboots and system updates, so SSH clients can check it (the root file
+# system is in RAM). Created once, on the first start.
+
+KEY=/mnt/persist/nspanel/dropbear_ed25519_host_key
+
+case "$1" in
+start)
+	[ -d /mnt/persist/nspanel ] || exit 0
+	[ -s "$KEY" ] || dropbearkey -t ed25519 -f "$KEY" > /dev/null 2>&1
+	if [ -s "$KEY" ]; then
+		[ -L /etc/dropbear ] && rm -f /etc/dropbear
+		mkdir -p /etc/dropbear
+		install -m 600 "$KEY" /etc/dropbear/dropbear_ed25519_host_key
+	fi
+	;;
+stop | restart | reload)
+	;;
+esac
+exit 0

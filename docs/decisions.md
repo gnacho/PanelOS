@@ -10,6 +10,8 @@
 | Zigbee radio optional, router role at most | Not needed for the panel's main job |
 | Keep the stock U-Boot (no mainline U-Boot for now) | Replacing it is the only step that can brick the panel, and the USB rescue mode depends on it; it keeps the install simple for everyone. With the chain loader below it shows the PanelOS logo and takes about 2.5 s |
 | The stock U-Boot gets the stock device tree, the kernel its own (chain loader in front of the kernel) | The stock U-Boot drives its own display and storage with the boot image's device tree: with the mainline one it showed no logo and took about 45 s, vendor nodes mixed into it made it hang. The stock device tree comes from each user's own backup, it is not redistributed |
+| Kernel packed with LZ4 in the boot image, unpacked by the chain loader with caches on | The image fits the 32 MiB `boot` partition (needed for A/B) at the same boot time |
+| The panel keeps trying for good when Home Assistant or the network is away | After a power cut Home Assistant or the router may take minutes or hours; the panel must come back by itself, without a restart |
 | Hold the UI back until the clock and the first Home Assistant data are in | The first screen shows the right time and current states, not 1970 and empty tiles; the boot animation's light band shows the wait |
 | Features inspired by an open-source Flutter panel app, no code reused | Feature ideas only |
 | Project licence AGPL-3.0-or-later | Slint is used under GPLv3 (its royalty-free licence excludes embedded systems); GPLv3 §13 permits combining it with AGPL-3.0 code |
@@ -35,7 +37,6 @@ The current base is the latest stable kernel (7.3.x). There is no 7.x longterm k
 - The QR login shows Home Assistant's normal login form, so any user can log in, for example a dedicated non-admin "panel" user, independent of the account the phone's Home Assistant app uses (a private browser window avoids any confusion). An on-panel login with a touch keyboard is planned as an alternative.
 - **Dashboard choice:** the panel lists the Home Assistant dashboards; the user picks one on the panel's settings screen or with the Dashboard select in Home Assistant.
 - **Kiosk by design:** the app draws the dashboard natively, not the Home Assistant web frontend, so there is no Home Assistant header or sidebar at all. Trade-off: only the card types the app implements render; custom frontend cards (HACS) do not.
-- Still to do: Noise encryption and mDNS discovery for the ESPHome API.
 
 ## Display modes
 

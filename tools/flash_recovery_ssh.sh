@@ -14,7 +14,8 @@ IMAGE="${2:?$usage}"
 BOOT="${3:-}"
 KEY="${NSPANEL_SSH_KEY:-/root/.ssh/nspanel_dev}"
 REBOOT_TO="${REBOOT_TO:-/root/nspanel/br2-external/board/nspanel/rootfs_overlay/usr/sbin/reboot-to}"
-SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR "root@$HOST")
+# The panel keeps its host key (S49sshhostkey): accept it the first time, check it after.
+SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile="${KNOWN_HOSTS:-$HOME/.ssh/panelos_known_hosts}" -o LogLevel=ERROR "root@$HOST")
 
 size=$(stat -c %s "$IMAGE")
 limit=$((131072 * 512))

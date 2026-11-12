@@ -6,6 +6,8 @@ satellite). This integration adds what is easier to do from Home Assistant:
 
 * the assistant mode's settings (weather, media player, quick tiles,
   full-screen conversation), set in the integration's options;
+* how much the recorded sensors (illuminance, SoC temperature, Wi-Fi signal)
+  must change before the panel sends a new value, also in the options;
 * actions that put something on a panel's screen: ``nspanel_pro.show_view``
   (home, dashboard, weather, media, a camera) and ``nspanel_pro.show_message``.
 
@@ -25,6 +27,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 
 from .const import (
@@ -34,6 +37,7 @@ from .const import (
     CONF_TILES,
     CONF_WEATHER,
     DOMAIN,
+    REPORTING,
     SERVICE_SHOW_MESSAGE,
     SERVICE_SHOW_VIEW,
     SIGNAL_CONFIG_UPDATED,
@@ -57,9 +61,9 @@ SHOW_VIEW_SCHEMA = vol.Schema(
 SHOW_MESSAGE_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_PANEL_ID, default=""): cv.string,
-        vol.Optional("title", default=""): cv.string,
-        vol.Required("message"): cv.string,
-        vol.Optional("icon", default=""): cv.string,
+        vol.Optional("title", default=""): vol.All(cv.string, vol.Length(max=100)),
+        vol.Required("message"): vol.All(cv.string, vol.Length(max=1000)),
+        vol.Optional("icon", default=""): vol.All(cv.string, vol.Length(max=64)),
         vol.Optional("seconds", default=30): _SECONDS,
         vol.Optional("chime", default=False): cv.boolean,
     }
@@ -74,6 +78,7 @@ def _panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "media_player_entity": options.get(CONF_MEDIA_PLAYER, ""),
         "tile_entities": list(options.get(CONF_TILES, [])),
         "show_conversation": bool(options.get(CONF_SHOW_CONVERSATION, True)),
+        **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
 
 
@@ -145,8 +150,10 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         request["type"] = "view" if call.service == SERVICE_SHOW_VIEW else "message"
         async_dispatcher_send(hass, SIGNAL_SHOW, target, request)
 
-    hass.services.async_register(DOMAIN, SERVICE_SHOW_VIEW, handle_show, schema=SHOW_VIEW_SCHEMA)
-    hass.services.async_register(DOMAIN, SERVICE_SHOW_MESSAGE, handle_show, schema=SHOW_MESSAGE_SCHEMA)
+    # Admin users and automations only: the actions put a camera or a message
+    # on the panel.
+    async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_VIEW, handle_show, schema=SHOW_VIEW_SCHEMA)
+    async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_MESSAGE, handle_show, schema=SHOW_MESSAGE_SCHEMA)
     return True
 
 

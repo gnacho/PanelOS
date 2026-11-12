@@ -10,6 +10,8 @@
 #   JOBS   parallel jobs                 NSPANEL_SSH_PUBKEY_FILE  key for root SSH login
 #   STOCK_RESOURCE  the stock resource partition from a panel backup (default:
 #                   the first /root/nspanel-backups/*/resource.img)
+#   KERNEL_PACK     lz4 (default: packed kernel, the chain loader unpacks it;
+#                   the image fits the 32 MiB boot partition) or none
 set -euo pipefail
 
 # WSL appends the Windows PATH (with spaces), which Buildroot refuses.
@@ -27,6 +29,7 @@ DTB_NAME=px30-sonoff-nspanel-pro-86
 # Backlight from the bootloader logo on (the boot animation and S20backlight
 # use the same value).
 BOOT_BRIGHTNESS=180
+KERNEL_PACK="${KERNEL_PACK:-lz4}"
 
 STOCK_RESOURCE="${STOCK_RESOURCE:-$(ls /root/nspanel-backups/*/resource.img 2>/dev/null | head -1 || true)}"
 if [ -z "$STOCK_RESOURCE" ] || [ ! -f "$STOCK_RESOURCE" ]; then
@@ -88,8 +91,12 @@ fi
   python3 "$REPO/tools/pack_rk_resource.py" "$OUT/resource.img" \
     "rk-kernel.dtb=$OUT/uboot.dtb" "logo.bmp=$REPO/assets/bootlogo.bmp"
   bash "$REPO/tools/chainload/build.sh" "$KSRC" "$OUT/chain.bin"
+  # Packed (LZ4) by default: about 1 s to unpack (caches on), but the stock
+  # U-Boot loads the 10 MB smaller image that much faster; same boot time.
+  pack=""
+  [ "$KERNEL_PACK" = lz4 ] && pack=--lz4
   python3 "$REPO/tools/arm64_chain_pack.py" "$OUT/chain.bin" "arch/arm64/boot/dts/rockchip/$DTB_NAME.dtb" \
-    arch/arm64/boot/Image "$OUT/kernel.bin"
+    arch/arm64/boot/Image "$OUT/kernel.bin" $pack
 )
 
 ########## root filesystem ##########
@@ -112,6 +119,11 @@ for c in "$BREXT"/board/nspanel/src/*.c; do
   chmod 755 "$bin"
 done
 make -C "$BRSRC" O="$BROUT" BR2_EXTERNAL="$BREXT" nspanel_pro_86_defconfig >/dev/null
+# Buildroot does not rebuild a package when its options change: an older
+# output directory still has wpa_supplicant without syslog support.
+if grep -qs '^#CONFIG_DEBUG_SYSLOG=y' "$BROUT"/build/wpa_supplicant-*/wpa_supplicant/.config; then
+  make -C "$BRSRC" O="$BROUT" BR2_EXTERNAL="$BREXT" wpa_supplicant-dirclean >/dev/null
+fi
 # Panel app (Rust, app/): needs Buildroot's host Rust and the target
 # libraries it links (fontconfig, TensorFlow Lite, WebRTC audio processing)
 # first; the binary then goes into the overlay.
@@ -126,7 +138,9 @@ install -D -m 755 /root/nspanel/app-build/target/aarch64-unknown-linux-gnu/relea
 # "stop" is internal (stops an answer or a ringing timer), not offered as a
 # wake word. Models without a stated licence are not shipped.
 WW_CACHE="${WW_CACHE:-/root/nspanel/wakeword-cache}"
-WW_ESPHOME=https://raw.githubusercontent.com/esphome/micro-wake-word-models/main/models/v2
+# A fixed commit of the model repository; every file is checked against
+# tools/wakewords.sha256.
+WW_ESPHOME=https://raw.githubusercontent.com/esphome/micro-wake-word-models/40ff33f57f8fc6ad71a75ef085abbf742495b225/models/v2
 WW_OHF=https://github.com/OHF-Voice/micro-wake-word/releases/download
 WW_DIR="$BREXT/board/nspanel/rootfs_overlay/usr/share/nspanel/wakewords"
 mkdir -p "$WW_DIR"
@@ -140,6 +154,11 @@ for entry in   "okay_nabu $WW_OHF/okay_nabu_20241226.3"   "stop $WW_OHF/stop"   
   mkdir -p "$cache"
   for ext in tflite json; do
     [ -s "$cache/$m.$ext" ] || curl -fsSL -o "$cache/$m.$ext" "$base/$m.$ext"
+    sum=$(awk -v f="$m.$ext" '$2 == f {print $1}' "$REPO/tools/wakewords.sha256")
+    if [ -z "$sum" ] || ! echo "$sum  $cache/$m.$ext" | sha256sum -c --quiet; then
+      echo "wake word model $m.$ext: checksum missing or wrong (tools/wakewords.sha256)" >&2
+      exit 1
+    fi
     install -m 644 "$cache/$m.$ext" "$WW_DIR/"
   done
 done
@@ -156,7 +175,7 @@ python3 "$REPO/tools/mkbootimg_v0.py" --kernel "$OUT/kernel.bin" --ramdisk "$ROO
   --second "$OUT/resource.img" --cmdline "$CMDLINE" -o "$OUT/recovery-dev.img"
 size=$(stat -c %s "$OUT/recovery-dev.img")
 limit=$((131072 * 512))
-echo "recovery-dev.img: $size bytes (partition: $limit)"
+echo "recovery-dev.img: $size bytes (recovery partition: $limit; boot partition: $((65536 * 512)))"
 [ "$size" -le "$limit" ] || { echo "ERROR: image does not fit the recovery partition"; exit 1; }
 (cd "$OUT" && md5sum recovery-dev.img > recovery-dev.img.md5 && cat recovery-dev.img.md5)
 mkdir -p /tmp/nspanel_out

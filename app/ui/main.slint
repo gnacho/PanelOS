@@ -10,10 +10,10 @@ import "./fonts/materialdesignicons-webfont.ttf";
 import { Theme } from "theme.slint";
 import { Icon, RoundButton, ChipRow } from "widgets.slint";
 import { TileData, RowData, RowView } from "rows.slint";
-import { MoreInfoData, MoreInfo, SettingsData, SettingsPage, Screensaver, PairingScreen, AssistPanel, TimerAlarm } from "overlays.slint";
+import { MoreInfoData, MoreInfo, SettingsData, SettingsPage, Screensaver, PairingScreen, AssistPanel, TimerAlarm, FoundHa, SetupScreen } from "overlays.slint";
 import { ForecastItem, AssistantData, AssistantHome, AssistFull, MessageCard, WeatherFull, MediaFull } from "assistant.slint";
 
-export { Theme, TileData, RowData, MoreInfoData, SettingsData, ForecastItem, AssistantData }
+export { Theme, TileData, RowData, MoreInfoData, SettingsData, ForecastItem, AssistantData, FoundHa }
 
 export component MainWindow inherits Window {
     width: 480px;
@@ -73,6 +73,18 @@ export component MainWindow inherits Window {
     in-out property <bool> weather-open: false;
     in-out property <bool> media-open: false;
     in property <int> assistant-reset: 0;      // change it to scroll the home screen to the top
+    // First-start setup (no settings yet)
+    in property <bool> setup: false;
+    in property <[FoundHa]> setup-found;
+    in-out property <string> setup-address: "";
+    in property <string> setup-message: "";
+    in property <bool> setup-busy: false;
+    // Proximity test view (developer tool, /tmp/nspanel-proximity-test)
+    in property <bool> prox-test: false;
+    in property <string> prox-test-distance: "";
+    in property <string> prox-test-details: "";
+    in property <bool> prox-test-near: false;
+    in property <string> prox-test-prompt: "";
     property <bool> dashboard-visible: root.display-mode == 0 || root.show-dashboard;
 
     out property <length> scroll-y: flick.content-y;
@@ -94,6 +106,9 @@ export component MainWindow inherits Window {
     callback media-volume(float);
     callback overlay-closed();
     callback scroll-by(length);
+    callback setup-pick(string);
+    callback setup-key(string);
+    callback setup-connect();
     scroll-by(d) => {
         flick.content-y = max(min(0px, flick.content-y - d), flick.height - flick.content-height);
     }
@@ -337,6 +352,47 @@ export component MainWindow inherits Window {
     if root.timer-ringing: TimerAlarm {
         name: root.timer-name;
         stop => { root.stop-timer(); }
+    }
+
+    if root.setup: SetupScreen {
+        found: root.setup-found;
+        address: root.setup-address;
+        message: root.setup-message;
+        busy: root.setup-busy;
+        pick(url) => { root.setup-pick(url); }
+        key(k) => { root.setup-key(k); }
+        connect => { root.setup-connect(); }
+    }
+
+    // Proximity test view: still black background, only the numbers change.
+    if root.prox-test: Rectangle {
+        background: #000000;
+        TouchArea { }
+        VerticalLayout {
+            alignment: center;
+            spacing: 18px;
+            Text {
+                text: root.prox-test-prompt;
+                font-size: 30px;
+                font-weight: 700;
+                color: #ffd54f;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            Text {
+                text: root.prox-test-distance;
+                font-size: 110px;
+                font-weight: 700;
+                color: root.prox-test-near ? #e53935 : #ffffff;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.prox-test-details;
+                font-size: 22px;
+                color: #a0a0a0;
+                horizontal-alignment: center;
+            }
+        }
     }
 
     // Hand-over from the boot splash: its last frame (logo and text on

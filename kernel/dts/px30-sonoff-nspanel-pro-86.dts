@@ -49,10 +49,14 @@
 		compatible = "pwm-backlight";
 		pwms = <&pwm1 0 25000 0>;
 		power-supply = <&vcc3v3_lcd>;
-		brightness-levels = <0 255>;
-		num-interpolated-steps = <255>;
-		/* Same as the bootloader logo and S20backlight: no jump at boot. */
-		default-brightness-level = <180>;
+		/*
+		 * 1000 levels: the PWM runs at 100 MHz (2500 steps per 25 us period),
+		 * so fades at the dark end (down to 0.8 %) stay smooth.
+		 */
+		brightness-levels = <0 1000>;
+		num-interpolated-steps = <1000>;
+		/* 70.6 %, as the bootloader logo (180 of 255) and S20backlight. */
+		default-brightness-level = <706>;
 	};
 
 	/*

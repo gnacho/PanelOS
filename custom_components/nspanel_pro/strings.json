@@ -20,12 +20,33 @@
   "options": {
     "step": {
       "init": {
+        "title": "NSPanel Pro",
+        "menu_options": {
+          "assistant": "Assistant mode",
+          "sensor_reporting": "Sensor reporting"
+        }
+      },
+      "assistant": {
         "title": "Assistant mode",
         "data": {
           "weather_entity": "Weather",
           "media_player_entity": "Media player",
           "tile_entities": "Quick tiles",
           "show_conversation": "Full-screen conversation"
+        }
+      },
+      "sensor_reporting": {
+        "title": "Sensor reporting",
+        "description": "How much a sensor must change before the panel sends Home Assistant a new value. Every value sent is a row in the recorder's database (history, logbook, statistics). Lower numbers give finer history and quicker automations but more database writes; higher numbers mean fewer writes but only larger changes show up. The panel's own brightness, theme and Wi-Fi roaming do not depend on these.",
+        "data": {
+          "illuminance_change": "Illuminance",
+          "soc_temperature_change": "SoC temperature",
+          "wifi_signal_change": "Wi-Fi signal"
+        },
+        "data_description": {
+          "illuminance_change": "Change from the last value sent, in percent; in a dark room at least a third of this number in lux, so sensor noise is not sent. The panel checks the light twice a second, so a light switched on shows up at once. Lower: finer light history and automations that react to small changes. Higher: fewer writes; automations see only bigger changes.",
+          "soc_temperature_change": "The processor temperature is read every minute and averaged over about five minutes; a new value is sent when the average moves at least this much. Lower: detailed temperature history. Higher: fewer writes; only larger warming or cooling shows up.",
+          "wifi_signal_change": "The signal is read every minute and averaged over about five minutes; a new value is sent when the average moves at least this much. Lower: detailed history, useful for finding weak spots. Higher: fewer writes; short dips do not show up."
         }
       }
     }

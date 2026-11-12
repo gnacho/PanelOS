@@ -18,6 +18,7 @@ from .const import (
     CONF_WEATHER,
     DEFAULT_PANEL_ID,
     DOMAIN,
+    REPORTING,
 )
 
 
@@ -37,6 +38,19 @@ def _assistant_schema(defaults: dict[str, Any]) -> vol.Schema:
                 )
             ),
             vol.Optional(CONF_SHOW_CONVERSATION, default=defaults.get(CONF_SHOW_CONVERSATION, True)): bool,
+        }
+    )
+
+
+def _reporting_schema(defaults: dict[str, Any]) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(key, default=defaults.get(key, default)): selector.NumberSelector(
+                selector.NumberSelectorConfig(
+                    min=low, max=high, step=step, unit_of_measurement=unit, mode=selector.NumberSelectorMode.SLIDER
+                )
+            )
+            for key, (default, low, high, step, unit) in REPORTING.items()
         }
     )
 
@@ -66,9 +80,26 @@ class NSPanelProConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class NSPanelProOptionsFlow(OptionsFlow):
-    """Change what the panel's assistant mode shows."""
+    """Change what the panel's assistant mode shows and how its sensors report."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        return self.async_show_menu(step_id="init", menu_options=["assistant", "sensor_reporting"])
+
+    async def async_step_assistant(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        schema = _assistant_schema(dict(self.config_entry.options))
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
-        return self.async_show_form(step_id="init", data_schema=_assistant_schema(dict(self.config_entry.options)))
+            return self._save(schema, user_input)
+        return self.async_show_form(step_id="assistant", data_schema=schema)
+
+    async def async_step_sensor_reporting(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        schema = _reporting_schema(dict(self.config_entry.options))
+        if user_input is not None:
+            return self._save(schema, user_input)
+        return self.async_show_form(step_id="sensor_reporting", data_schema=schema)
+
+    def _save(self, schema: vol.Schema, user_input: dict[str, Any]) -> ConfigFlowResult:
+        # A step replaces only its own fields (a cleared entity field is
+        # missing from user_input and must not keep its old value).
+        own = {str(key) for key in schema.schema}
+        kept = {k: v for k, v in self.config_entry.options.items() if k not in own}
+        return self.async_create_entry(data={**kept, **user_input})

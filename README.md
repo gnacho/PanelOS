@@ -15,8 +15,9 @@ Version **0.0.2** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0
 - **Native Home Assistant dashboard**: drawn by the panel itself from a Home Assistant dashboard (tiles, shutters, climate, media, camera), details layers, themes, screensaver, automatic brightness, wake on approach. Pairing with a QR code, no token typing.
 - **Voice satellite**: on-device wake words (microWakeWord), Assist pipelines, echo cancellation, timers, announcements, follow-up listening.
 - **Assistant mode**: smart-display home screen with clock, weather, media and quick tiles, and a full-screen conversation view.
-- **Home Assistant device** over the ESPHome native API: settings and sensors as entities of the built-in ESPHome integration; an optional custom integration (`custom_components/nspanel_pro`) configures the assistant mode and shows views or messages on the panel.
-- **Super fast boot**: about 12 s from power on to the dashboard, more than four times faster than the stock firmware (about 53 s). The PanelOS logo already shows in the bootloader, then the boot animation; the UI comes with the right time and current Home Assistant data.
+- **First-start setup on the panel**: Home Assistant found on the network (mDNS) or its address typed on a keypad; pairing with a QR code.
+- **Home Assistant device** over the ESPHome native API, announced over mDNS like any ESPHome device: settings and sensors as entities of the built-in ESPHome integration; an optional custom integration (`custom_components/nspanel_pro`) configures the assistant mode and shows views or messages on the panel.
+- **Super fast boot**: about 12 s from power on to the dashboard, more than four times faster than the stock firmware (about 53 s). The PanelOS logo already shows in the bootloader, then the boot animation; the UI comes with the right time and current Home Assistant data. After a power cut it waits for Home Assistant and the network as long as it takes and comes back by itself.
 
 Details: [docs/app.md](docs/app.md).
 
@@ -24,11 +25,9 @@ Details: [docs/app.md](docs/app.md).
 
 - More devices: other NSPanel models (NSPanel Pro 120, NSPanel Pro Gen2), the Shelly Wall Display (MediaTek MT6580; mainline Linux support still to be checked) and Wall Display XL (Rockchip RK3566), and the ESP32-based NSPanel as a separate, smaller target (its screen is driven by its own controller over a serial link).
 - A 3D-printable adapter plate for mounting the US NSPanel on a European 60 mm wall box (screw spacing 83.5 mm vs 60 mm).
-- A first-start setup screen on the panel: it finds Home Assistant on the network by itself (Home Assistant announces itself over mDNS as `_home-assistant._tcp`), or takes its address on a simple on-screen keyboard, so the first setup needs no SSH.
-- The panel announces its ESPHome API over mDNS (`_esphomelib._tcp`), so Home Assistant discovers it and offers to add it. Both mDNS parts live in the panel app (no system mDNS service, smaller image).
 - Ready-made images on GitHub Releases, so a user does not have to build. A release image must not carry a personal SSH key: the user's own key is added at install.
 - Native builds on Macs with Apple silicon and other arm64 computers: Buildroot's Bootlin toolchain only runs on x86-64 hosts, so an arm64 host needs Buildroot's own toolchain (built from source). Until then the build runs in an emulated x86-64 virtual machine (see [docs/install.md](docs/install.md#mac)).
-- Web mode, signed over-the-air updates, a smaller image for the `boot` partition (A/B).
+- Web mode, signed over-the-air updates from Home Assistant's Settings → Updates, with two system slots (A/B: the `boot` and `recovery` partitions; the image already fits the 32 MiB `boot` partition).
 - A wiki once more devices are supported.
 
 ## Why (NSPanel Pro)
@@ -42,13 +41,12 @@ Details: [docs/app.md](docs/app.md).
 
 Step-by-step guide, no Linux knowledge needed: **[docs/install.md](docs/install.md)**.
 
-In short: turn on developer mode and ADB in the eWeLink app, back up the panel, build the image on a Linux or WSL computer (it takes the stock bootloader's device tree from the backup), write PanelOS to its recovery partition over Wi-Fi ADB, make it the default boot, give it the address of Home Assistant, and log in with the QR code on the screen.
+In short: turn on developer mode and ADB in the eWeLink app, back up the panel, build the image on a Linux or WSL computer (it takes the stock bootloader's device tree from the backup), write PanelOS to its recovery partition over Wi-Fi ADB, make it the default boot, type the address of Home Assistant on the panel's setup screen (or pick it when found), and log in with the QR code on the screen.
 
 ## Known limitations
 
 - No TLS yet: Home Assistant must be reachable over plain `http://`.
-- The first setup needs the Home Assistant address entered over SSH (step 10 of the install guide); there is no on-screen setup yet.
-- The ESPHome API runs without encryption and mDNS discovery so far.
+- mDNS (finding Home Assistant on the setup screen, Home Assistant discovering the panel) only works inside one network segment, unless the router repeats mDNS between them.
 - Web mode (the real Home Assistant frontend) is not started.
 - The look is a first version; a full redesign is planned.
 
@@ -56,7 +54,7 @@ In short: turn on developer mode and ADB in the eWeLink app, back up the panel, 
 
 - `app/` the panel app (Rust + Slint), see [docs/app.md](docs/app.md)
 - `custom_components/nspanel_pro/` optional Home Assistant integration (assistant mode settings, screen actions), installable with the Home Assistant Marketplace or HACS, see [docs/home_assistant.md](docs/home_assistant.md)
-- `docs/` hardware notes ([docs/hardware.md](docs/hardware.md)), backup and restore, bring-up notes ([docs/bringup.md](docs/bringup.md)), design decisions and plans, feature list
+- `docs/` hardware notes ([docs/hardware.md](docs/hardware.md)), backup and restore, bring-up notes ([docs/bringup.md](docs/bringup.md)), security and development aids ([docs/security.md](docs/security.md)), design decisions and plans, feature list
 - `kernel/` board device tree (`dts/`), mainline kernel patches (`patches/`), config fragment (`configs/`)
 - `buildroot/` Buildroot external tree (`BR2_EXTERNAL`): root filesystem defconfig, init scripts, boot splash, small tools
 - `assets/` logo and logotype (SVG), generated boot pictures

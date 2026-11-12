@@ -122,11 +122,19 @@ impl Auth {
         }
     }
 
-    /// Logs out: forgets the stored login (Home Assistant still lists the
-    /// token in the user profile until it is removed there or expires).
+    /// Logs out: revokes the refresh token in Home Assistant (in the
+    /// background, best effort) and forgets the stored login.
     pub fn forget(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.stored = None;
+        if let Some(stored) = inner.stored.take() {
+            let url = format!("{}/auth/token", self.ha_url);
+            std::thread::spawn(move || {
+                let form = [("token", stored.refresh_token.as_str()), ("action", "revoke")];
+                if let Err(e) = ureq::post(&url).timeout(std::time::Duration::from_secs(10)).send_form(&form) {
+                    eprintln!("nspanel-app: logout: revoking the token failed: {e}");
+                }
+            });
+        }
         inner.access_token.clear();
         let _ = std::fs::remove_file(&self.path);
     }

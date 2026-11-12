@@ -12,7 +12,7 @@ Measured on one Sonoff NSPanel Pro 86 unit (stock firmware 3.0.0, Android 8.1, v
 | Storage | eMMC, 15269888 sectors (~7.3 GiB) | mmcblk1 | | |
 | Display | 480x480 MIPI-DSI panel, Sitronix ST7701S | DSI | vendor | mainline `panel-sitronix-st7701` with a new descriptor (`kernel/patches/0001`) |
 | Touch | Hynitron CST226SE | i2c-1 0x5a | cst226se | mainline `hynitron_cstxxx` with `kernel/patches/0002`; an unbound "CST226" node also sits at i2c-1 0x1a |
-| Light + proximity | Sensortek STK3x3x | i2c-2 0x47 | sensors | stock exposes input devices "lightsensor-level" and "proximity" |
+| Light + proximity | Sensortek STK3x3x | i2c-2 0x47 | sensors | stock exposes input devices "lightsensor-level" and "proximity"; the app sets the IR LED to full power (register 0x03 = 0xFF) and 11.84 ms proximity integration, see bringup.md |
 | Light + proximity (alt part) | Sensortek STK3A5X | i2c-2 0x46 | none bound | second-source footprint, unused on this unit |
 | Unknown | "tp" | i2c-2 0x3c | smatek_dridev | vendor device, function unknown |
 | PMIC + audio codec | Rockchip RK809 | i2c-0 0x20 | rk808, rk809-codec | power key is input "rk8xx_pwrkey"; codec on I2S1 (MCLK GPIO2_C3, SCLK C2, LRCK C1, SDO C4, SDI C5); its ADC input is the speaker echo reference, not a microphone |
@@ -20,7 +20,7 @@ Measured on one Sonoff NSPanel Pro 86 unit (stock firmware 3.0.0, Android 8.1, v
 | Wi-Fi + Bluetooth | Realtek RTL8723DS | SDIO (024c:d723), BT on UART | 8723ds (out of tree) | mainline: rtw88 8723DS SDIO (works) |
 | Zigbee | Silicon Labs EFR32MG21 (module SM-044 V1.1) | UART (one of ttyS3/4/5) | userspace | ships with EmberZNet 6.10.1 NCP firmware, see [Zigbee module](#zigbee-module); optional, router role at most |
 | Ethernet MAC | rk_gmac-dwmac | | | present in DT, no connector expected |
-| Backlight | PWM | /sys/class/backlight/backlight | pwm-backlight | 0..255 |
+| Backlight | PWM | /sys/class/backlight/backlight | pwm-backlight | 0..1000 (PWM clock 100 MHz: 2500 steps per period) |
 | Thermal | soc-thermal, gpu-thermal | /sys/class/thermal | | |
 
 ## Board and opening the panel
@@ -57,7 +57,7 @@ Decoded from the vendor device tree (`resource` partition, `rk-kernel.dtb`, node
 - 480x480, 72 x 70 mm, MIPI-DSI 2 lanes, RGB888, flags `0x803` (video mode, burst, low-power commands).
 - Timing: pixel clock 16 MHz; horizontal front porch 12, sync 10, back porch 15; vertical front porch 12, sync 8, back porch 15; all sync signals active low.
 - Power: RK809 `SWITCH_REG2`. Reset: GPIO3_A0, active low. Delays: reset 20 ms, init 20 ms, prepare 20 ms, enable 40 ms.
-- Backlight: `pwm-backlight` on PWM1 (`pwm@ff200010`), period 25 us (40 kHz).
+- Backlight: `pwm-backlight` on PWM1 (`pwm@ff200010`), period 25 us (40 kHz), PWM clock 100 MHz (2500 duty steps). PanelOS uses 1000 levels; 0.8 % (8 of 1000) is still readable at night and shows no flicker.
 
 Init sequence (DCS, in order; delays in ms after the command):
 

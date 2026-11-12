@@ -137,7 +137,11 @@ start_wifi() {
 		exit 0
 	fi
 	ip link set wlan0 up
-	wpa_supplicant -B -i wlan0 -c "$WIFI_CONF" -P /var/run/wpa_supplicant.pid
+	# Connections, disconnections and access point changes go to the system
+	# log (-s), when this wpa_supplicant build has syslog support.
+	syslog=""
+	wpa_supplicant -h 2>&1 | grep -q -- '-s = ' && syslog="-s"
+	wpa_supplicant -B $syslog -i wlan0 -c "$WIFI_CONF" -P /var/run/wpa_supplicant.pid
 	# Retry DHCP every second (default: 3 tries, then a 20 s pause), so an
 	# association that finishes a little later still gets an address at once.
 	udhcpc -i wlan0 -b -t 30 -T 1 -A 2 -p /var/run/udhcpc.wlan0.pid > /dev/null 2>&1

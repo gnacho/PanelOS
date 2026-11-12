@@ -224,7 +224,9 @@ pub fn data(
         d.hourly = ModelRc::new(VecModel::from(forecast_items(hourly, true, 5)));
         d.daily = ModelRc::new(VecModel::from(forecast_items(daily, false, 7)));
     }
-    if !c.media_player_entity.is_empty() {
+    // Without its state (Home Assistant not reached yet) the card would show
+    // the raw entity id: leave it out until the first state arrives.
+    if !c.media_player_entity.is_empty() && states.contains_key(&c.media_player_entity) {
         let tile = dashboard::tile(&CardRef { entity: c.media_player_entity.clone(), name: None }, states);
         let st = states.get(&c.media_player_entity).map(|s| s.state.as_str()).unwrap_or("");
         // The card is always there when a player is chosen; idle shows its name and state.

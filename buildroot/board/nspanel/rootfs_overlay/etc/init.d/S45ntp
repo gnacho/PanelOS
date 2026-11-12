@@ -1,28 +1,39 @@
 #!/bin/sh
 # Network time: busybox ntpd, started once Wi-Fi has an address.
+#
+# Wi-Fi can come much later than the boot (power cut, router still starting),
+# so the wait has no limit. ntpd runs in the foreground under a small loop and
+# is started again if it exits (for example when the server names did not
+# resolve without internet). Until NTP has set the clock, the panel app takes
+# the time from Home Assistant.
 
 SERVERS="-p hu.pool.ntp.org -p pool.ntp.org"
+PIDFILE=/var/run/nspanel-ntp.pid
 
 log() { echo "<5>nspanel-ntp: $*" > /dev/kmsg; }
 
+supervise() {
+	while true; do
+		if ip -4 -o addr show dev wlan0 2>/dev/null | grep -q " inet "; then
+			log "ntpd started"
+			# shellcheck disable=SC2086
+			ntpd -n $SERVERS
+			log "ntpd exited, starting it again in 30 s"
+			sleep 30
+		else
+			sleep 2
+		fi
+	done
+}
+
 case "$1" in
 start)
-	(
-		i=0
-		while [ $i -lt 180 ]; do
-			if ip -4 -o addr show dev wlan0 2>/dev/null | grep -q " inet "; then
-				# shellcheck disable=SC2086
-				ntpd $SERVERS
-				log "ntpd started"
-				exit 0
-			fi
-			sleep 2
-			i=$((i + 2))
-		done
-		log "no network address, ntpd not started"
-	) &
+	supervise > /dev/null 2>&1 < /dev/null &
+	echo $! > "$PIDFILE"
 	;;
 stop)
+	[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+	rm -f "$PIDFILE"
 	p=$(pidof ntpd) && kill $p
 	;;
 restart | reload)

@@ -3,9 +3,10 @@
 Optional custom integration for panels running PanelOS (`custom_components/nspanel_pro` in this repository). The panel works without it (native dashboard, browser-free, settings and voice through Home Assistant's built-in ESPHome integration); the integration adds:
 
 - **Assistant mode settings** (integration options): weather entity, media player, quick tiles (lights, switches, shutters, fans, thermostats, scenes, scripts, sensors, input booleans), full-screen conversation on/off.
-- **Actions** that put something on a panel's screen:
+- **Sensor reporting** (integration options): how much the illuminance, SoC temperature and Wi-Fi signal must change before the panel sends a new value (see below).
+- **Actions** that put something on a panel's screen (administrators and automations only):
   - `nspanel_pro.show_view`: `view` = `home`, `dashboard`, `weather`, `media` or `camera` (with `entity_id: camera.…`), `seconds` (default 30, 0 = until someone touches the screen), `panel_id` (empty = every panel).
-  - `nspanel_pro.show_message`: `title`, `message`, `icon` (`mdi:…`), `seconds`, `chime`, `panel_id`.
+  - `nspanel_pro.show_message`: `title` (up to 100 characters), `message` (up to 1000), `icon` (`mdi:…`), `seconds`, `chime`, `panel_id`.
   Both fail with an error if no panel is connected.
 
 ## Install
@@ -49,11 +50,23 @@ The Marketplace is built into Home Assistant since 2026.11 (it replaces HACS).
 2. Panel ID: the panel's ESPHome name (`nspanel-pro`). Then choose the weather entity, the media player and the quick tiles.
 3. Switch the panel to assistant mode: its **Display mode** select on the ESPHome device page in Home Assistant, or gear icon → Display mode on the panel.
 
-Options can be changed any time (**Configure** on the integration entry); the panel follows at once.
+Options can be changed any time (**Configure** on the integration entry, then **Assistant mode** or **Sensor reporting**); the panel follows at once.
+
+## Sensor reporting
+
+Every value the panel sends is a row in the recorder's database (history, logbook, long-term statistics). The panel therefore sends a sensor only when it has changed by at least a set step from the value it sent last:
+
+| Option | Default | Range | How it is measured |
+|---|---|---|---|
+| Illuminance | 15 % | 1–100 % | Checked twice a second; the step is a share of the last value sent, and at least a third of the percentage in lux (5 lx at 15 %), so the noise of a dark room is not sent. A light switched on shows up at once. |
+| SoC temperature | 1.0 °C | 0.1–10 °C | Read every minute, averaged over about five minutes (the sensor works in steps of about 0.45 °C and flips between neighbouring steps). |
+| Wi-Fi signal | 3 dB | 1–20 dB | Read every minute, averaged over about five minutes. |
+
+Lower values give a finer history and automations that react to smaller changes, at the cost of more database writes. Higher values mean fewer writes, and only larger changes show up. On one panel these three sensors sent about 3000 values a day before; replaying a day of its readings with the defaults gave about 200. The panel's own automatic brightness, theme and Wi-Fi roaming use the full readings and do not depend on these options. Without the integration the panel uses the defaults.
 
 ## How it talks to the panel
 
-The panel subscribes over its own WebSocket connection with `{"type": "nspanel_pro/subscribe", "panel_id": "nspanel-pro"}`. Events carry either `{"config": {...}}` (now and after every options change; `{}` when there is no entry for the panel) or `{"show": {...}}` (an action call). No administrator rights are needed for the panel's Home Assistant user.
+The panel subscribes over its own WebSocket connection with `{"type": "nspanel_pro/subscribe", "panel_id": "nspanel-pro"}`. Events carry either `{"config": {...}}` (now and after every options change; `{}` when there is no entry for the panel; the reporting steps as `illuminance_change`, `soc_temperature_change` and `wifi_signal_change`) or `{"show": {...}}` (an action call). No administrator rights are needed for the panel's Home Assistant user.
 
 ## Example: doorbell
 

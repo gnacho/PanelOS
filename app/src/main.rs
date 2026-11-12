@@ -17,8 +17,11 @@ mod esphome;
 mod ha;
 mod hw;
 mod icons;
+mod api_link;
+mod mdns;
 mod pairing;
 mod platform;
+mod roam;
 mod settings;
 mod touch;
 mod voice;
@@ -75,14 +78,25 @@ struct UiState {
     backlight: hw::Backlight,
     light: hw::LightSensor,
     proximity: hw::ProximityWake,
+    /// Proximity test view on: the integration time asked for in
+    /// PROXIMITY_TEST_FILE (empty = the default one).
+    proximity_test: Option<String>,
+    /// Backlight now and where it is heading, per mille of the PWM range;
+    /// `fade_backlight()` moves it there smoothly.
     brightness: f64,
+    brightness_target: f64,
     lux: Option<f64>,
     dark: Option<bool>,
+    /// Auto theme: the other look the light sensor asks for, and since when.
+    theme_pending: Option<(bool, Instant)>,
     started: Instant,
     device: Arc<std::sync::Mutex<esphome::DeviceState>>,
     device_notify: Sender<()>,
     last_reported_lux: Option<f64>,
     last_report: Instant,
+    /// Five-minute averages of the once-a-minute readings Home Assistant gets.
+    soc_temp_avg: Option<f64>,
+    wifi_avg: Option<f64>,
     timers: HashMap<String, TimerInfo>,
     ringing: Option<Instant>,
     /// Same as `ringing.is_some()`, for the voice thread.
@@ -125,6 +139,10 @@ fn with_state<R>(f: impl FnOnce(&mut UiState) -> R) -> R {
 }
 
 fn local_time_strings() -> (String, String, String) {
+    // Not set yet (no NTP and no Home Assistant so far): no 1970 on screen.
+    if !clock::valid() {
+        return ("--:--".into(), String::new(), String::new());
+    }
     // SAFETY: time/localtime_r/strftime on local buffers.
     unsafe {
         let now = libc::time(std::ptr::null_mut());
@@ -337,6 +355,118 @@ fn splash_handoff() -> Option<i32> {
     }
     eprintln!("nspanel-app: display taken over from the boot splash after {} ms", started.elapsed().as_millis());
     Some(pid)
+}
+
+/// Home Assistant URLs to try for what was typed: as given with a scheme or a
+/// port, otherwise port 8123 (older and Docker installs) and then port 80
+/// (Home Assistant OS installed since 2026.8).
+fn setup_candidates(input: &str) -> Vec<String> {
+    let s = input.trim().trim_end_matches('/');
+    if s.is_empty() {
+        Vec::new()
+    } else if s.starts_with("http://") || s.starts_with("https://") {
+        vec![s.to_string()]
+    } else if s.contains(':') {
+        vec![format!("http://{s}")]
+    } else {
+        vec![format!("http://{s}:8123"), format!("http://{s}")]
+    }
+}
+
+/// True if Home Assistant answers at `url`: `/auth/providers` needs no login
+/// and only exists there.
+fn is_home_assistant(url: &str) -> bool {
+    match ureq::get(&format!("{url}/auth/providers")).timeout(Duration::from_secs(4)).call() {
+        Ok(r) => r.into_string().is_ok_and(|body| serde_json::from_str::<Value>(&body).is_ok()),
+        Err(_) => false,
+    }
+}
+
+/// First start without settings: the setup screen lists Home Assistant found
+/// on the network (mDNS) and takes an address on a keypad. Once Home Assistant
+/// answers at the address, it is saved to app.json and the app restarts (the
+/// supervisor starts it again), which then shows the pairing QR code.
+fn start_setup(ui: &MainWindow, browser: Arc<mdns::Browser>, reason: &str) {
+    ui.set_setup(true);
+    if !reason.contains("No such file") {
+        ui.set_setup_message(format!("The saved settings could not be read ({reason}); set them again.").into());
+    }
+    browser.active.store(true, Ordering::Relaxed);
+    // Found instances, refreshed every second; the timer lives as long as the app.
+    let found_timer = slint::Timer::default();
+    let weak = ui.as_weak();
+    found_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let found: Vec<FoundHa> = browser
+            .found
+            .lock()
+            .unwrap()
+            .iter()
+            .take(1)
+            .map(|h| FoundHa { name: h.name.clone().into(), url: h.url.clone().into() })
+            .collect();
+        if ui.get_setup_found().row_count() != found.len() {
+            ui.set_setup_found(ModelRc::new(VecModel::from(found)));
+        }
+    });
+    std::mem::forget(found_timer);
+
+    let weak = ui.as_weak();
+    ui.on_setup_key(move |k| {
+        let Some(ui) = weak.upgrade() else { return };
+        let mut text = ui.get_setup_address().to_string();
+        if k == "back" {
+            text.pop();
+        } else if text.len() < 40 {
+            text.push_str(&k);
+        }
+        ui.set_setup_address(text.into());
+    });
+    let weak = ui.as_weak();
+    ui.on_setup_pick(move |url| {
+        let Some(ui) = weak.upgrade() else { return };
+        ui.set_setup_address(url);
+        ui.invoke_setup_connect();
+    });
+    let weak = ui.as_weak();
+    ui.on_setup_connect(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if ui.get_setup_busy() {
+            return;
+        }
+        let candidates = setup_candidates(&ui.get_setup_address());
+        if candidates.is_empty() {
+            ui.set_setup_message("Type the address first.".into());
+            return;
+        }
+        ui.set_setup_busy(true);
+        ui.set_setup_message("Looking for Home Assistant…".into());
+        let weak = ui.as_weak();
+        std::thread::spawn(move || {
+            let found = candidates.iter().find(|u| is_home_assistant(u)).cloned();
+            let saved = found.as_ref().map(|url| {
+                let _ = std::fs::create_dir_all(PERSIST_DIR);
+                let text = serde_json::to_string_pretty(&json!({ "ha_url": url })).unwrap_or_default();
+                std::fs::write(format!("{PERSIST_DIR}/app.json"), text + "\n")
+            });
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                ui.set_setup_busy(false);
+                match (found, saved) {
+                    (Some(url), Some(Ok(()))) => {
+                        eprintln!("nspanel-app: setup: Home Assistant at {url} saved, restarting");
+                        ui.set_setup_message(format!("Home Assistant found at {url}. Starting…").into());
+                        // The supervisor starts the app again, now with settings.
+                        slint::Timer::single_shot(Duration::from_millis(800), || std::process::exit(0));
+                    }
+                    (Some(_), Some(Err(e))) => ui.set_setup_message(format!("Could not save the settings: {e}").into()),
+                    _ => ui.set_setup_message(
+                        "Home Assistant did not answer at this address. Check the IP address and the port (:8123 or none).".into(),
+                    ),
+                }
+            });
+        });
+    });
 }
 
 fn wake_phrase(ids: &[String]) -> String {
@@ -706,6 +836,12 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
                     Some(v) => assistant::from_integration(v),
                     None => settings::AssistantConfig::default(),
                 };
+                let reporting = config.as_ref().map(settings::Reporting::from_integration).unwrap_or_default();
+                if reporting != s.settings.reporting {
+                    eprintln!("nspanel-app: sensor reporting from Home Assistant: {reporting:?}");
+                    s.settings.reporting = reporting;
+                    s.settings.save();
+                }
                 if new != s.settings.assistant {
                     eprintln!("nspanel-app: assistant mode settings from Home Assistant: {new:?}");
                     s.settings.assistant = new;
@@ -895,10 +1031,31 @@ fn start_screensaver(ui: &MainWindow, s: &mut UiState) {
     ui.set_screensaver(true);
 }
 
+/// Weight of a new once-a-minute reading in its average (about five minutes).
+const REPORT_SMOOTHING: f64 = 0.2;
+
+fn smooth(avg: Option<f64>, reading: Option<f64>) -> Option<f64> {
+    match (avg, reading) {
+        (Some(a), Some(r)) => Some(a + REPORT_SMOOTHING * (r - a)),
+        (_, r) => r,
+    }
+}
+
+/// The value to send when the average moved at least `step` from the one
+/// sent last (rounded to `1 / per_unit`); None = keep the old one.
+fn report_value(sent: Option<f64>, avg: Option<f64>, step: f64, per_unit: f64) -> Option<Option<f64>> {
+    match (sent, avg) {
+        (Some(s), Some(a)) if (a - s).abs() < step => None,
+        (None, None) => None,
+        (_, a) => Some(a.map(|v| (v * per_unit).round() / per_unit)),
+    }
+}
+
 /// Copies what Home Assistant sees (ESPHome API) from the UI state.
 fn report_device(s: &mut UiState) {
+    let reporting = s.settings.reporting;
     let lux_changed = match (s.lux, s.last_reported_lux) {
-        (Some(now), Some(before)) => (now - before).abs() > (before * 0.15).max(5.0),
+        (Some(now), Some(before)) => (now - before).abs() > reporting.lux_step(before),
         (a, b) => a.is_some() != b.is_some(),
     };
     let periodic = s.last_report.elapsed() > Duration::from_secs(60);
@@ -923,13 +1080,19 @@ fn report_device(s: &mut UiState) {
         d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone(),
         d.proximity_wake, d.screen_on, d.dashboard.clone(), d.presence, d.display_mode.clone(), d.volume,
     );
-    if lux_changed || periodic {
+    if lux_changed {
         d.lux = s.lux.map(|l| l.round());
         s.last_reported_lux = s.lux;
     }
     if periodic {
-        d.soc_temp = hw::soc_temperature();
-        d.wifi_dbm = hw::wifi_dbm();
+        s.soc_temp_avg = smooth(s.soc_temp_avg, hw::soc_temperature());
+        s.wifi_avg = smooth(s.wifi_avg, hw::wifi_dbm());
+        if let Some(v) = report_value(d.soc_temp, s.soc_temp_avg, reporting.soc_temperature_step, 10.0) {
+            d.soc_temp = v;
+        }
+        if let Some(v) = report_value(d.wifi_dbm, s.wifi_avg, reporting.wifi_signal_step, 1.0) {
+            d.wifi_dbm = v;
+        }
         d.ip = s
             .config
             .as_ref()
@@ -944,23 +1107,98 @@ fn report_device(s: &mut UiState) {
     }
 }
 
-/// Runs twice a second: theme, screensaver, proximity wake, backlight.
+/// Auto theme thresholds: dark below, light above, unchanged in between.
+const THEME_DARK_LUX: f64 = 10.0;
+const THEME_LIGHT_LUX: f64 = 30.0;
+/// How long the light must stay on the other side before the look changes
+/// (no flipping at dusk or when a hand passes the sensor).
+const THEME_SETTLE: Duration = Duration::from_secs(10);
+
+/// Dark or light for the "auto" theme, by the light sensor. The first
+/// decision is immediate, so the first screen already has the right look.
+/// Without a sensor reading: Home Assistant's sun, otherwise unchanged (dark
+/// at the start).
+fn auto_dark(s: &mut UiState) -> bool {
+    let Some(lux) = s.lux else {
+        s.theme_pending = None;
+        return match s.states.get("sun.sun") {
+            Some(sun) => sun.state == "below_horizon",
+            None => s.dark.unwrap_or(true),
+        };
+    };
+    let wanted = if lux < THEME_DARK_LUX {
+        Some(true)
+    } else if lux > THEME_LIGHT_LUX {
+        Some(false)
+    } else {
+        None
+    };
+    let Some(current) = s.dark else {
+        return wanted.unwrap_or(lux < (THEME_DARK_LUX + THEME_LIGHT_LUX) / 2.0);
+    };
+    match wanted {
+        Some(w) if w != current => match s.theme_pending {
+            Some((p, since)) if p == w => {
+                if since.elapsed() >= THEME_SETTLE {
+                    s.theme_pending = None;
+                    w
+                } else {
+                    current
+                }
+            }
+            _ => {
+                s.theme_pending = Some((w, Instant::now()));
+                current
+            }
+        },
+        _ => {
+            s.theme_pending = None;
+            current
+        }
+    }
+}
+
+fn update_theme(ui: &MainWindow, s: &mut UiState) {
+    let dark = match s.settings.theme.as_str() {
+        "light" => false,
+        "auto" => auto_dark(s),
+        _ => true,
+    };
+    if s.dark != Some(dark) {
+        s.dark = Some(dark);
+        ui.global::<Theme>().set_dark(dark);
+    }
+}
+
+/// Backlight fade, every 20 ms: towards the target in perceived brightness
+/// (gamma 2.2), so a change looks even in the dark too, and with a time
+/// constant instead of steps: about 0.8 s down, 0.25 s up, 0.12 s for a big
+/// rise (waking from the screensaver).
+fn fade_backlight() {
+    with_state(|s| {
+        const GAMMA: f64 = hw::BACKLIGHT_GAMMA;
+        let dt: f64 = 0.02;
+        let (now, target) = (s.brightness.clamp(0.0, 1000.0), s.brightness_target.clamp(0.0, 1000.0));
+        let tau = if target > now + 300.0 {
+            0.12
+        } else if target > now {
+            0.25
+        } else {
+            0.8
+        };
+        let p_now = (now / 1000.0).powf(1.0 / GAMMA);
+        let p_target = (target / 1000.0).powf(1.0 / GAMMA);
+        let p = p_now + (p_target - p_now) * (1.0 - (-dt / tau).exp());
+        s.brightness = if (p - p_target).abs() < 0.002 { target } else { p.powf(GAMMA) * 1000.0 };
+        s.backlight.set_permille(s.brightness.round() as u32);
+    });
+}
+
+/// Runs twice a second: theme, screensaver, proximity wake, backlight target.
 fn tick(ui: &MainWindow) {
     let wake_now = with_state(|s| {
         s.lux = s.light.lux();
-        // Theme
-        let dark = match s.settings.theme.as_str() {
-            "light" => false,
-            "auto" => match s.states.get("sun.sun") {
-                Some(sun) => sun.state == "below_horizon",
-                None => s.lux.map(|l| l < 10.0).unwrap_or(true),
-            },
-            _ => true,
-        };
-        if s.dark != Some(dark) {
-            s.dark = Some(dark);
-            ui.global::<Theme>().set_dark(dark);
-        }
+        update_theme(ui, s);
         // Layer opened by a show request: close it when its time is up.
         if s.show_until.is_some_and(|t| Instant::now() >= t) {
             s.show_until = None;
@@ -987,17 +1225,41 @@ fn tick(ui: &MainWindow) {
             ui.set_media_open(false);
             s.more_info = None;
         }
+        // Proximity test view: on while the file exists. Its first line is
+        // the integration time to test (a change of the line learns the
+        // resting level anew), the rest a prompt shown above the reading.
+        let content = std::fs::read_to_string(PROXIMITY_TEST_FILE).ok();
+        let test = content.as_deref().map(|c| c.lines().next().unwrap_or("").trim().to_string());
+        if let Some(c) = content.as_deref() {
+            ui.set_prox_test_prompt(c.lines().skip(1).collect::<Vec<_>>().join("\n").into());
+        }
+        let mut test_started = false;
+        if test != s.proximity_test {
+            let integration = test.as_deref().and_then(|t| t.split_whitespace().next()).unwrap_or(hw::PROXIMITY_INTEGRATION);
+            s.light.set_proximity_integration(integration);
+            s.proximity = hw::ProximityWake::new(integration.parse().unwrap_or(0.01184));
+            test_started = test.is_some() && s.proximity_test.is_none();
+            ui.set_prox_test(test.is_some());
+            match &test {
+                Some(_) => eprintln!("nspanel-app: proximity test on, integration time {integration} s"),
+                None => eprintln!("nspanel-app: proximity test off"),
+            }
+            s.proximity_test = test;
+        }
         // Screensaver (not while Home Assistant shows something)
         let timeout = s.settings.screensaver_seconds;
-        let showing = s.show_until.is_some() || ui.get_message_open() || s.camera_override.is_some();
-        if !s.screensaver && !showing && timeout > 0 && ui.get_paired() && idle > Duration::from_secs(timeout as u64) {
+        let showing = s.show_until.is_some() || ui.get_message_open() || s.camera_override.is_some() || s.proximity_test.is_some();
+        if !s.screensaver && !showing && timeout > 0 && ui.get_paired() && !ui.get_setup() && idle > Duration::from_secs(timeout as u64) {
             start_screensaver(ui, s);
         }
         // Proximity: presence for Home Assistant, wake from the screensaver
-        let mut wake_now = false;
+        let mut wake_now = test_started && s.screensaver;
         if let Some(p) = s.light.proximity() {
             let approach = s.proximity.update(p);
-            wake_now = approach && s.screensaver && s.settings.proximity_wake;
+            wake_now |= approach && s.screensaver && s.settings.proximity_wake;
+            if s.proximity_test.is_some() {
+                show_proximity_test(ui, s, p);
+            }
         }
         // Backlight
         let target = if s.screensaver && s.settings.screensaver_style == "black" && !wake_now {
@@ -1006,17 +1268,11 @@ fn tick(ui: &MainWindow) {
             let normal = if s.settings.auto_brightness {
                 s.lux.map(hw::auto_brightness_permille).unwrap_or(600) as f64
             } else {
-                s.settings.brightness.max(5) as f64 * 10.0
+                hw::manual_brightness_permille(s.settings.brightness) as f64
             };
             if s.screensaver && !wake_now { normal.min(150.0) } else { normal }
         };
-        s.brightness = if (target - s.brightness).abs() < 5.0 || target > s.brightness + 300.0 {
-            target
-        } else {
-            s.brightness + (target - s.brightness) * 0.25
-        };
-        let level = s.brightness.round() as u32;
-        s.backlight.set_permille(level);
+        s.brightness_target = target;
         report_device(s);
         let refresh = s.assistant_refreshed.elapsed() > Duration::from_secs(60);
         if refresh {
@@ -1031,6 +1287,35 @@ fn tick(ui: &MainWindow) {
     if refresh {
         refresh_assistant(ui);
     }
+}
+
+/// Developer tool: while this file exists the panel shows the proximity
+/// reading and an estimated hand distance. First line: the integration time
+/// in seconds (one of `in_proximity_integration_time_available`, empty = the
+/// default), optionally followed by a word whose change restarts learning;
+/// further lines: a prompt for the person at the panel.
+const PROXIMITY_TEST_FILE: &str = "/tmp/nspanel-proximity-test";
+
+fn show_proximity_test(ui: &MainWindow, s: &UiState, raw: f64) {
+    let rest = s.proximity.rest().unwrap_or(raw);
+    let signal = raw - rest;
+    let margin = s.proximity.margin();
+    let jitter = s.proximity.jitter();
+    let integration = s.light.proximity_integration().unwrap_or(0.0);
+    let distance = if signal > (3.0 * jitter).max(10.0) {
+        hw::proximity_distance_cm(signal, integration).map(|d| format!("{d:.0} cm"))
+    } else {
+        None
+    };
+    ui.set_prox_test_distance(distance.unwrap_or_else(|| "–".into()).into());
+    ui.set_prox_test_details(
+        format!(
+            "signal {signal:+.0}, threshold {margin:.0}\nraw {raw:.0}, rest {rest:.0}, jitter {jitter:.1}\nintegration {:.2} ms",
+            integration * 1000.0
+        )
+        .into(),
+    );
+    ui.set_prox_test_near(s.proximity.near());
 }
 
 fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
@@ -1059,7 +1344,7 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
         match key {
             "theme" => s.settings.theme = value.to_string(),
             "auto_brightness" => s.settings.auto_brightness = value == "true",
-            "brightness" => s.settings.brightness = value.parse::<u8>().unwrap_or(70).clamp(5, 100),
+            "brightness" => s.settings.brightness = value.parse::<u8>().unwrap_or(70).clamp(1, 100),
             "screensaver_index" => {
                 if let Some((secs, _)) = value.parse::<usize>().ok().and_then(|i| SCREENSAVER_CHOICES.get(i)) {
                     s.settings.screensaver_seconds = *secs;
@@ -1125,6 +1410,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::load();
     let config = AppConfig::load();
     let fixture = std::env::var("NSPANEL_FIXTURE").ok();
+    // mDNS: announces the ESPHome API, so Home Assistant finds the panel;
+    // browses for Home Assistant when the setup screen asks for it.
+    let mdns_browser = Arc::new(mdns::Browser::default());
+    if fixture.is_none() {
+        mdns::spawn(esphome::mdns_service(), mdns_browser.clone());
+    }
     let shared = Arc::new(ha::Shared::default());
     let dashboard_name = if !settings.dashboard.is_empty() {
         settings.dashboard.clone()
@@ -1251,14 +1542,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             backlight: hw::Backlight::open(),
             light: hw::LightSensor::open(),
             proximity: hw::ProximityWake::default(),
+            proximity_test: None,
             brightness: 600.0,
+            brightness_target: 600.0,
             lux: None,
             dark: None,
+            theme_pending: None,
             started: Instant::now(),
             device: device.clone(),
             device_notify,
             last_reported_lux: None,
             last_report: Instant::now() - Duration::from_secs(120),
+            soc_temp_avg: None,
+            wifi_avg: None,
             timers: HashMap::new(),
             ringing: None,
             ringing_flag: ringing_flag.clone(),
@@ -1281,6 +1577,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     apply_assistant_config(&ui);
     let _ = with_state(|s| s.started);
+    // The look before the first frame (auto theme: the light sensor now).
+    with_state(|s| {
+        s.lux = s.light.lux();
+        update_theme(&ui, s);
+    });
 
     let camera = CameraControl::default();
 
@@ -1290,7 +1591,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let link = esphome::VoiceLink { to_api: to_api_rx, from_api: from_api_tx, active_wake_words: wake_words.clone() };
     let weak = ui.as_weak();
     let cam = camera.clone();
-    esphome::spawn(device, device_rx, link, move |control| {
+    // Only Home Assistant (and app.json api_allow) may use the ESPHome API.
+    let api_config = config.as_ref().ok().cloned();
+    let api_peers = move || {
+        api_config.as_ref().map(|c| api_link::allowed_peers(&c.ha_host_port(), &c.api_allow)).unwrap_or_default()
+    };
+    esphome::spawn(device, device_rx, link, api_peers, move |control| {
         let weak = weak.clone();
         let cam = cam.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -1330,6 +1636,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 });
             },
         );
+        // Wi-Fi roam check only while nothing is heard, said or played.
+        let speaking = player.busy.clone();
+        let ringing = ringing_flag.clone();
+        roam::spawn(move || !voice::busy() && !speaking.load(Ordering::SeqCst) && !ringing.load(Ordering::SeqCst));
     }
     let weak = ui.as_weak();
     ui.on_stop_timer(move || {
@@ -1463,6 +1773,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tick(&ui);
         }
     });
+    let fader = slint::Timer::default();
+    fader.start(slint::TimerMode::Repeated, Duration::from_millis(20), fade_backlight);
     let camera_timer = slint::Timer::default();
     let weak = ui.as_weak();
     let cam = camera.clone();
@@ -1538,10 +1850,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Ok(c), Some(a)) => (c, a),
         (result, _) => {
             let e = result.err().unwrap_or_else(|| "no login store".into());
-            eprintln!("nspanel-app: {e}");
+            eprintln!("nspanel-app: not configured ({e}): setup screen");
             ui.set_paired(true);
-            ui.set_status(format!("Not configured: {e}").into());
             ui.set_header_info("Not configured".into());
+            start_setup(&ui, mdns_browser, &e);
             ui.run()?;
             return Ok(());
         }

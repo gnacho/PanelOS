@@ -13,6 +13,10 @@ else
 	echo "post-build: no NSPANEL_SSH_PUBKEY_FILE, SSH login will not be possible"
 fi
 
+# Root logs in with the SSH key only: no password, also not on the serial
+# console (Buildroot leaves it empty).
+sed -i 's/^root:[^:]*:/root:*:/' "$TARGET/etc/shadow"
+
 # One system font is enough: the panel app embeds its own fonts; fontconfig
 # (needed by the app's font backend) only must find at least one font.
 if [ -d "$TARGET/usr/share/fonts/dejavu" ]; then

@@ -61,9 +61,14 @@ pub fn spawn(
             };
             let result = (|| -> Result<_, String> {
                 let url = if path.starts_with("http") { path.clone() } else { format!("{ha_url}{path}") };
-                let mut req = ureq::get(&url).timeout(Duration::from_secs(10));
-                if let Ok(token) = auth.access_token() {
-                    req = req.set("Authorization", &format!("Bearer {token}"));
+                let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(10)).build();
+                let mut req = agent.get(&url);
+                // The login token only goes to Home Assistant itself, never to
+                // an artwork URL elsewhere.
+                if url.starts_with(&format!("{ha_url}/")) {
+                    if let Ok(token) = auth.access_token() {
+                        req = req.set("Authorization", &format!("Bearer {token}"));
+                    }
                 }
                 let resp = req.call().map_err(|e| e.to_string())?;
                 let mut bytes = Vec::new();

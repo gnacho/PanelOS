@@ -511,3 +511,136 @@ export component PairingScreen inherits Rectangle {
         }
     }
 }
+
+// First start without settings: Home Assistant found on the network (mDNS),
+// or its address typed on a keypad.
+export struct FoundHa {
+    name: string,
+    url: string,
+}
+
+component KeyButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> accent: false;
+    callback clicked;
+    height: 46px;
+    border-radius: 12px;
+    background: root.accent ? (touch.pressed ? Theme.accent.darker(0.25) : Theme.accent) : (touch.pressed ? Theme.button-pressed : Theme.button);
+    touch := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    Text {
+        text: root.label;
+        font-size: root.accent ? 17px : 21px;
+        font-weight: root.accent ? 700 : 400;
+        color: root.accent ? #ffffff : Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}
+
+export component SetupScreen inherits Rectangle {
+    in property <[FoundHa]> found;
+    in property <string> address;
+    in property <string> message;
+    in property <bool> busy;
+    callback pick(string);
+    callback key(string);
+    callback connect();
+    background: Theme.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: 16px;
+        spacing: 10px;
+        alignment: start;
+        Text {
+            text: "Connect to Home Assistant";
+            font-size: 22px;
+            font-weight: 700;
+            color: Theme.text;
+        }
+        Text {
+            text: root.found.length > 0 ? "Found on the network, or type its address:" : "Address of Home Assistant (IP, and port if not 80):";
+            font-size: 14px;
+            color: Theme.muted;
+        }
+        for ha in root.found: Rectangle {
+            height: 46px;
+            border-radius: 12px;
+            background: t.pressed ? Theme.card-pressed : Theme.card;
+            t := TouchArea {
+                clicked => { root.pick(ha.url); }
+            }
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 10px;
+                Text {
+                    text: ha.name;
+                    font-size: 16px;
+                    font-weight: 700;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: ha.url;
+                    font-size: 14px;
+                    color: Theme.muted;
+                    vertical-alignment: center;
+                    horizontal-alignment: right;
+                    overflow: elide;
+                }
+            }
+        }
+        Rectangle {
+            height: 48px;
+            border-radius: 12px;
+            background: Theme.card;
+            border-width: 2px;
+            border-color: Theme.accent;
+            Text {
+                x: 14px;
+                text: root.address == "" ? "192.168.1.10:8123" : root.address;
+                font-size: 20px;
+                color: root.address == "" ? Theme.faint : Theme.text;
+                vertical-alignment: center;
+            }
+        }
+        GridLayout {
+            spacing: 8px;
+            Row {
+                KeyButton { label: "1"; clicked => { root.key("1"); } }
+                KeyButton { label: "2"; clicked => { root.key("2"); } }
+                KeyButton { label: "3"; clicked => { root.key("3"); } }
+                KeyButton { label: "."; clicked => { root.key("."); } }
+            }
+            Row {
+                KeyButton { label: "4"; clicked => { root.key("4"); } }
+                KeyButton { label: "5"; clicked => { root.key("5"); } }
+                KeyButton { label: "6"; clicked => { root.key("6"); } }
+                KeyButton { label: ":"; clicked => { root.key(":"); } }
+            }
+            Row {
+                KeyButton { label: "7"; clicked => { root.key("7"); } }
+                KeyButton { label: "8"; clicked => { root.key("8"); } }
+                KeyButton { label: "9"; clicked => { root.key("9"); } }
+                KeyButton { label: "←"; clicked => { root.key("back"); } }
+            }
+            Row {
+                KeyButton { label: "0"; clicked => { root.key("0"); } }
+                KeyButton {
+                    colspan: 3;
+                    label: root.busy ? "Checking…" : "Connect";
+                    accent: true;
+                    clicked => { root.connect(); }
+                }
+            }
+        }
+        Text {
+            text: root.message;
+            font-size: 14px;
+            color: Theme.muted;
+            wrap: word-wrap;
+        }
+    }
+}

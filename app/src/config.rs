@@ -17,6 +17,11 @@ pub struct AppConfig {
     /// Port of the panel's small web server (login callback).
     #[serde(default = "default_port")]
     pub http_port: u16,
+    /// Further addresses allowed to use the ESPHome API besides Home
+    /// Assistant's own (e.g. when Home Assistant reaches the panel from
+    /// another address than its URL's).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_allow: Vec<String>,
 }
 
 fn default_dashboard() -> String {

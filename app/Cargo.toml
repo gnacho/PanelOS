@@ -26,6 +26,8 @@ jpeg-decoder = { version = "0.3", default-features = false }
 prost = "0.14"
 minimp3 = "0.5"
 alsa = "0.12"
+# ESPHome API encryption (Noise_NNpsk0_25519_ChaChaPoly_SHA256)
+snow = "=0.9.6"
 
 [build-dependencies]
 slint-build = "1.18"

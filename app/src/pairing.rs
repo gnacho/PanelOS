@@ -4,7 +4,7 @@
 //! one-time code for tokens (IndieAuth: client_id and redirect_uri on the
 //! panel's own address, so Home Assistant accepts them without extra setup).
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
 
@@ -110,7 +110,7 @@ pub fn start(
             let Ok(mut stream) = stream else { continue };
             let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
             let mut line = String::new();
-            if BufReader::new(&stream).read_line(&mut line).is_err() {
+            if BufReader::new((&stream).take(8192)).read_line(&mut line).is_err() {
                 continue;
             }
             let target = line.split_whitespace().nth(1).unwrap_or("/").to_string();
@@ -129,6 +129,8 @@ pub fn start(
                             Ok(()) => {
                                 respond(&mut stream, "200 OK", "<h1>Panel connected</h1><p>You can close this page.</p>");
                                 on_paired();
+                                // Paired: the login web server is no longer needed.
+                                return;
                             }
                             Err(e) => {
                                 eprintln!("nspanel-app: pairing failed: {e}");
