@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -241,10 +242,21 @@ OPTIONS_SCHEMA = vol.Schema(
 )
 
 
+def _script_tag() -> str:
+    """The first 8 hex digits of the page script's MD5 (empty when it cannot be read)."""
+    try:
+        return hashlib.md5((FRONTEND_DIR / "panelos-page.js").read_bytes()).hexdigest()[:8]
+    except OSError:
+        return ""
+
+
 async def async_setup_page(hass: HomeAssistant) -> None:
     """Serve the page's files and register its commands (once per run)."""
+    # the integration's version and the page script's own fingerprint: a browser never keeps an
+    # older script after an update, even within one version
     version = (await async_get_integration(hass, DOMAIN)).version or "0"
-    hass.data.setdefault(DOMAIN, {})["version"] = str(version)
+    tag = await hass.async_add_executor_job(_script_tag)
+    hass.data.setdefault(DOMAIN, {})["version"] = f"{version}-{tag}"
     await hass.http.async_register_static_paths([StaticPathConfig(STATIC_URL, str(FRONTEND_DIR), cache_headers=False)])
     # The PanelOS mark as an icon ("panelos:mark") everywhere in the frontend.
     frontend.add_extra_js_url(hass, f"{STATIC_URL}/panelos-icons.js?v={version}")
