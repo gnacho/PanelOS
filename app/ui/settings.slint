@@ -1,0 +1,237 @@
+// Device settings, in the PanelOS colours. A swipe down from the status bar opens the quick shade (brightness, volume,
+// microphone, theme, do not disturb, screen off); the PanelOS mark in it opens the full settings after a hold (so children
+// do not wander in). Editors for the pages stay in Home Assistant. Every playful text here is fixed: one line per place,
+// the same every time.
+import { Icon, MarkButton } from "widgets.slint";
+import { Theme, Act } from "theme.slint";
+
+export global Brand {
+    out property <bool> dark: Theme.dark;
+    out property <color> signal: #FF4A1C;
+    out property <color> night: #000000;
+    out property <color> graphite: #121314;
+    out property <color> ink: #101114;
+    out property <color> paper: #F5F3EE;
+    out property <color> bg: dark ? #000000 : #F5F3EE;
+    out property <color> surface: dark ? #121314 : #FFFFFF;
+    out property <color> raised: dark ? #1d1f21 : #EBE8E1;
+    out property <color> text: dark ? #F5F3EE : #101114;
+    out property <color> muted: dark ? #F5F3EE.with-alpha(0.58) : #101114.with-alpha(0.6);
+    out property <color> line: dark ? #F5F3EE.with-alpha(0.10) : #101114.with-alpha(0.10);
+}
+
+// the PanelOS mark: P in Morse as two rows (dot dash / dash dot)
+export component Mark inherits Rectangle {
+    in property <length> unit: 3px;           // 1 unit = the dot radius / 10 of the 100 x 60 drawing
+    width: self.unit * 10; height: self.unit * 6;
+    Rectangle { x: 0; y: 0; width: root.unit * 2; height: root.unit * 2; border-radius: root.unit; background: Brand.signal; }
+    Rectangle { x: root.unit * 4; y: 0; width: root.unit * 6; height: root.unit * 2; border-radius: root.unit; background: Brand.dark ? Brand.paper : Brand.ink; }
+    Rectangle { x: 0; y: root.unit * 4; width: root.unit * 6; height: root.unit * 2; border-radius: root.unit; background: Brand.dark ? Brand.paper : Brand.ink; }
+    Rectangle { x: root.unit * 8; y: root.unit * 4; width: root.unit * 2; height: root.unit * 2; border-radius: root.unit; background: Brand.signal; }
+}
+
+// Follows the finger: the shown level is the finger's while it is down, the
+// app's otherwise; `changed` reports every move (final: the finger lifted).
+component Slider inherits Rectangle {
+    in property <string> icon;
+    in property <float> value;
+    callback changed(float, bool);
+    property <float> drag-v;
+    property <float> shown: touch.pressed ? root.drag-v : root.value;
+    height: 52px; border-radius: 26px; background: Brand.raised;
+    Rectangle { x: 0; y: 0; width: max(52px, parent.width * root.shown); height: parent.height; border-radius: 26px; background: Brand.signal; }
+    Icon { x: 16px; y: 0; width: 24px; height: parent.height; text: root.icon; font-size: 22px; color: Brand.paper; }
+    touch := TouchArea {
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.down {
+                root.drag-v = max(0.01, min(1, self.mouse-x / self.width));
+                root.changed(root.drag-v, false);
+            } else if ev.kind == PointerEventKind.up {
+                root.changed(root.drag-v, true);
+            }
+        }
+        moved => {
+            root.drag-v = max(0.01, min(1, self.mouse-x / self.width));
+            root.changed(root.drag-v, false);
+        }
+    }
+}
+
+component Tile inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <string> state;
+    in property <bool> on;
+    callback clicked;
+    height: 60px; border-radius: 18px;
+    background: touch.pressed ? (Brand.dark ? #2a2c2f : #DEDAD1) : root.on ? Brand.signal.with-alpha(Brand.dark ? 0.22 : 0.16) : Brand.raised;
+    Icon { x: 16px; y: 0; width: 28px; height: parent.height; text: root.icon; font-size: 24px; color: root.on ? Brand.signal : Brand.text; }
+    Text { x: 56px; y: 11px; width: parent.width - 66px; text: root.label; font-size: 14px; font-weight: 700; color: Brand.text; overflow: elide; }
+    Text { x: 56px; y: 31px; width: parent.width - 66px; text: root.state; font-size: 13px; color: Brand.muted; overflow: elide; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// A held mark: the ring fills in a second while the finger stays on it,
+// drains back when it lifts early, and `done` fires when it is full.
+component HoldMark inherits Rectangle {
+    callback done;
+    property <float> p: touch.pressed ? 1 : 0;
+    animate p { duration: touch.pressed ? 1000ms : 250ms; easing: linear; }
+    Timer { interval: 1000ms; running: touch.pressed; triggered => { root.done(); } }
+    width: 160px; height: 160px;
+    // a ring that fills clockwise while the mark is held (60 short steps)
+    for k in 60: Rectangle {
+        property <angle> a: (k / 60) * 360deg - 90deg;
+        x: 80px + 62px * cos(self.a) - 4px; y: 80px + 62px * sin(self.a) - 4px; width: 8px; height: 8px; border-radius: 4px;
+        background: k / 60 < root.p ? Brand.signal : Brand.line; }
+    Rectangle { x: 80px - 48px; y: 80px - 48px; width: 96px; height: 96px; border-radius: 48px; background: Brand.raised;
+        Mark { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; unit: 4px; } }
+    touch := TouchArea { }
+}
+
+export struct SetRow { icon: string, label: string, value: string, danger: bool }
+export struct SetBar { label: string, value: float, tint: color, text: string }
+export struct SetSeg { share: float, tint: color }
+export struct SetSection { name: string, size: string, segs: [SetSeg], rows: [SetBar], note: string }
+
+export component SettingsLayer inherits Rectangle {
+    in property <int> view;                   // 1 quick shade, 2 hold to open, 3 settings list, 4 storage, 5 restart confirm
+    in property <float> shade-pos: 1;         // the quick shade: 0 hidden above … 1 down (follows the finger)
+    in property <string> shade-title;
+    in property <float> brightness;
+    in property <float> volume;
+    in property <bool> mic-on;
+    in property <string> mic-state;
+    in property <string> theme-state;
+    in property <bool> dnd;
+    in property <string> dnd-state;
+    in property <string> sleep-state;
+    in property <string> lock-title;
+    in property <float> hold;                 // 0 … 1 while the mark is held
+    in property <string> title;
+    in property <[SetRow]> rows;
+    in property <string> tagline;
+    in property <string> page-title;
+    in property <string> page-sub;
+    in property <float> used;                 // storage: share used
+    in property <string> used-text;
+    in property <[SetBar]> bars;
+    in property <[SetSection]> sections;
+    in property <string> confirm-title;
+    in property <string> confirm-line;
+
+    // ------------------------------------------------------------------ 1 quick shade, over the current page
+    if root.view == 1 || root.view == 2: Rectangle {
+        background: #000000.with-alpha(0.5 * root.shade-pos);
+        // a tap below the shade closes it
+        TouchArea { clicked => { Act.act("shade.close", ""); } }
+        shade := Rectangle { x: 0; y: (root.shade-pos - 1) * 372px; width: parent.width; height: 360px; border-radius: 26px; background: Brand.surface;
+            Rectangle { x: 0; y: 0; width: parent.width; height: 26px; background: Brand.surface; }
+            // swallows taps between the controls; a swipe up closes the shade
+            SwipeGestureHandler {
+                handle-swipe-up: true;
+                swiped => {
+                    if self.pressed-position.y - self.current-position.y > 40px {
+                        Act.act("shade.close", "");
+                    }
+                }
+                TouchArea { }
+            }
+            Text { x: 22px; y: 22px; height: 34px; text: root.shade-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
+            MarkButton { x: parent.width - 70px; y: 15px; size: 50px; clicked => { Act.act("set.view", "2"); } }
+            Slider { x: 20px; y: 80px; width: parent.width - 40px; icon: "\u{F00DF}"; value: root.brightness;
+                changed(v, final) => { Act.act(final ? "set.brightness.done" : "set.brightness", v); } }
+            Slider { x: 20px; y: 142px; width: parent.width - 40px; icon: "\u{F057E}"; value: root.volume;
+                changed(v, final) => { if final { Act.act("set.volume", v); } } }
+            Tile { x: 20px; y: 206px; width: (parent.width - 50px) / 2; icon: root.mic-on ? "\u{F036C}" : "\u{F036D}"; label: "Microphone"; state: root.mic-state; on: root.mic-on;
+                clicked => { Act.act("set.mic", ""); } }
+            Tile { x: 30px + (parent.width - 50px) / 2; y: 206px; width: (parent.width - 50px) / 2; icon: "\u{F0594}"; label: "Theme"; state: root.theme-state; on: false;
+                clicked => { Act.act("set.theme", ""); } }
+            Tile { x: 20px; y: 276px; width: (parent.width - 50px) / 2; icon: root.dnd ? "\u{F009B}" : "\u{F009A}"; label: "Do not disturb"; state: root.dnd-state; on: root.dnd;
+                clicked => { Act.act("set.dnd", ""); } }
+            Tile { x: 30px + (parent.width - 50px) / 2; y: 276px; width: (parent.width - 50px) / 2; icon: "\u{F0F34}"; label: "Screen off"; state: root.sleep-state; on: false;
+                clicked => { Act.act("set.sleep", ""); } }
+            Rectangle { x: (parent.width - 44px) / 2; y: parent.height - 14px; width: 44px; height: 5px; border-radius: 3px; background: Brand.line.with-alpha(0.5); }
+        }
+        // ------------------------------------------------------------------ 2 hold the mark to open the settings
+        if root.view == 2: Rectangle { background: #000000a6;
+            TouchArea { clicked => { Act.act("set.view", "1"); } }
+            Rectangle { x: 40px; y: 120px; width: 400px; height: 250px; border-radius: 26px; background: Brand.surface;
+                TouchArea { }
+                Text { x: 24px; y: 22px; width: parent.width - 48px; text: root.lock-title; font-size: 23px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; horizontal-alignment: center; }
+                HoldMark { x: 200px - 80px; y: 136px - 80px; done => { Act.act("set.view", "3"); } }
+                Text { x: 24px; y: 212px; width: parent.width - 48px; text: "Hold the mark"; font-size: 14px; color: Brand.muted; horizontal-alignment: center; }
+            } }
+    }
+
+    // ------------------------------------------------------------------ 3 the settings list
+    if root.view == 3 || root.view == 5: Rectangle {
+        background: Brand.bg;
+        TouchArea { }
+        Mark { x: 22px; y: 22px; unit: 2.4px; }
+        Text { x: 60px; y: 12px; height: 34px; text: root.title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
+        Icon { x: parent.width - 48px; y: 10px; width: 36px; height: 36px; text: "\u{F0156}"; font-size: 24px; color: Brand.muted;
+            TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("shade.close", ""); } } }
+        for r[i] in root.rows: Rectangle {
+            x: 16px; y: 56px + i * 48px; width: parent.width - 32px; height: 44px; border-radius: 12px;
+            background: row-touch.pressed ? Brand.raised : Brand.surface;
+            row-touch := TouchArea { clicked => { Act.act("set.row", i); } }
+            Icon { x: 12px; y: 0; width: 26px; height: parent.height; text: r.icon; font-size: 21px; color: r.danger ? Brand.signal : Brand.text; }
+            Text { x: 48px; y: 0; width: 170px; height: parent.height; text: r.label; font-size: 15px; font-weight: 600; color: r.danger ? Brand.signal : Brand.text; vertical-alignment: center; }
+            Text { x: 200px; y: 0; width: parent.width - 236px; height: parent.height; text: r.value; font-size: 13px; color: Brand.muted; horizontal-alignment: right;
+                vertical-alignment: center; overflow: elide; }
+            if !r.danger: Icon { x: parent.width - 30px; y: 0; width: 22px; height: parent.height; text: "\u{F0142}"; font-size: 20px; color: Brand.muted; }
+        }
+        Text { x: 16px; y: parent.height - 30px; width: parent.width - 32px; text: root.tagline; font-size: 12px; color: Brand.muted; horizontal-alignment: center; }
+        // ------------------------------------------------------------------ 5 restart: are you sure
+        if root.view == 5: Rectangle { background: #000000a6;
+            TouchArea { clicked => { Act.act("set.view", "3"); } }
+            Rectangle { x: 32px; y: 140px; width: 416px; height: 200px; border-radius: 26px; background: Brand.surface;
+                TouchArea { }
+                Text { x: 24px; y: 24px; width: parent.width - 48px; text: root.confirm-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; wrap: word-wrap;
+                    horizontal-alignment: center; }
+                Text { x: 24px; y: 88px; width: parent.width - 48px; text: root.confirm-line; font-size: 14px; color: Brand.muted; wrap: word-wrap; horizontal-alignment: center; }
+                Rectangle { x: 24px; y: parent.height - 68px; width: 176px; height: 48px; border-radius: 24px;
+                    background: never.pressed ? (Brand.dark ? #2a2c2f : #DEDAD1) : Brand.raised;
+                    Text { text: "Never mind"; font-size: 15px; font-weight: 700; color: Brand.text; }
+                    never := TouchArea { clicked => { Act.act("set.view", "3"); } } }
+                // brand: button text Ink or Paper, never on a Signal ground
+                Rectangle { x: parent.width - 200px; y: parent.height - 68px; width: 176px; height: 48px; border-radius: 24px;
+                    background: restart.pressed ? Brand.text.with-alpha(0.8) : Brand.text;
+                    Text { text: "Restart"; font-size: 15px; font-weight: 700; color: Brand.bg; }
+                    restart := TouchArea { clicked => { Act.act("set.restart", ""); } } }
+            } }
+    }
+
+    // ------------------------------------------------------------------ 4 a page: storage, one section per partition
+    if root.view == 4: Rectangle {
+        background: Brand.bg;
+        TouchArea { }
+        Icon { x: 12px; y: 10px; width: 36px; height: 36px; text: "\u{F0141}"; font-size: 26px; color: Brand.text;
+            TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("set.view", "3"); } } }
+        Text { x: 52px; y: 12px; height: 34px; text: root.page-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
+        Text { x: 20px; y: 50px; width: parent.width - 40px; text: root.page-sub; font-size: 13px; color: Brand.muted; }
+        // more sections than fit: the list scrolls
+        Flickable { x: 16px; y: 76px; width: parent.width - 32px; height: parent.height - 84px;
+            viewport-height: max(self.height, col.preferred-height);
+        col := VerticalLayout { width: parent.width; spacing: 10px; alignment: start;
+            for sec in root.sections: Rectangle {
+                height: 50px + sec.rows.length * 24px + (sec.note != "" ? 20px : 0px); border-radius: 16px; background: Brand.surface;
+                Text { x: 14px; y: 10px; text: sec.name; font-size: 15px; font-weight: 700; color: Brand.text; }
+                Text { x: parent.width - 214px; y: 10px; width: 200px; text: sec.size; font-size: 13px; color: Brand.muted; horizontal-alignment: right; }
+                // the bar: one coloured part per content, the rest is free
+                Rectangle { x: 14px; y: 34px; width: parent.width - 28px; height: 8px; border-radius: 4px; background: Brand.raised; clip: true;
+                    for g[k] in sec.segs: Rectangle {
+                        property <float> before: k == 0 ? 0 : k == 1 ? sec.segs[0].share : k == 2 ? sec.segs[0].share + sec.segs[1].share : sec.segs[0].share + sec.segs[1].share + sec.segs[2].share;
+                        x: parent.width * self.before; y: 0; width: max(3px, parent.width * g.share); height: parent.height; background: g.tint; } }
+                for r[k] in sec.rows: Rectangle { x: 14px; y: 48px + k * 24px; width: parent.width - 28px; height: 24px;
+                    Rectangle { x: 0; y: 8px; width: 8px; height: 8px; border-radius: 4px; background: r.tint; }
+                    Text { x: 16px; y: 0; width: parent.width - 120px; height: parent.height; text: r.label; font-size: 13px; color: Brand.text; vertical-alignment: center; overflow: elide; }
+                    Text { x: parent.width - 100px; y: 0; width: 100px; height: parent.height; text: r.text; font-size: 13px; color: Brand.muted; horizontal-alignment: right; vertical-alignment: center; } }
+                if sec.note != "": Text { x: 14px; y: 48px + sec.rows.length * 24px; width: parent.width - 28px; text: sec.note; font-size: 12px; color: Brand.muted; overflow: elide; }
+            }
+        }
+        }
+    }
+
+}

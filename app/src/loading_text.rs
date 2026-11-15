@@ -7,32 +7,15 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use slint::ComponentHandle;
 
-use crate::MainWindow;
+use crate::AppWindow;
 
 /// The first ones say what is being done: one of them opens a load.
 const OPENERS: usize = 14;
-const LINES: [&str; 20] = [
-    "Warming up the dashboard…",
-    "Waking up Home Assistant…",
-    "Fetching all your buttons…",
-    "Dusting off the dashboard…",
-    "Herding the entities…",
-    "Polishing every tile…",
-    "Teaching the cards their places…",
-    "Summoning the dashboard…",
-    "Asking Home Assistant nicely…",
-    "Rounding up the sensors…",
-    "Counting the light bulbs…",
-    "Untangling the YAML…",
-    "Laying out your home…",
-    "Building your home, tile by tile…",
-    "The dashboard is putting on shoes.",
-    "Loading. Patience is a feature.",
-    "Still loading. Still worth it.",
-    "Any second now. Or thirty.",
-    "Big dashboard, small panel. Wait.",
-    "Hold on, the cards are shuffling.",
-];
+
+fn lines() -> &'static [String] {
+    crate::texts::list("load.lines")
+}
+
 const EVERY: Duration = Duration::from_secs(6);
 
 struct Rotation {
@@ -55,10 +38,14 @@ fn random(seed: &mut u64) -> u64 {
 }
 
 /// A load started: the first line, then the next ones until `stop`.
-pub fn start(ui: &MainWindow) {
+pub fn start(ui: &AppWindow) {
     let mut seed = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
-    let first = (random(&mut seed) % OPENERS as u64) as usize;
-    ui.set_loading_line_a(LINES[first].into());
+    let lines = lines();
+    if lines.is_empty() {
+        return;
+    }
+    let first = (random(&mut seed) % OPENERS.min(lines.len()) as u64) as usize;
+    ui.set_loading_line_a(lines[first].as_str().into());
     ui.set_loading_line_b("".into());
     ui.set_loading_show_a(true);
     let timer = slint::Timer::default();
@@ -80,18 +67,22 @@ pub fn stop() {
 }
 
 impl Rotation {
-    fn next(&mut self, ui: &MainWindow) {
-        if self.used.len() == LINES.len() {
+    fn next(&mut self, ui: &AppWindow) {
+        let lines = lines();
+        if self.used.len() >= lines.len() {
             self.used.clear();
         }
-        let free: Vec<usize> = (0..LINES.len()).filter(|i| !self.used.contains(i)).collect();
+        let free: Vec<usize> = (0..lines.len()).filter(|i| !self.used.contains(i)).collect();
+        if free.is_empty() {
+            return;
+        }
         let pick = free[(random(&mut self.seed) % free.len() as u64) as usize];
         self.used.push(pick);
         self.on_a = !self.on_a;
         if self.on_a {
-            ui.set_loading_line_a(LINES[pick].into());
+            ui.set_loading_line_a(lines[pick].as_str().into());
         } else {
-            ui.set_loading_line_b(LINES[pick].into());
+            ui.set_loading_line_b(lines[pick].as_str().into());
         }
         ui.set_loading_show_a(self.on_a);
     }

@@ -1,0 +1,515 @@
+// Calendar panel: the HA calendars picked in the integration, each in its own colour (set there too; HA has no colours).
+// Views: agenda (default; the home page's date widget opens it at today), day (timeline), 3 days, week (seven columns) and
+// month (grid with event labels; a tap on a day opens that day). A tap on any event opens its details (the home page's
+// next-event widget too), with Edit where the calendar allows it. The panel keeps the last view, across restarts too.
+// Weeks start on Monday, times are 24-hour; the app writes every label (relative times like "in 4 h 15 min" too).
+import { Theme, Act } from "theme.slint";
+import { Icon, Toggle } from "widgets.slint";
+import { Keyboard } from "overlays.slint";
+
+export struct CalEvent {
+    title: string,
+    time: string,          // "18:00–20:15", or "All day"
+    t1: string,            // agenda: the start ("18:00", "All day") and the end ("20:15")
+    t2: string,
+    cal: string,           // the calendar's name
+    tint: color,           // the calendar's colour
+    all-day: bool,
+    start: int,            // minutes from midnight (timed events; day and week grids)
+    end: int,
+    lane: int,             // side by side when events overlap: which lane, of how many (the app lays them out)
+    lanes: int,
+    day: int,              // week view: 0 Monday … 6 Sunday
+    past: bool,
+    now: bool,             // happening now
+    progress: float,       // now: how far along
+    rel: string,           // "in 4 h 15 min", "now", "" (the app writes it)
+    note: string,          // the description
+    place: string,         // the location
+    editable: bool,        // the calendar lets the panel change it (HA: update / delete supported)
+}
+
+export struct CalDay {
+    label: string,         // "Today · Sat 14 Nov", "Tomorrow", "Mon 16 Nov"
+    events: [CalEvent],
+    free: string,          // no events that day (the app picks the text)
+}
+
+export struct CalBoard {
+    time: string,          // departure board: "18:00", "--:--" (the app pads and cuts every field to its cells)
+    what: string,          // 16 cells, capitals
+    gate: string,          // 2 cells: the calendar's code
+    status: string,        // 8 cells: DEPARTED, BOARDING, ON TIME, SUN 15 …
+    state: int,            // 0 today, 1 boarding (now), 2 departed (past), 3 a later day
+}
+
+export struct WallCell {
+    num: int,
+    other-month: bool,
+    sunday: bool,
+    notes: image,          // wall calendar: the day's events written in pen (today circled), drawn by the app
+}
+
+export struct CalCell {
+    num: int,
+    other-month: bool,
+    today: bool,
+    labels: [string],      // up to two events as small labels (the app picks them), their colours, how many more
+    tints: [color],
+    more: int,
+}
+
+component ViewChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    height: 40px; width: lbl.preferred-width + 28px; border-radius: 20px;
+    background: root.on ? Theme.text : transparent;
+    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
+    lbl := Text { x: 14px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
+        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
+}
+
+// agenda: one event as a card (colour pill, start / end, title, calendar · when)
+component AgendaRow inherits Rectangle {
+    in property <CalEvent> ev;
+    height: 60px; border-radius: 14px;
+    background: Theme.surface;
+    border-width: root.ev.now ? 2px : 0px; border-color: Theme.accent;
+    opacity: root.ev.past ? 0.45 : 1;
+    Rectangle { x: 12px; y: 12px; width: 4px; height: parent.height - 24px; border-radius: 2px; background: root.ev.tint; }
+    Text { x: 26px; y: 10px; width: 58px; height: 20px; text: root.ev.t1; font-size: root.ev.all-day ? 13px : 15px; font-weight: 600; color: Theme.text;
+        vertical-alignment: center; overflow: elide; }
+    Text { x: 26px; y: 31px; width: 58px; height: 18px; text: root.ev.t2; font-size: 13px; color: Theme.muted; vertical-alignment: center; }
+    Text { x: 88px; y: 9px; width: parent.width - 102px; height: 22px; text: root.ev.title; font-size: 16px; color: Theme.text; vertical-alignment: center; overflow: elide; }
+    Text { x: 88px; y: 31px; width: parent.width - 102px; height: 18px; font-size: 13px; vertical-alignment: center; overflow: elide;
+        text: root.ev.cal + (root.ev.rel != "" ? "  ·  " + root.ev.rel : ""); color: root.ev.now ? Theme.accent : Theme.muted; }
+    if root.ev.now: Rectangle { x: 88px; y: parent.height - 7px; width: (parent.width - 102px) * root.ev.progress; height: 3px; border-radius: 1.5px; background: Theme.accent; }
+}
+
+// ---------------------------------------------------------------- departure board look (agenda as split-flap rows)
+// Today's and the coming events as departures: TIME, EVENT, the calendar's code as the gate, and a status: DEPARTED (past,
+// dimmed), BOARDING (now, green), ON TIME (later today), the day for later days. Yellow capitals on flap cells (the cell
+// strips are bitmaps; the text sits on them with a letter spacing that matches the 13 px pitch). A ticker line at the foot.
+component FlapText inherits Rectangle {
+    in property <string> text;
+    in property <int> cells;
+    in property <color> ink: #ffd23f;
+    height: 26px; width: root.cells * 13px - 1px;
+    Image { x: 0; y: 0; width: parent.width; height: 26px;
+        source: root.cells == 2 ? @image-url("cal/board-2.png") : root.cells == 5 ? @image-url("cal/board-5.png")
+            : root.cells == 8 ? @image-url("cal/board-8.png") : @image-url("cal/board-16.png"); }
+    Text { x: 1px; y: 0; width: parent.width + 13px; height: 26px; text: root.text; font-family: "DejaVu Sans Mono"; font-size: 17px; font-weight: 700;
+        letter-spacing: 2.77px; color: root.ink; vertical-alignment: center; }
+}
+
+component CalBoardLook inherits Rectangle {
+    in property <[CalBoard]> rows;
+    in property <string> clock;            // "13:45"
+    in property <string> date;             // "SAT 14 NOV"
+    in property <string> ticker;           // the app picks the line
+    in property <string> empty;            // no departures
+    background: #0b0b0c;
+    Icon { x: 16px; y: 50px; width: 26px; height: 28px; text: "\u{F05D5}"; font-size: 24px; color: #f4f4f2; }
+    Text { x: 48px; y: 50px; height: 28px; text: "DEPARTURES"; font-size: 19px; font-weight: 800; letter-spacing: 3px; color: #f4f4f2; vertical-alignment: center; }
+    Text { x: 48px; y: 74px; height: 16px; text: root.date; font-size: 11px; font-weight: 700; letter-spacing: 1.5px; color: #9a9aa0; vertical-alignment: center; }
+    FlapText { x: 396px; y: 52px; cells: 5; text: root.clock; ink: #f4f4f2; }
+    for c in [{ t: "TIME", x: 19 }, { t: "EVENT", x: 97 }, { t: "CAL", x: 318 }, { t: "STATUS", x: 357 }]: Text {
+        x: c.x * 1px; y: 94px; height: 14px; text: c.t; font-size: 10px; font-weight: 700; letter-spacing: 1.4px; color: #8a8a90; vertical-alignment: center; }
+    for r[i] in root.rows: Rectangle { x: 19px; y: 112px + i * 33px; width: 442px; height: 26px;
+        property <color> ink: r.state == 2 ? #ffd23f66 : #ffd23f;
+        FlapText { x: 0; y: 0; cells: 5; text: r.time; ink: parent.ink; }
+        FlapText { x: 78px; y: 0; cells: 16; text: r.what; ink: parent.ink; }
+        FlapText { x: 299px; y: 0; cells: 2; text: r.gate; ink: parent.ink; }
+        FlapText { x: 338px; y: 0; cells: 8; text: r.status; ink: r.state == 1 ? #4cd964 : r.state == 3 ? #f4f4f2 : parent.ink; }
+    }
+    if root.rows.length == 0: Text { x: 19px; y: 130px; width: 442px; height: 30px; text: root.empty; font-family: "DejaVu Sans Mono"; font-size: 17px;
+        font-weight: 700; color: #ffd23f; horizontal-alignment: center; vertical-alignment: center; }
+    Rectangle { x: 0; y: 418px; width: root.width; height: 26px; background: #141416;
+        Text { x: 19px; y: 0; width: 442px; height: parent.height; text: root.ticker; font-family: "DejaVu Sans Mono"; font-size: 12px; font-weight: 700;
+            letter-spacing: 1px; color: #ff9f1a; vertical-alignment: center; overflow: elide; } }
+}
+
+// ---------------------------------------------------------------- tear-off look (a page-a-day desk calendar)
+// Today's page on a block: the binding on top with the stubs of the torn pages under it, month and year, a huge day number
+// (red on Sundays), the weekday, the day's events, and a line for the day at the foot of the page. Tearing the page shows
+// the next day.
+component CalTearLook inherits Rectangle {
+    in property <string> month;            // "NOVEMBER 2026"
+    in property <int> day;
+    in property <string> weekday;          // "SATURDAY"
+    in property <bool> sunday;
+    in property <string> info;             // "week 46 · day 318"
+    in property <[CalEvent]> events;
+    in property <string> more;             // "+2 more"
+    in property <string> line;             // the day's line (the app picks it)
+    in property <string> free;
+    property <color> red: #c8202a;
+    // the pad: the pages under today's, a little offset
+    for k in [3, 2, 1]: Rectangle { x: 84px - k * 0px; y: 434px + k * 3px; width: 312px; height: 4px; background: k == 3 ? #d8d6cf : k == 2 ? #e4e2db : #efede6;
+        border-radius: 1px; }
+    Rectangle { x: 84px; y: 76px; width: 312px; height: 360px; background: #fbfaf5; drop-shadow-blur: 8px; drop-shadow-color: #00000050; drop-shadow-offset-y: 2px; }
+    // stubs of the torn pages under the binding
+    Path { x: 84px; y: 72px; width: 312px; height: 8px; viewbox-width: 312; viewbox-height: 8; fill: #efede6;
+        commands: "M 0 0 L 312 0 L 312 4 L 300 6 L 288 3 L 276 7 L 262 4 L 250 6 L 236 3 L 222 7 L 210 4 L 196 6 L 182 3 L 170 7 L 156 4 L 144 6 L 130 3 L 116 7 L 104 4 L 92 6 L 78 3 L 64 7 L 52 4 L 40 6 L 26 3 L 14 7 L 0 4 Z"; }
+    Rectangle { x: 78px; y: 52px; width: 324px; height: 24px; border-radius: 4px; background: #2a2a2e;
+        Rectangle { x: 0; y: 0; width: parent.width; height: 3px; border-radius: 2px; background: #45454b; }
+        for xx in [40, 284]: Rectangle { x: xx * 1px - 5px; y: 7px; width: 10px; height: 10px; border-radius: 5px; background: #8d8d94;
+            Rectangle { x: 2px; y: 2px; width: 4px; height: 3px; border-radius: 2px; background: #c9c9cf; } } }
+    Text { x: 84px; y: 90px; width: 312px; height: 20px; text: root.month; font-size: 14px; font-weight: 800; letter-spacing: 3px; color: root.red;
+        horizontal-alignment: center; vertical-alignment: center; }
+    Text { x: 84px; y: 104px; width: 312px; height: 150px; text: root.day; font-size: 140px; font-weight: 800; color: root.sunday ? root.red : #1d1d20;
+        horizontal-alignment: center; vertical-alignment: center; }
+    Text { x: 84px; y: 250px; width: 312px; height: 24px; text: root.weekday; font-size: 18px; font-weight: 800; letter-spacing: 4px; color: root.sunday ? root.red : #1d1d20;
+        horizontal-alignment: center; vertical-alignment: center; }
+    Text { x: 84px; y: 274px; width: 312px; height: 18px; text: root.info; font-size: 12px; color: #8a8880; horizontal-alignment: center; vertical-alignment: center; }
+    Rectangle { x: 112px; y: 300px; width: 256px; height: 1px; background: #d9d6cc; }
+    VerticalLayout { x: 112px; y: 306px; width: 256px; spacing: 0px; alignment: start;
+        for e in root.events: HorizontalLayout { height: 24px; spacing: 10px; opacity: e.past ? 0.4 : 1;
+            Text { width: 44px; text: e.all-day ? "—" : e.t1; font-size: 14px; font-weight: 700; color: #1d1d20; vertical-alignment: center; }
+            Text { text: e.title; font-size: 14px; color: #33332f; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; } }
+        if root.more != "": Text { height: 20px; text: root.more; font-size: 12px; color: #8a8880; vertical-alignment: center; }
+        if root.events.length == 0: Text { height: 24px; text: root.free; font-size: 14px; color: #8a8880; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    Text { x: 104px; y: 400px; width: 272px; height: 34px; text: root.line; font-size: 12px; color: #6f6d66; horizontal-alignment: center;
+        vertical-alignment: center; wrap: word-wrap; overflow: elide; }
+}
+
+// ---------------------------------------------------------------- wall calendar look (the month on a printed wall calendar)
+// A spiral-bound page with a photo band, the month printed in a grid; the days' events written into the cells in pen (one
+// ink per calendar), today circled in red, all drawn by the app as one image per cell. Which calendars are written in can be
+// chosen per look (daily routines would fill every cell).
+component CalWallLook inherits Rectangle {
+    in property <string> month;            // "NOVEMBER"
+    in property <string> year;
+    in property <image> photo;             // 448×88, scaled by the app
+    in property <[string]> names;          // "MON" …
+    in property <[WallCell]> cells;
+    property <color> red: #c8202a;
+    Rectangle { x: 12px; y: 48px; width: 456px; height: 432px; background: #fbfbf8; drop-shadow-blur: 8px; drop-shadow-color: #00000059; drop-shadow-offset-y: 2px; }
+    Image { x: 16px; y: 62px; width: 448px; height: 88px; source: root.photo; }
+    // the spiral: a hole in the page and a wire loop over its edge, every 23 px
+    for i in 19: Rectangle { x: 23px + i * 23px; y: 40px; width: 8px; height: 22px;
+        Rectangle { x: 0; y: 13px; width: 8px; height: 6px; border-radius: 3px; background: #2b2b2e; }
+        Rectangle { x: 2px; y: 0; width: 4px; height: 17px; border-radius: 2px; background: #9b9ba2;
+            Rectangle { x: 1px; y: 2px; width: 1px; height: 12px; background: #d4d4da; } } }
+    Text { x: 16px; y: 154px; height: 26px; text: root.month; font-size: 22px; font-weight: 800; letter-spacing: 4px; color: #1d1d20; vertical-alignment: center; }
+    Text { x: 16px; y: 154px; width: 448px; height: 26px; text: root.year; font-size: 22px; font-weight: 300; letter-spacing: 4px; color: root.red;
+        horizontal-alignment: right; vertical-alignment: center; }
+    for n[i] in root.names: Text { x: 16px + i * 64px; y: 182px; width: 64px; height: 16px; text: n; font-size: 10px; font-weight: 800; letter-spacing: 1px;
+        color: i == 6 ? root.red : #55555a; horizontal-alignment: center; vertical-alignment: center; }
+    for c[i] in root.cells: Rectangle { x: 16px + Math.mod(i, 7) * 64px; y: 200px + Math.floor(i / 7) * 46px; width: 64px; height: 46px;
+        Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: #d8d8d4; }
+        Rectangle { x: 0; y: 0; width: 1px; height: parent.height; background: #d8d8d4; }
+        Text { x: 5px; y: 2px; width: 30px; height: 14px; text: c.num; font-size: 11px; font-weight: 800;
+            color: c.other-month ? #c4c4c0 : c.sunday ? root.red : #2a2a2e; vertical-alignment: center; }
+        Image { x: 0; y: 0; width: 64px; height: 46px; source: c.notes; } }
+    Rectangle { x: 464px; y: 200px; width: 1px; height: 276px; background: #d8d8d4; }
+}
+
+export component CalendarPage inherits Rectangle {
+    in property <int> view;                // 0 agenda, 1 day, 2 week, 3 month, 4 three days (plain look)
+    in property <int> look;                // 0 plain, 1 departure board, 2 tear-off, 3 wall calendar (panel names playful, HA's plain)
+    // departure board
+    in property <[CalBoard]> board-rows;
+    in property <string> board-clock;
+    in property <string> board-date;
+    in property <string> board-ticker;
+    in property <string> board-empty;
+    // tear-off
+    in property <string> tear-month;
+    in property <int> tear-day;
+    in property <string> tear-weekday;
+    in property <bool> tear-sunday;
+    in property <string> tear-info;
+    in property <[CalEvent]> tear-events;
+    in property <string> tear-more;
+    in property <string> tear-line;
+    // wall calendar
+    in property <string> wall-month;
+    in property <string> wall-year;
+    in property <image> wall-photo;
+    in property <[WallCell]> wall-cells;
+    in property <string> title;            // "Today", "This week", "November" …
+    in property <string> sub;              // "Saturday, 14 November", "9–15 November · week 46", "2026"
+    in property <length> scroll;
+    // agenda
+    in property <[CalDay]> agenda;
+    in property <string> empty-title;      // nothing coming up at all (the app picks the texts)
+    in property <string> empty-sub;
+    // day
+    in property <[CalEvent]> day-events;
+    in property <[CalEvent]> day-allday;
+    in property <bool> day-today;
+    in property <string> day-free;
+    in property <int> now-min;             // minutes from midnight
+    // week
+    in property <[string]> week-names;     // "MON" …
+    in property <[int]> week-nums;         // 9 … 15
+    in property <int> week-today: -1;
+    in property <[CalEvent]> week-events;
+    in property <[CalEvent]> week-allday;
+    // month
+    in property <[string]> month-names;    // "M" …
+    in property <[CalCell]> month-cells;   // 42
+    // editing an event
+    in property <bool> edit;
+    in property <string> edit-title;
+    in property <string> edit-cal;
+    in property <color> edit-tint;
+    in property <string> edit-day;         // "Tue 17 Nov"
+    in property <string> edit-start;
+    in property <string> edit-end;
+    in property <bool> edit-allday;
+    in property <bool> edit-typing;        // the title being typed (keyboard)
+    in property <bool> edit-can-delete;
+    in property <int> edit-picker;         // 0 none, 1 start, 2 end: the time wheel
+    in property <[string]> edit-hours;     // the wheel's five visible rows (the middle one picked)
+    in property <[string]> edit-mins;
+    // sheets
+    in property <bool> settings;
+    // a tap on an event opens its details here (the page sets them itself)
+    in-out property <bool> detail;
+    in-out property <CalEvent> detail-ev;
+    in-out property <string> detail-when;      // "Today · 18:00–20:15"
+
+    property <length> hh: 44px;            // day view: an hour
+    property <length> wh: 24px;            // week view: an hour
+    property <length> wx: 56px;            // week view: first column
+    property <length> ww: 58px;            // week view: column width
+    property <int> gn: root.view == 4 ? 3 : 7;                  // week / 3 days: columns, their width, an hour
+    property <length> gw: (464px - root.wx) / root.gn;
+    property <length> gh: root.view == 4 ? 34px : 24px;
+    background: Theme.background;
+
+    // ---------------------------------------------------------------- header: title and date, view chip (top right), back / forward
+    if root.look == 1: CalBoardLook { rows: root.board-rows; clock: root.board-clock; date: root.board-date; ticker: root.board-ticker; empty: root.board-empty; }
+    if root.look == 2: CalTearLook { month: root.tear-month; day: root.tear-day; weekday: root.tear-weekday; sunday: root.tear-sunday; info: root.tear-info;
+        events: root.tear-events; more: root.tear-more; line: root.tear-line; free: root.day-free; }
+    if root.look == 3: CalWallLook { month: root.wall-month; year: root.wall-year; photo: root.wall-photo; names: root.week-names; cells: root.wall-cells; }
+    if root.look == 0: Text { x: 16px; y: 46px; width: 330px; height: 34px; text: root.title; font-size: 24px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
+    if root.look == 0: Text { x: 16px; y: 80px; width: 330px; height: 20px; text: root.sub; font-size: 14px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
+    Rectangle {
+        x: root.width - 16px - self.width; y: 10px; height: 32px; width: vn.preferred-width + 66px; border-radius: 16px;
+        background: root.look == 1 ? #ffffff1f : Theme.dark ? #ffffff1f : #00000012;
+        Icon { x: 12px; y: 0; width: 20px; height: parent.height; font-size: 18px; color: (root.look == 1 ? #ffffff : Theme.text).with-alpha(0.9);
+            text: root.look == 1 ? "\u{F05D5}" : root.look == 2 ? "\u{F1A30}" : root.look == 3 ? "\u{F0E18}"
+                : root.view == 0 ? "\u{F0C46}" : root.view == 1 ? "\u{F1A30}" : root.view == 2 ? "\u{F1A34}" : root.view == 4 ? "\u{F0B68}" : "\u{F0E18}"; }
+        vn := Text { x: 36px; y: 0; width: self.preferred-width; height: parent.height; font-size: 14px; font-weight: 600; color: root.look == 1 ? #ffffff : Theme.text;
+            vertical-alignment: center;
+            text: root.look == 1 ? "Now Boarding" : root.look == 2 ? "Seize the Day" : root.look == 3 ? "Hang in There"
+                : root.view == 0 ? "Agenda" : root.view == 1 ? "Day" : root.view == 2 ? "Week" : root.view == 4 ? "3 days" : "Month"; }
+        Icon { x: parent.width - 26px; y: 0; width: 18px; height: parent.height; text: "\u{F0140}"; font-size: 18px; color: root.look == 1 ? #ffffffb0 : Theme.muted; }
+    }
+    if root.look == 0 && root.view != 0: Rectangle { x: 372px; y: 52px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
+        Icon { text: "\u{F0141}"; font-size: 24px; color: Theme.text; } }
+    if root.look == 0 && root.view != 0: Rectangle { x: 424px; y: 52px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
+        Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.text; } }
+
+    // ---------------------------------------------------------------- agenda: days with their events, today's past ones faded
+    if root.look == 0 && root.view == 0: Flickable {
+        x: 0; y: 104px; width: root.width; height: root.height - 104px;
+        content-width: root.width; content-height: max(self.height, al.preferred-height); content-y: -root.scroll;
+        al := VerticalLayout {
+            x: 0; y: 0; width: root.width; padding-left: 16px; padding-right: 16px; padding-top: 4px; padding-bottom: 40px; spacing: 8px; alignment: start;
+            for d in root.agenda: VerticalLayout { spacing: 8px;
+                Text { height: 30px; text: d.label; font-size: 13px; font-weight: 600; color: Theme.muted; vertical-alignment: bottom; overflow: elide; }
+                for e in d.events: AgendaRow { ev: e;
+                    TouchArea { clicked => { root.detail-ev = e; root.detail-when = d.label + " · " + e.time; root.detail = true; } } }
+                if d.events.length == 0: Text { height: 22px; text: d.free; font-size: 14px; color: Theme.faint; vertical-alignment: center; overflow: elide; }
+            }
+            if root.agenda.length == 0: Rectangle { height: 220px;
+                Icon { x: 0; y: 30px; width: parent.width; height: 72px; text: "\u{F0C44}"; font-size: 64px; color: Theme.faint; }
+                Text { x: 0; y: 112px; width: parent.width; height: 30px; text: root.empty-title; font-size: 22px; font-weight: 600; color: Theme.text;
+                    horizontal-alignment: center; overflow: elide; }
+                Text { x: 24px; y: 144px; width: parent.width - 48px; height: 44px; text: root.empty-sub; font-size: 15px; color: Theme.muted;
+                    horizontal-alignment: center; wrap: word-wrap; overflow: elide; }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- day: all-day events on top, the hours below with a now line
+    if root.look == 0 && root.view == 1: HorizontalLayout {
+        x: 16px; y: 104px; width: 448px; height: 28px; spacing: 6px; alignment: start;
+        for e in root.day-allday: Rectangle { height: 26px; width: min(at.preferred-width + 20px, 220px); border-radius: 13px; background: e.tint.with-alpha(0.25);
+            at := Text { x: 10px; y: 0; width: parent.width - 20px; height: parent.height; text: e.title; font-size: 13px; font-weight: 600; color: Theme.text;
+                vertical-alignment: center; overflow: elide; } }
+        if root.day-allday.length == 0: Text { height: 26px; text: root.day-events.length == 0 ? root.day-free : ""; font-size: 14px; color: Theme.faint;
+            vertical-alignment: center; overflow: elide; }
+    }
+    if root.look == 0 && root.view == 1: Flickable {
+        x: 0; y: 140px; width: root.width; height: root.height - 140px;
+        content-width: root.width; content-height: 24 * root.hh + 40px; content-y: -root.scroll;
+        for h in 25: Rectangle { x: 0; y: h * root.hh; width: root.width; height: 1px;
+            Rectangle { x: 60px; y: 0; width: root.width - 76px; height: 1px; background: Theme.outline; }
+            if h < 24: Text { x: 12px; y: -8px; width: 40px; height: 16px; text: (h < 10 ? "0" : "") + h + ":00"; font-size: 12px; color: Theme.muted;
+                horizontal-alignment: right; vertical-alignment: center; } }
+        for e in root.day-events: db := Rectangle {
+            x: 66px + e.lane * (398px / max(1, e.lanes)); width: 398px / max(1, e.lanes) - 4px;
+            y: e.start / 60 * root.hh + 1px; height: max(22px, (e.end - e.start) / 60 * root.hh - 2px);
+            border-radius: 8px; background: e.tint.with-alpha(Theme.dark ? 0.28 : 0.22); opacity: e.past ? 0.5 : 1;
+            Rectangle { x: 5px; y: 5px; width: 3px; height: parent.height - 10px; border-radius: 1.5px; background: e.tint; }
+            Text { x: 14px; y: 3px; width: parent.width - 20px; height: 18px; text: e.title; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
+            if db.height >= 40px: Text { x: 14px; y: 20px; width: parent.width - 20px; height: 16px; text: e.time; font-size: 12px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
+        }
+        if root.day-today: Rectangle { x: 52px; y: root.now-min / 60 * root.hh - 4px; width: root.width - 68px; height: 8px;
+            Rectangle { x: 0; y: 0; width: 8px; height: 8px; border-radius: 4px; background: Theme.accent; }
+            Rectangle { x: 6px; y: 3px; width: parent.width - 6px; height: 2px; background: Theme.accent; } }
+    }
+
+    // ---------------------------------------------------------------- week and 3 days: day heads, all-day row, columns of hours
+    // Overlapping events sit side by side; past three lanes (week) or four (3 days) the app folds the rest into a "+n" block.
+    if root.look == 0 && (root.view == 2 || root.view == 4): Rectangle { x: 0; y: 100px; width: root.width; height: 44px;
+        for n[i] in root.week-names: Rectangle { x: root.wx + i * root.gw; y: 0; width: root.gw; height: 44px;
+            Text { x: 0; y: 0; width: parent.width; height: 16px; text: n; font-size: 11px; font-weight: 600; color: i == root.week-today ? Theme.accent : Theme.muted;
+                horizontal-alignment: center; vertical-alignment: center; }
+            Text { x: 0; y: 16px; width: parent.width; height: 26px; text: root.week-nums[i]; font-size: 15px; font-weight: 600;
+                color: i == root.week-today ? Theme.accent : Theme.text; horizontal-alignment: center; vertical-alignment: center; } } }
+    if root.look == 0 && (root.view == 2 || root.view == 4): Rectangle { x: 0; y: 146px; width: root.width; height: 22px;
+        for e in root.week-allday: Rectangle { x: root.wx + e.day * root.gw + 1px; y: 0; width: root.gw - 2px; height: 20px; border-radius: 5px; background: e.tint.with-alpha(0.32);
+            Text { x: 4px; y: 0; width: parent.width - 8px; height: parent.height; text: e.title; font-size: root.view == 4 ? 12px : 10px; font-weight: 600; color: Theme.text;
+                vertical-alignment: center; overflow: elide; } } }
+    if root.look == 0 && (root.view == 2 || root.view == 4): Flickable {
+        x: 0; y: 172px; width: root.width; height: root.height - 172px;
+        content-width: root.width; content-height: 24 * root.gh + 40px; content-y: -root.scroll;
+        if root.week-today >= 0: Rectangle { x: root.wx + root.week-today * root.gw; y: 0; width: root.gw; height: 24 * root.gh; background: Theme.surface.with-alpha(0.6); }
+        for h in 25: Rectangle { x: 0; y: h * root.gh; width: root.width; height: 1px;
+            Rectangle { x: root.wx; y: 0; width: root.gn * root.gw; height: 1px; background: Theme.outline; }
+            if h < 24 && Math.mod(h, root.view == 4 ? 1 : 2) == 0: Text { x: 8px; y: -8px; width: 40px; height: 16px; text: (h < 10 ? "0" : "") + h; font-size: 11px;
+                color: Theme.muted; horizontal-alignment: right; vertical-alignment: center; } }
+        for i in root.gn + 1: Rectangle { x: root.wx + i * root.gw; y: 0; width: 1px; height: 24 * root.gh; background: Theme.outline.with-alpha(0.6); }
+        for e in root.week-events: wb := Rectangle {
+            x: root.wx + e.day * root.gw + 2px + e.lane * ((root.gw - 4px) / max(1, e.lanes)); width: (root.gw - 4px) / max(1, e.lanes) - 1px;
+            y: e.start / 60 * root.gh + 1px; height: max(12px, (e.end - e.start) / 60 * root.gh - 2px);
+            border-radius: 5px; background: e.tint.with-alpha(Theme.dark ? 0.38 : 0.30); opacity: e.past ? 0.5 : 1;
+            Rectangle { x: 0; y: 0; width: 2px; height: parent.height; background: e.tint; }
+            // narrow lanes keep only their colour (and the "+n" of a folded group)
+            if wb.height >= 18px && (wb.width >= 26px || e.title.character-count <= 3): Text { x: wb.width >= 26px ? 5px : 3px; y: 1px; width: parent.width - 7px; height: root.view == 4 ? 17px : 14px; text: e.title;
+                font-size: root.view == 4 ? 12px : 10px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
+            if root.view == 4 && wb.height >= 34px: Text { x: 5px; y: 17px; width: parent.width - 7px; height: 14px; text: e.time; font-size: 11px; color: Theme.muted;
+                vertical-alignment: center; overflow: elide; }
+        }
+        if root.week-today >= 0: Rectangle { x: root.wx + root.week-today * root.gw - 3px; y: root.now-min / 60 * root.gh - 3px; width: root.gw + 3px; height: 6px;
+            Rectangle { x: 0; y: 0; width: 6px; height: 6px; border-radius: 3px; background: Theme.accent; }
+            Rectangle { x: 4px; y: 2px; width: parent.width - 4px; height: 2px; background: Theme.accent; } }
+    }
+
+    // ---------------------------------------------------------------- month: the grid with up to two event labels a day (a tap opens that day)
+    if root.look == 0 && root.view == 3: Rectangle { x: 0; y: 102px; width: root.width; height: 360px;
+        for n[i] in root.month-names: Text { x: 16px + i * 64px; y: 0; width: 64px; height: 18px; text: n; font-size: 11px; font-weight: 600; color: Theme.muted;
+            horizontal-alignment: center; vertical-alignment: center; }
+        for c[i] in root.month-cells: Rectangle { x: 16px + Math.mod(i, 7) * 64px; y: 20px + Math.floor(i / 7) * 56px; width: 64px; height: 56px;
+            Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: Theme.outline; }
+            Text { x: 3px; y: 4px; width: 22px; height: 22px; text: c.num; font-size: 13px; font-weight: c.today ? 700 : 500;
+                color: c.today ? Theme.accent : c.other-month ? Theme.faint : Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+            if c.more > 0: Text { x: parent.width - 30px; y: 4px; width: 27px; height: 22px; text: "+" + c.more; font-size: 11px; color: Theme.muted;
+                horizontal-alignment: right; vertical-alignment: center; }
+            for t[k] in c.labels: Rectangle { x: 2px; y: 27px + k * 14px; width: parent.width - 4px; height: 13px; border-radius: 3px;
+                background: c.tints[k].with-alpha(Theme.dark ? 0.34 : 0.26); opacity: c.other-month ? 0.45 : 1;
+                Rectangle { x: 0; y: 0; width: 2px; height: parent.height; background: c.tints[k]; }
+                Text { x: 4px; y: 0; width: parent.width - 6px; height: parent.height; text: t; font-size: 10px; font-weight: 600; color: Theme.text;
+                    vertical-alignment: center; overflow: elide; } } } }
+
+    // ---------------------------------------------------------------- the page's sheet: the view
+    if root.settings: Rectangle { background: #00000080; }
+    if root.settings: Rectangle {
+        property <length> need: 72px + (root.look == 0 ? 3 : 2) * 52px - 12px + 26px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; height: 28px; text: "Calendar"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Icon { x: 110px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
+            ViewChip { text: "Plain Sailing"; on: root.look == 0; }
+            ViewChip { text: "Now Boarding"; on: root.look == 1; } }
+        HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
+            ViewChip { text: "Seize the Day"; on: root.look == 2; }
+            ViewChip { text: "Hang in There"; on: root.look == 3; } }
+        if root.look == 0: HorizontalLayout { x: 24px; y: 176px; height: 40px; spacing: 8px; alignment: start;
+            ViewChip { text: "Agenda"; on: root.view == 0; }
+            ViewChip { text: "Day"; on: root.view == 1; }
+            ViewChip { text: "3 days"; on: root.view == 4; }
+            ViewChip { text: "Week"; on: root.view == 2; }
+            ViewChip { text: "Month"; on: root.view == 3; } }
+    }
+
+    // ---------------------------------------------------------------- an event's details (tap on an event, or the home page's next-event widget)
+    if root.detail: Rectangle { background: #00000080; TouchArea { clicked => { root.detail = false; } } }
+    if root.detail: Rectangle {
+        property <length> need: dl.preferred-height + 24px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        TouchArea { }
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        dl := VerticalLayout { x: 24px; y: 24px; width: parent.width - 48px; spacing: 6px; alignment: start;
+            HorizontalLayout { spacing: 8px; height: 20px; alignment: start;
+                VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 5px; background: root.detail-ev.tint; } }
+                Text { text: root.detail-ev.cal; font-size: 13px; font-weight: 600; color: Theme.muted; vertical-alignment: center; overflow: elide; } }
+            Text { text: root.detail-ev.title; font-size: 21px; font-weight: 600; color: Theme.text; wrap: word-wrap; }
+            HorizontalLayout { spacing: 8px; alignment: start; padding-top: 4px;
+                Icon { width: 20px; text: "\u{F0150}"; font-size: 18px; color: Theme.muted; }
+                Text { text: root.detail-when; font-size: 15px; color: Theme.text; vertical-alignment: center; overflow: elide; } }
+            if root.detail-ev.rel != "": Text { text: root.detail-ev.rel; font-size: 14px; font-weight: 600; color: Theme.accent; }
+            if root.detail-ev.place != "": HorizontalLayout { spacing: 8px; alignment: start;
+                Icon { width: 20px; text: "\u{F07D9}"; font-size: 18px; color: Theme.muted; }
+                Text { text: root.detail-ev.place; font-size: 15px; color: Theme.text; vertical-alignment: center; overflow: elide; } }
+            if root.detail-ev.note != "": Rectangle { height: min(nt.preferred-height, 60px); clip: true;
+                nt := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.detail-ev.note; font-size: 14px; color: Theme.muted; wrap: word-wrap; overflow: elide; } }
+            if root.detail-ev.editable: HorizontalLayout { padding-top: 8px; alignment: start;
+                Rectangle { width: 120px; height: 44px; border-radius: 22px; background: Theme.text;
+                    HorizontalLayout { alignment: center; spacing: 8px;
+                        Icon { width: 20px; text: "\u{F0CB6}"; font-size: 18px; color: Theme.background; }
+                        Text { text: "Edit"; font-size: 15px; font-weight: 600; color: Theme.background; vertical-alignment: center; } } } }
+            if !root.detail-ev.editable: HorizontalLayout { padding-top: 6px; spacing: 6px; alignment: start;
+                Icon { width: 18px; text: "\u{F0341}"; font-size: 16px; color: Theme.faint; }
+                Text { text: "Read-only calendar"; font-size: 13px; color: Theme.faint; vertical-alignment: center; } }
+            Rectangle { height: 8px; }
+        }
+    }
+
+    // ---------------------------------------------------------------- editing an event (only calendars that allow it)
+    if root.edit: Rectangle {
+        background: Theme.background;
+        Rectangle { x: 16px; y: 46px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
+            Icon { text: "\u{F0156}"; font-size: 22px; color: Theme.text; } }
+        Text { x: 68px; y: 46px; width: 300px; height: 40px; text: "Edit event"; font-size: 20px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Rectangle { x: 384px; y: 46px; width: 80px; height: 40px; border-radius: 20px; background: Theme.text;
+            Text { text: "Save"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; } }
+        Rectangle { x: 16px; y: 102px; width: 10px; height: 10px; border-radius: 5px; background: root.edit-tint; }
+        Text { x: 32px; y: 96px; width: 300px; height: 22px; text: root.edit-cal; font-size: 13px; font-weight: 600; color: Theme.muted; vertical-alignment: center; }
+        Rectangle { x: 16px; y: 122px; width: 448px; height: 46px; border-radius: 14px; background: Theme.surface;
+            border-width: root.edit-typing ? 2px : 1px; border-color: root.edit-typing ? Theme.accent : Theme.outline;
+            Rectangle { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; clip: true;
+                et := Text { x: min(0px, parent.width - 4px - self.preferred-width); y: 0; width: self.preferred-width; height: parent.height;
+                    text: root.edit-title; font-size: 17px; color: Theme.text; vertical-alignment: center; }
+                if root.edit-typing: Rectangle { x: et.x + et.preferred-width + 1px; y: 11px; width: 2px; height: 24px; background: Theme.accent; } } }
+        if !root.edit-typing: VerticalLayout { x: 16px; y: 182px; width: 448px; spacing: 8px; alignment: start;
+            for r in [{ l: "Day", v: root.edit-day, show: true }, { l: "Starts", v: root.edit-start, show: !root.edit-allday },
+                      { l: "Ends", v: root.edit-end, show: !root.edit-allday }]: Rectangle {
+                height: r.show ? 48px : 0px; visible: r.show; border-radius: 14px; background: Theme.surface;
+                Text { x: 16px; y: 0; height: parent.height; text: r.l; font-size: 15px; color: Theme.text; vertical-alignment: center; }
+                Rectangle { x: parent.width - 12px - self.width; y: 8px; height: 32px; width: vt.preferred-width + 28px; border-radius: 16px; background: Theme.surface-raised;
+                    vt := Text { x: 14px; y: 0; width: self.preferred-width; height: parent.height; text: r.v; font-size: 15px; font-weight: 600; color: Theme.text;
+                        vertical-alignment: center; } } }
+            Rectangle { height: 48px; border-radius: 14px; background: Theme.surface;
+                Text { x: 16px; y: 0; height: parent.height; text: "All day"; font-size: 15px; color: Theme.text; vertical-alignment: center; }
+                Toggle { x: parent.width - 12px - self.width; y: 8px; on: root.edit-allday; } }
+        }
+        if !root.edit-typing && root.edit-can-delete: Text { x: 16px; y: 406px; width: 448px; height: 36px; text: "Delete event"; font-size: 15px; font-weight: 600;
+            color: Theme.danger; horizontal-alignment: center; vertical-alignment: center; }
+        if root.edit-typing: Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; enter-label: "Done"; }
+    }
+    if root.edit && root.edit-picker > 0: Rectangle { background: #00000080; }
+    if root.edit && root.edit-picker > 0: Rectangle {
+        property <length> need: 72px + 5 * 40px + 20px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; height: 28px; text: root.edit-picker == 1 ? "Starts" : "Ends"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        // the wheel: the picked row in a band in the middle, the others fading away from it
+        Rectangle { x: 120px; y: 68px + 2 * 40px; width: 240px; height: 40px; border-radius: 12px; background: Theme.surface-raised; }
+        for hv[i] in root.edit-hours: Text { x: 140px; y: 68px + i * 40px; width: 80px; height: 40px; text: hv; horizontal-alignment: center; vertical-alignment: center;
+            font-size: i == 2 ? 26px : 20px; font-weight: i == 2 ? 600 : 400; color: i == 2 ? Theme.text : Theme.muted.with-alpha(i == 1 || i == 3 ? 0.8 : 0.4); }
+        Text { x: 220px; y: 68px + 2 * 40px; width: 40px; height: 40px; text: ":"; font-size: 26px; font-weight: 600; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
+        for mv[i] in root.edit-mins: Text { x: 260px; y: 68px + i * 40px; width: 80px; height: 40px; text: mv; horizontal-alignment: center; vertical-alignment: center;
+            font-size: i == 2 ? 26px : 20px; font-weight: i == 2 ? 600 : 400; color: i == 2 ? Theme.text : Theme.muted.with-alpha(i == 1 || i == 3 ? 0.8 : 0.4); }
+    }
+}

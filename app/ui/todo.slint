@@ -1,0 +1,492 @@
+// To-do panel: one HA to-do list (shopping, tasks …). Open items with a round check (a ticked item stays struck through for a
+// moment, then moves down), due dates and notes under the item, the completed items folded under a header, a list picker,
+// adding with the keyboard. Which lists show is set in the HA integration.
+import { Theme, Act } from "theme.slint";
+import { Icon, GlowText } from "widgets.slint";
+import { Keyboard } from "overlays.slint";
+
+export struct TodoItem {
+    text: string,
+    note: string,          // the item's description (its first line), "" none
+    due: string,           // the due date as the app writes it ("Today", "Tomorrow 18:00", "Mon", "Nov 20"), "" none
+    due-state: int,        // 0 later, 1 today, 2 overdue
+    done: bool,            // in the open list: just ticked (struck through until the app moves it down)
+    tape: image,           // label maker look: the item on its tape (due date and note on small tapes), drawn by the app
+    hand: image,           // notepad look: the item written on the pad's rows (36 px each), drawn by the app
+}
+
+export struct TodoList {
+    name: string,
+    icon: string,
+    open: int,             // items still to do
+    tint: int,             // the list's colour in the label maker look: 0 red, 1 blue, 2 green, 3 black
+}
+
+// one item: check, text (up to two lines), the due date and note under it
+component TodoRow inherits Rectangle {
+    in property <TodoItem> item;
+    in property <bool> completed;          // under "Completed": a muted check
+    property <bool> meta: root.item.due != "" || root.item.note != "";
+    property <color> due-col: root.item.due-state == 2 ? Theme.danger : root.item.due-state == 1 ? Theme.warning : Theme.muted;
+    border-radius: 14px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding-left: 14px; padding-right: 16px; padding-top: 16px; padding-bottom: 17px; spacing: 12px;
+        // the check, on the first line
+        VerticalLayout { alignment: start;
+            Rectangle { width: 26px; height: 23px;
+                Rectangle { y: -1.5px; width: 26px; height: 26px; border-radius: 13px;
+                    background: root.completed ? Theme.surface-raised : root.item.done ? Theme.accent : transparent;
+                    border-width: root.item.done ? 0px : 2px; border-color: Theme.faint;
+                    if root.item.done: Icon { text: "\u{F012C}"; font-size: 18px; color: root.completed ? Theme.muted : #ffffff; }
+                }
+            }
+        }
+        VerticalLayout { alignment: start; spacing: 2px; horizontal-stretch: 1;
+            // open: up to two lines; ticked / completed: one line, faint, struck through
+            if !root.item.done: Rectangle { height: ot.preferred-height > 30px ? 47px : 23px; clip: true;
+                ot := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.item.text; font-size: 17px; color: Theme.text;
+                    wrap: word-wrap; overflow: elide; }
+            }
+            if root.item.done: Rectangle { height: 23px;
+                dt := Text { x: 0; width: parent.width; height: parent.height; text: root.item.text; font-size: 17px; color: Theme.faint;
+                    vertical-alignment: center; overflow: elide; }
+                Rectangle { x: 0; y: 12px; width: min(parent.width, dt.preferred-width); height: 1.5px; background: Theme.faint; }
+            }
+            if root.meta && !root.item.done: HorizontalLayout { spacing: 4px; height: 18px;
+                if root.item.due != "": Icon { width: 16px; text: root.item.due-state == 2 ? "\u{F1B62}" : "\u{F0B67}"; font-size: 14px; color: root.due-col; }
+                if root.item.due != "": Text { text: root.item.due; font-size: 13px; font-weight: root.item.due-state > 0 ? 600 : 400; color: root.due-col;
+                    vertical-alignment: center; }
+                if root.item.due != "" && root.item.note != "": Text { text: "  ·  "; font-size: 13px; color: Theme.faint; vertical-alignment: center; }
+                if root.item.note != "": Text { text: root.item.note; font-size: 13px; color: Theme.muted; vertical-alignment: center; overflow: elide;
+                    horizontal-stretch: 1; }
+                if root.item.note == "": Rectangle { horizontal-stretch: 1; }
+            }
+        }
+    }
+}
+
+component DueChip inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> on;
+    height: 40px; width: lbl.preferred-width + 54px; border-radius: 20px;
+    background: root.on ? Theme.text : transparent;
+    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
+    Icon { x: 14px; y: 0; width: 20px; height: parent.height; text: root.icon; font-size: 18px; color: root.on ? Theme.background : Theme.muted; }
+    lbl := Text { x: 40px; y: 0; width: self.preferred-width; height: parent.height; text: root.text; font-size: 14px; font-weight: 500;
+        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
+}
+
+// ---------------------------------------------------------------- look chips (the page's sheet)
+component LookChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    height: 40px; width: lbl.preferred-width + 28px; border-radius: 20px;
+    background: root.on ? Theme.text : transparent;
+    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
+    lbl := Text { x: 14px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
+        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
+}
+
+// ---------------------------------------------------------------- receipt look (a thermal paper strip, monospace capitals)
+// The list scrolls as one long receipt with torn edges; a tick fills the box; overdue dates are printed inverted (as thermal
+// printers do), today's in bold; the completed items fold under DONE; a footer line and a barcode at the end.
+component ReceiptDashes inherits Rectangle {
+    in property <color> ink;
+    height: 14px;
+    for i in 32: Rectangle { x: i * 10px; y: 6px; width: 6px; height: 1.5px; background: root.ink; }
+}
+
+component ReceiptRow inherits Rectangle {
+    in property <TodoItem> item;
+    in property <color> ink;
+    in property <color> paper;
+    property <bool> meta: root.item.note != "" && !root.item.done;
+    property <bool> has-due: root.item.due != "" && !root.item.done;
+    property <length> dw: root.has-due ? dm.preferred-width + (root.item.due-state == 2 ? 10px : 0px) + 10px : 0px;
+    height: root.meta ? 52px : 34px;
+    dm := Text { visible: false; text: root.item.due.to-uppercase(); font-family: "DejaVu Sans Mono"; font-size: 13px;
+        font-weight: root.item.due-state >= 1 ? 700 : 400; }
+    Rectangle { x: 0; y: 10px; width: 14px; height: 14px; border-width: 1.5px; border-color: root.ink;
+        background: root.item.done ? root.ink : transparent;
+        if root.item.done: Icon { text: "\u{F012C}"; font-size: 12px; color: root.paper; } }
+    tx := Text { x: 24px; y: 0; width: parent.width - 24px - root.dw; height: 34px; text: root.item.text.to-uppercase(); font-family: "DejaVu Sans Mono";
+        font-size: 15px; color: root.item.done ? root.ink.with-alpha(0.5) : root.ink; vertical-alignment: center; overflow: elide; }
+    if root.item.done: Rectangle { x: 24px; y: 16.5px; width: min(tx.width, tx.preferred-width); height: 1.5px; background: root.ink.with-alpha(0.7); }
+    if root.has-due: Rectangle {
+        x: parent.width - self.width; y: 8px; height: 18px; width: dm.preferred-width + (root.item.due-state == 2 ? 10px : 0px);
+        background: root.item.due-state == 2 ? root.ink : transparent;
+        Text { x: root.item.due-state == 2 ? 5px : 0px; y: 0; width: dm.preferred-width; height: parent.height; text: root.item.due.to-uppercase();
+            font-family: "DejaVu Sans Mono"; font-size: 13px; font-weight: root.item.due-state >= 1 ? 700 : 400;
+            color: root.item.due-state == 2 ? root.paper : root.ink; vertical-alignment: center; }
+    }
+    if root.meta: Text { x: 24px; y: 30px; width: parent.width - 24px; height: 18px; text: "> " + root.item.note.to-uppercase(); font-family: "DejaVu Sans Mono";
+        font-size: 12px; color: root.ink.with-alpha(0.72); vertical-alignment: center; overflow: elide; }
+}
+
+component TodoReceipt inherits Rectangle {
+    in property <TodoList> l;
+    in property <[TodoItem]> open-items;
+    in property <[TodoItem]> done-items;
+    in property <bool> show-done;
+    in property <length> scroll;
+    in property <string> stamp;            // date and time, printed under the list name
+    in property <string> footer;
+    in property <string> empty;
+    property <color> paper: #f4f1e8;
+    property <color> ink: #2b2a28;
+    Flickable {
+        x: 0; y: 44px; width: root.width; height: root.height - 44px;
+        content-width: root.width;
+        content-height: max(self.height, rc.preferred-height + 56px);
+        content-y: -root.scroll;
+        Rectangle { x: 40px; y: 14px; width: 360px; height: rc.preferred-height - 12px; background: root.paper;
+            drop-shadow-blur: 10px; drop-shadow-color: #00000059; drop-shadow-offset-y: 2px; }
+        Path { x: 40px; y: 8px; width: 360px; height: 7px; viewbox-width: 360; viewbox-height: 7; fill: root.paper; commands: "M 0 7 L 0 4 L 4 0 L 8 4 L 12 0 L 16 4 L 20 0 L 24 4 L 28 0 L 32 4 L 36 0 L 40 4 L 44 0 L 48 4 L 52 0 L 56 4 L 60 0 L 64 4 L 68 0 L 72 4 L 76 0 L 80 4 L 84 0 L 88 4 L 92 0 L 96 4 L 100 0 L 104 4 L 108 0 L 112 4 L 116 0 L 120 4 L 124 0 L 128 4 L 132 0 L 136 4 L 140 0 L 144 4 L 148 0 L 152 4 L 156 0 L 160 4 L 164 0 L 168 4 L 172 0 L 176 4 L 180 0 L 184 4 L 188 0 L 192 4 L 196 0 L 200 4 L 204 0 L 208 4 L 212 0 L 216 4 L 220 0 L 224 4 L 228 0 L 232 4 L 236 0 L 240 4 L 244 0 L 248 4 L 252 0 L 256 4 L 260 0 L 264 4 L 268 0 L 272 4 L 276 0 L 280 4 L 284 0 L 288 4 L 292 0 L 296 4 L 300 0 L 304 4 L 308 0 L 312 4 L 316 0 L 320 4 L 324 0 L 328 4 L 332 0 L 336 4 L 340 0 L 344 4 L 348 0 L 352 4 L 356 0 L 360 4 L 360 7 Z"; }
+        Path { x: 40px; y: rc.preferred-height + 1px; width: 360px; height: 7px; viewbox-width: 360; viewbox-height: 7; fill: root.paper; commands: "M 0 0 L 0 3 L 4 7 L 8 3 L 12 7 L 16 3 L 20 7 L 24 3 L 28 7 L 32 3 L 36 7 L 40 3 L 44 7 L 48 3 L 52 7 L 56 3 L 60 7 L 64 3 L 68 7 L 72 3 L 76 7 L 80 3 L 84 7 L 88 3 L 92 7 L 96 3 L 100 7 L 104 3 L 108 7 L 112 3 L 116 7 L 120 3 L 124 7 L 128 3 L 132 7 L 136 3 L 140 7 L 144 3 L 148 7 L 152 3 L 156 7 L 160 3 L 164 7 L 168 3 L 172 7 L 176 3 L 180 7 L 184 3 L 188 7 L 192 3 L 196 7 L 200 3 L 204 7 L 208 3 L 212 7 L 216 3 L 220 7 L 224 3 L 228 7 L 232 3 L 236 7 L 240 3 L 244 7 L 248 3 L 252 7 L 256 3 L 260 7 L 264 3 L 268 7 L 272 3 L 276 7 L 280 3 L 284 7 L 288 3 L 292 7 L 296 3 L 300 7 L 304 3 L 308 7 L 312 3 L 316 7 L 320 3 L 324 7 L 328 3 L 332 7 L 336 3 L 340 7 L 344 3 L 348 7 L 352 3 L 356 7 L 360 3 L 360 0 Z"; }
+        rc := VerticalLayout {
+            x: 60px; y: 8px; width: 320px; padding-top: 24px; padding-bottom: 30px; spacing: 0px; alignment: start;
+            Icon { height: 36px; text: root.l.icon; font-size: 28px; color: root.ink; }
+            Text { height: 26px; text: root.l.name.to-uppercase(); font-family: "DejaVu Sans Mono"; font-size: 18px; font-weight: 700; color: root.ink;
+                horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+            Text { height: 22px; text: root.stamp; font-family: "DejaVu Sans Mono"; font-size: 13px; color: root.ink;
+                horizontal-alignment: center; vertical-alignment: center; }
+            ReceiptDashes { ink: root.ink; }
+            for it in root.open-items: ReceiptRow { item: it; ink: root.ink; paper: root.paper; }
+            if root.open-items.length == 0: Text { height: 60px; text: root.empty; font-family: "DejaVu Sans Mono"; font-size: 15px; font-weight: 700;
+                color: root.ink; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+            ReceiptDashes { ink: root.ink; }
+            Rectangle { height: 28px;
+                Text { x: 0; y: 0; height: parent.height; text: "ITEMS LEFT"; font-family: "DejaVu Sans Mono"; font-size: 14px; color: root.ink; vertical-alignment: center; }
+                Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.open-items.length; font-family: "DejaVu Sans Mono"; font-size: 14px;
+                    font-weight: 700; color: root.ink; horizontal-alignment: right; vertical-alignment: center; }
+            }
+            if root.done-items.length > 0: Rectangle { height: 30px;
+                Text { x: 0; y: 0; height: parent.height; text: "DONE"; font-family: "DejaVu Sans Mono"; font-size: 14px; color: root.ink; vertical-alignment: center; }
+                Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.done-items.length + (root.show-done ? "  ▲" : "  ▼");
+                    font-family: "DejaVu Sans Mono"; font-size: 14px; font-weight: 700; color: root.ink; horizontal-alignment: right; vertical-alignment: center; }
+            }
+            if root.show-done: VerticalLayout {
+                for it in root.done-items: ReceiptRow { item: it; ink: root.ink; paper: root.paper; }
+            }
+            ReceiptDashes { ink: root.ink; }
+            Text { height: 34px; text: root.footer; font-family: "DejaVu Sans Mono"; font-size: 13px; color: root.ink;
+                horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+            Rectangle { height: 48px;
+                for b in [{ x: 0, w: 2 }, { x: 4, w: 2 }, { x: 7, w: 1 }, { x: 9, w: 2 }, { x: 12, w: 3 }, { x: 17, w: 1 }, { x: 19, w: 2 }, { x: 24, w: 1 }, { x: 27, w: 1 }, { x: 31, w: 1 }, { x: 33, w: 1 }, { x: 35, w: 3 }, { x: 41, w: 1 }, { x: 44, w: 1 }, { x: 47, w: 2 }, { x: 52, w: 1 }, { x: 54, w: 3 }, { x: 59, w: 3 }, { x: 64, w: 1 }, { x: 67, w: 2 }, { x: 70, w: 3 }, { x: 74, w: 3 }, { x: 78, w: 3 }, { x: 83, w: 2 }, { x: 88, w: 2 }, { x: 93, w: 3 }, { x: 99, w: 2 }, { x: 103, w: 1 }, { x: 106, w: 4 }, { x: 112, w: 1 }, { x: 115, w: 3 }, { x: 121, w: 2 }, { x: 126, w: 2 }, { x: 129, w: 1 }, { x: 133, w: 1 }, { x: 136, w: 1 }, { x: 140, w: 2 }, { x: 143, w: 4 }, { x: 148, w: 3 }, { x: 153, w: 2 }, { x: 157, w: 3 }, { x: 163, w: 3 }, { x: 169, w: 1 }, { x: 171, w: 2 }, { x: 176, w: 4 }, { x: 181, w: 1 }, { x: 184, w: 4 }, { x: 191, w: 2 }]: Rectangle { x: (parent.width - 200px) / 2 + b.x * 1px; y: 4px; width: b.w * 1px; height: 40px; background: root.ink; }
+            }
+            Text { height: 18px; text: "*" + root.open-items.length + "-" + root.done-items.length + "*"; font-family: "DejaVu Sans Mono"; font-size: 12px;
+                color: root.ink; horizontal-alignment: center; vertical-alignment: center; }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- terminal look (green phosphor, monospace, scanlines)
+// The header is the command that listed the list (tap: other lists); [ ] / [x] items; the due date and note on a second
+// line (overdue red, today amber); the prompt at the bottom with a block cursor is where you tap to add.
+component TermLine inherits Rectangle {
+    in property <string> text;
+    in property <color> ink;
+    in property <bool> glow: true;
+    in property <length> fs: 16px;
+    GlowText { width: parent.width; height: parent.height; text: root.text; family: "DejaVu Sans Mono"; font-size: root.fs; color: root.ink;
+        neon: root.glow; glow: root.ink; k: 0; overflow: elide; }
+}
+
+component TermRow inherits Rectangle {
+    in property <TodoItem> item;
+    in property <color> g;
+    in property <color> dim;
+    property <bool> meta: !root.item.done && (root.item.due != "" || root.item.note != "");
+    property <color> due-col: root.item.due == "" ? root.dim : root.item.due-state == 2 ? #ff5f56 : root.item.due-state == 1 ? #ffcc33 : root.dim;
+    height: root.meta ? 54px : 32px;
+    TermLine { x: 0; y: 0; width: parent.width; height: 32px; text: (root.item.done ? "[x] " : "[ ] ") + root.item.text;
+        ink: root.item.done ? root.dim : root.g; glow: !root.item.done; }
+    if root.meta: TermLine { x: 0; y: 26px; width: parent.width; height: 24px; fs: 14px; ink: root.due-col; glow: root.item.due != "" && root.item.due-state > 0;
+        text: "    " + (root.item.due != "" ? (root.item.due-state == 2 ? "!! overdue " : "> due ") + root.item.due.to-lowercase() : "")
+            + (root.item.due != "" && root.item.note != "" ? "  " : "") + (root.item.note != "" ? "# " + root.item.note : ""); }
+}
+
+component TodoTerminal inherits Rectangle {
+    in property <TodoList> l;
+    in property <[TodoItem]> open-items;
+    in property <[TodoItem]> done-items;
+    in property <bool> show-done;
+    in property <length> scroll;
+    in property <string> empty;
+    property <color> g: #3dff74;
+    property <color> dim: #3dff74.with-alpha(0.5);
+    background: #030803;
+    TermLine { x: 20px; y: 44px; width: 440px; height: 30px; text: "panel@home:~$ todo --list " + root.l.name; ink: root.g; }
+    TermLine { x: 20px; y: 72px; width: 440px; height: 24px; fs: 14px; ink: root.dim; glow: false;
+        text: root.open-items.length + " open, " + root.done-items.length + " done"; }
+    Flickable {
+        x: 0; y: 104px; width: root.width; height: 308px;
+        content-width: root.width;
+        content-height: max(self.height, tl.preferred-height);
+        content-y: -root.scroll;
+        tl := VerticalLayout {
+            x: 20px; y: 0; width: 440px; padding-top: 4px; padding-bottom: 8px; spacing: 0px; alignment: start;
+            for it in root.open-items: TermRow { item: it; g: root.g; dim: root.dim; }
+            if root.open-items.length == 0: TermLine { height: 40px; text: root.empty; ink: root.g; }
+            if root.done-items.length > 0: TermLine { height: 36px; ink: root.dim; glow: false;
+                text: "-- " + root.done-items.length + " done (tap to " + (root.show-done ? "hide" : "show") + ") --"; }
+            if root.show-done: VerticalLayout {
+                for it in root.done-items: TermRow { item: it; g: root.g; dim: root.dim; }
+            }
+        }
+    }
+    // the prompt: tap to add
+    TermLine { x: 20px; y: 420px; width: 150px; height: 30px; text: "panel@home:~$"; ink: root.g; }
+    Rectangle { x: 20px + 14 * 9.63px; y: 426px; width: 10px; height: 18px; background: root.g; }
+    TermLine { x: 20px + 16 * 9.63px; y: 420px; width: 280px; height: 30px; fs: 14px; text: "# tap to add"; ink: root.dim; glow: false; }
+    Image { x: 0; y: 0; width: 480px; height: 480px; source: @image-url("todo/term-scan.png"); }
+}
+
+// ---------------------------------------------------------------- label maker look (embossed label tape)
+// The app draws each item's tape as a bitmap, at 1:1, random but stable for the item (seeded by its id): a tilt of a few
+// degrees, uneven cut ends with stress-whitened, thinned edges, raised capitals sitting a little unevenly; the due date
+// (overdue red, today yellow, later white) and the note on small tapes; a ticked or completed item gets a raised bar over
+// every letter, as a machine strikes, and fades. (The software renderer can neither rotate nor shape such a strip.)
+component TodoLabels inherits Rectangle {
+    in property <[TodoItem]> open-items;
+    in property <[TodoItem]> done-items;
+    in property <bool> show-done;
+    in property <length> scroll;
+    in property <image> head;              // the list name and what is left, on tape
+    in property <image> done-head;         // "DONE · n" on tape
+    in property <image> empty-tape;        // nothing left (the app picks the text)
+    in property <string> empty-sub;
+    Image { x: 12px; y: 40px; width: root.head.width * 1px; height: root.head.height * 1px; source: root.head; }
+    Flickable {
+        x: 0; y: 104px; width: root.width; height: root.height - 104px;
+        content-width: root.width;
+        content-height: max(self.height, ll.preferred-height);
+        content-y: -root.scroll;
+        ll := VerticalLayout {
+            x: 0; y: 0; width: root.width; padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 40px; spacing: 2px; alignment: start;
+            for it in root.open-items: HorizontalLayout { alignment: start;
+                Image { width: it.tape.width * 1px; height: it.tape.height * 1px; source: it.tape; } }
+            if root.open-items.length == 0: VerticalLayout { padding-top: 40px; padding-bottom: 24px; spacing: 10px;
+                HorizontalLayout { alignment: center; Image { width: root.empty-tape.width * 1px; height: root.empty-tape.height * 1px; source: root.empty-tape; } }
+                Text { height: 44px; text: root.empty-sub; font-size: 15px; color: Theme.muted; horizontal-alignment: center; wrap: word-wrap; }
+            }
+            if root.done-items.length > 0: HorizontalLayout { padding-top: 8px; spacing: 4px; alignment: start;
+                Image { width: root.done-head.width * 1px; height: root.done-head.height * 1px; source: root.done-head; }
+                Icon { width: 22px; text: root.show-done ? "\u{F0143}" : "\u{F0140}"; font-size: 20px; color: Theme.faint; }
+            }
+            if root.show-done: VerticalLayout { spacing: 2px;
+                for it in root.done-items: HorizontalLayout { alignment: start;
+                    Image { width: it.tape.width * 1px; height: it.tape.height * 1px; source: it.tape; } }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- notepad look (a yellow legal pad, handwriting)
+// The app writes every line itself with a handwriting font: each letter with its own small tilt, size and baseline wobble
+// and slightly uneven ink; boxes, ticks, strike-throughs, the circle round an overdue date and the line under today's are
+// pen strokes. Random but stable per item (seeded by its id). Rows are 36 px, on the pad's ruled lines; the list name sits
+// in the top margin; the pad scrolls with its lines.
+component TodoNotepad inherits Rectangle {
+    in property <[TodoItem]> open-items;
+    in property <[TodoItem]> done-items;
+    in property <bool> show-done;
+    in property <length> scroll;
+    in property <image> head;              // the list name and what is left, written in the top margin
+    in property <image> done-row;          // "Done (n)" in pencil, with a little arrow
+    in property <image> empty-rows;        // nothing left (the app picks the texts)
+    property <length> top: 98px;           // the first ruled line, under the top margin
+    property <length> pad-h: max(root.height - 60px, root.top + nl.preferred-height + 72px);
+    Flickable {
+        x: 0; y: 44px; width: root.width; height: root.height - 44px;
+        content-width: root.width;
+        content-height: root.pad-h + 16px;
+        content-y: -root.scroll;
+        Rectangle {
+            x: 16px; y: 8px; width: 388px; height: root.pad-h; background: #f6edaa;
+            drop-shadow-blur: 10px; drop-shadow-color: #00000059; drop-shadow-offset-y: 2px;
+            // ruled lines, the double margin line, the gummed binding at the top
+            for k in Math.floor((root.pad-h - root.top) / 36px) + 1: Rectangle { x: 0; y: root.top + k * 36px; width: parent.width; height: 1px; background: #7da0c899; }
+            Rectangle { x: 58px; y: 18px; width: 1px; height: parent.height - 18px; background: #e05a5ab3; }
+            Rectangle { x: 62px; y: 18px; width: 1px; height: parent.height - 18px; background: #e05a5ab3; }
+            Rectangle { x: 0; y: 0; width: parent.width; height: 18px; background: #6d1f24; }
+            Rectangle { x: 0; y: 18px; width: parent.width; height: 2px; background: #00000026; }
+            Image { x: 0; y: 18px; width: root.head.width * 1px; height: root.head.height * 1px; source: root.head; }
+            nl := VerticalLayout {
+                x: 0; y: root.top; width: parent.width; spacing: 0px; alignment: start;
+                for it in root.open-items: Image { width: it.hand.width * 1px; height: it.hand.height * 1px; source: it.hand; }
+                if root.open-items.length == 0: Image { width: root.empty-rows.width * 1px; height: root.empty-rows.height * 1px; source: root.empty-rows; }
+                if root.done-items.length > 0: Image { width: root.done-row.width * 1px; height: root.done-row.height * 1px; source: root.done-row; }
+                if root.show-done: VerticalLayout { spacing: 0px;
+                    for it in root.done-items: Image { width: it.hand.width * 1px; height: it.hand.height * 1px; source: it.hand; }
+                }
+            }
+        }
+    }
+}
+
+export component TodoPage inherits Rectangle {
+    in property <[TodoList]> lists;
+    in property <int> sel;
+    in property <[TodoItem]> open-items;
+    in property <[TodoItem]> done-items;
+    in property <bool> show-done;          // the completed items unfolded
+    in property <length> scroll;           // how far the list is scrolled
+    in property <bool> picker;             // the list picker sheet
+    in property <string> empty-title;      // nothing left to do (the app picks the texts)
+    in property <string> empty-sub;
+    // adding an item
+    in property <bool> adding;
+    in property <string> draft;
+    in property <bool> can-due;            // the list takes due dates
+    in property <int> due-pick: -1;        // 0 today, 1 tomorrow, 2 a picked date
+    in property <string> due-picked;       // the picked date's label
+    in property <int> kb-layer;
+    // looks: 0 plain, 1 receipt, 2 terminal, 3 label maker, 4 notepad (panel names are playful, HA's plain); the page's look sheet
+    in property <int> look;
+    in property <bool> settings;
+    in property <string> stamp;            // receipt: date and time
+    in property <string> receipt-footer;   // the app picks these texts
+    in property <string> receipt-empty;
+    in property <string> term-empty;
+    in property <image> label-head;        // label maker look: tapes the app draws
+    in property <image> label-done-head;
+    in property <image> label-empty-tape;
+    in property <image> note-head;         // notepad look: lines the app writes
+    in property <image> note-done;
+    in property <image> note-empty;
+
+    property <TodoList> l: root.lists[root.sel];
+    property <int> n-open: root.open-items.length;
+    // the page behind the list: the receipt lies on a darker counter in light mode, so the paper stands out
+    property <color> page-bg: root.look == 1 && !Theme.dark ? #d6d6dc : Theme.background;
+    pure function fade-at(k: float, n: int) -> float {      // k strips in from the edge of n: 1 at the edge, eased to 0
+        return 1 - (k / n) * (k / n) * (3 - 2 * k / n);
+    }
+    background: root.page-bg;
+
+    if root.look == 0: Rectangle {
+        // ---------------------------------------------------------------- header: the list (tap: other lists), what is left, add
+        HorizontalLayout {
+            x: 16px; y: 46px; width: 380px; height: 34px; spacing: 6px; alignment: start;
+            Text { text: root.l.name; font-size: 24px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide;
+                max-width: root.lists.length > 1 ? 350px : 380px; }
+            if root.lists.length > 1: Icon { width: 22px; text: "\u{F0140}"; font-size: 22px; color: Theme.muted; }
+        }
+        Text { x: 16px; y: 80px; height: 20px; text: root.n-open == 0 ? "Nothing left" : root.n-open == 1 ? "1 to do" : root.n-open + " to do";
+            font-size: 14px; color: Theme.muted; vertical-alignment: center; }
+
+        // ---------------------------------------------------------------- the items (scroll; room under the last one for the page dots)
+        Flickable {
+            x: 0; y: 104px; width: root.width; height: root.height - 104px;
+            content-width: root.width;
+            content-height: max(self.height, lay.preferred-height);
+            content-y: -root.scroll;
+            lay := VerticalLayout {
+                x: 0; y: 0; width: root.width;
+                padding-left: 16px; padding-right: 16px; padding-top: 8px; padding-bottom: 40px; spacing: 8px; alignment: start;
+                for it[i] in root.open-items: TodoRow { item: it;
+                    TouchArea { clicked => { Act.act("todo.check", i); } } }
+                // nothing left: a calm empty state (the completed ones stay below)
+                if root.n-open == 0: Rectangle { height: 196px;
+                    Icon { x: 0; y: 22px; width: parent.width; height: 72px; text: "\u{F05E1}"; font-size: 64px; color: Theme.faint; }
+                    Text { x: 0; y: 104px; width: parent.width; height: 30px; text: root.empty-title; font-size: 22px; font-weight: 600; color: Theme.text;
+                        horizontal-alignment: center; overflow: elide; }
+                    Text { x: 24px; y: 136px; width: parent.width - 48px; height: 44px; text: root.empty-sub; font-size: 15px; color: Theme.muted;
+                        horizontal-alignment: center; wrap: word-wrap; overflow: elide; }
+                }
+                if root.done-items.length > 0: Rectangle { height: 44px;
+                    TouchArea { clicked => { Act.act("todo.done-toggle", ""); } }
+                    HorizontalLayout { padding-left: 4px; spacing: 8px; alignment: start;
+                        Text { text: "Completed"; font-size: 15px; font-weight: 600; color: Theme.muted; vertical-alignment: center; }
+                        Text { text: root.done-items.length; font-size: 15px; color: Theme.faint; vertical-alignment: center; }
+                        Icon { width: 20px; text: root.show-done ? "\u{F0143}" : "\u{F0140}"; font-size: 20px; color: Theme.faint; }
+                    }
+                }
+                if root.show-done: VerticalLayout { spacing: 8px;
+                    for it[i] in root.done-items: TodoRow { item: it; completed: true;
+                        TouchArea { clicked => { Act.act("todo.uncheck", i); } } }
+                }
+            }
+        }
+    }
+    if root.look == 1: TodoReceipt { l: root.l; open-items: root.open-items; done-items: root.done-items; show-done: root.show-done; scroll: root.scroll;
+        stamp: root.stamp; footer: root.receipt-footer; empty: root.receipt-empty; }
+    if root.look == 2: TodoTerminal { l: root.l; open-items: root.open-items; done-items: root.done-items; show-done: root.show-done; scroll: root.scroll;
+        empty: root.term-empty; }
+    if root.look == 3: TodoLabels { open-items: root.open-items; done-items: root.done-items; show-done: root.show-done; scroll: root.scroll;
+        head: root.label-head; done-head: root.label-done-head; empty-tape: root.label-empty-tape; empty-sub: root.empty-sub; }
+    if root.look == 4: TodoNotepad { open-items: root.open-items; done-items: root.done-items; show-done: root.show-done; scroll: root.scroll;
+        head: root.note-head; done-row: root.note-done; empty-rows: root.note-empty; }
+
+    for i in (root.look == 2 ? 0 : 2): Rectangle { y: (root.look == 1 || root.look == 4 ? 44px : 104px) + i * 4px; height: 4px;     // over the list's top padding: unscrolled rows stay clear
+        background: @linear-gradient(180deg, root.page-bg.with-alpha(root.fade-at(i, 2)) 0%, root.page-bg.with-alpha(root.fade-at(i + 1, 2)) 100%); }
+    for i in (root.look == 2 ? 0 : 10): Rectangle { y: root.height - (i + 1) * 4px; height: 4px;
+        background: @linear-gradient(180deg, root.page-bg.with-alpha(root.fade-at(i + 1, 10)) 0%, root.page-bg.with-alpha(root.fade-at(i, 10)) 100%); }
+    // add (drawn over the edge fades; the terminal look adds from its prompt)
+    if root.look != 2: Rectangle { x: 416px; y: 48px; width: 48px; height: 48px; border-radius: 24px; background: Theme.accent;
+        Icon { text: "\u{F0415}"; font-size: 28px; color: #ffffff; } }
+
+    // ---------------------------------------------------------------- the page's sheet: the look
+    if root.settings: Rectangle { background: #00000080; }
+    if root.settings: Rectangle {
+        property <length> need: 72px + 2 * 52px - 12px + 26px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; height: 28px; text: "To-do"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Icon { x: 80px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
+            LookChip { text: "Clean Slate"; on: root.look == 0; }
+            LookChip { text: "Paper Trail"; on: root.look == 1; }
+            LookChip { text: "Root Access"; on: root.look == 2; } }
+        HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
+            LookChip { text: "Label Me Impressed"; on: root.look == 3; }
+            LookChip { text: "Note to Self"; on: root.look == 4; } }
+    }
+
+    // ---------------------------------------------------------------- list picker (tap on the list name)
+    if root.picker: Rectangle { background: #00000080; }
+    if root.picker: Rectangle {
+        property <length> need: 72px + root.lists.length * 56px - 4px + 26px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; height: 28px; text: "Lists"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Icon { x: 76px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
+        for li[i] in root.lists: Rectangle {
+            x: 16px; y: 68px + i * 56px; width: parent.width - 32px; height: 52px; border-radius: 14px;
+            background: i == root.sel ? Theme.surface-raised : transparent;
+            Icon { x: 14px; y: 0; width: 24px; height: parent.height; text: li.icon; font-size: 22px; color: i == root.sel ? Theme.accent : Theme.muted; }
+            Text { x: 50px; y: 0; width: parent.width - 140px; height: parent.height; text: li.name; font-size: 16px; font-weight: i == root.sel ? 600 : 400;
+                color: Theme.text; vertical-alignment: center; overflow: elide; }
+            Text { x: parent.width - 80px; y: 0; width: 40px; height: parent.height; text: li.open > 0 ? li.open : ""; font-size: 15px; color: Theme.muted;
+                horizontal-alignment: right; vertical-alignment: center; }
+            if i == root.sel: Icon { x: parent.width - 34px; y: 0; width: 22px; height: parent.height; text: "\u{F012C}"; font-size: 20px; color: Theme.accent; }
+        }
+    }
+
+    // ---------------------------------------------------------------- adding an item: the field, due date chips (lists that take one), keyboard
+    if root.adding: Rectangle {
+        background: Theme.background;
+        Rectangle { x: 16px; y: 46px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
+            Icon { text: "\u{F0156}"; font-size: 22px; color: Theme.text; } }
+        Text { x: 68px; y: 46px; width: 396px; height: 40px; text: "Add to " + root.l.name; font-size: 20px; font-weight: 600; color: Theme.text;
+            vertical-alignment: center; overflow: elide; }
+        Rectangle { x: 16px; y: 102px; width: 448px; height: 46px; border-radius: 14px; background: Theme.surface; border-width: 2px; border-color: Theme.accent;
+            Rectangle { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; clip: true;
+                dr := Text { x: min(0px, parent.width - 4px - self.preferred-width); y: 0; width: self.preferred-width; height: parent.height;
+                    text: root.draft; font-size: 17px; color: Theme.text; vertical-alignment: center; }
+                Rectangle { x: root.draft == "" ? 0px : dr.x + dr.preferred-width + 1px; y: 11px; width: 2px; height: 24px; background: Theme.accent; }
+                if root.draft == "": Text { x: 6px; y: 0; height: parent.height; text: "New item"; font-size: 17px; color: Theme.faint; vertical-alignment: center; }
+            }
+        }
+        if root.can-due: HorizontalLayout { x: 16px; y: 164px; height: 40px; spacing: 8px; alignment: start;
+            DueChip { text: "Today"; icon: "\u{F00F6}"; on: root.due-pick == 0; }
+            DueChip { text: "Tomorrow"; icon: "\u{F0B67}"; on: root.due-pick == 1; }
+            DueChip { text: root.due-pick == 2 ? root.due-picked : "Pick a date"; icon: "\u{F0B67}"; on: root.due-pick == 2; }
+        }
+        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; enter-label: "Add"; }
+    }
+}

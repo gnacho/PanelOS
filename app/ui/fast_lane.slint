@@ -1,0 +1,34 @@
+// Home page background "In the Fast Lane": one of the four synthwave scenes, no weather. The day view is
+// always the sunset one (the city: daylight, no sun), the night view always night; the beach also has a
+// dawn view for the morning. Around sunset and sunrise the app fades from one view to the next (back-a /
+// floor-a → back-b / floor-b by mix), which turns the big sun into the moon and back. The app also gives
+// the view's colour (grid: the moving floor lines, the widgets' accent and their neon glow) mixed the
+// same way. Nothing else changes with the time of day; the moving parts are the timers page's ones
+// (floor lines, cars — can be switched off —, palms on the beach, a shooting star on the stars scene at night).
+import { SynthScene, SwCar } from "timers.slint";
+
+export component FastLane inherits Rectangle {
+    in property <int> scene;              // 0 sunset, 1 city, 2 beach, 3 stars
+    in property <image> back-a;           // the view faded from …
+    in property <image> floor-a;
+    in property <image> back-b;           // … and the view faded to (mix 0 = only a, 1 = only b)
+    in property <image> floor-b;
+    in property <float> mix;
+    in property <color> grid;             // the view's colour, mixed by the app during a fade
+    in property <float> star-k;           // shooting star: how much night it is
+    in property <float> t;                // seconds, for the floor lines and the shooting star
+    in property <[SwCar]> cars;           // empty when the cars are switched off
+    in property <image> palm-l;
+    in property <image> palm-r;
+    background: #07020f;
+
+    SynthScene {
+        back: root.back-a; floor: root.floor-a; back2: root.back-b; floor2: root.floor-b; mix: root.mix;
+        scene: root.scene; grid: root.grid; t: root.t; cars: root.cars; palm-l: root.palm-l; palm-r: root.palm-r;
+        star-k: root.star-k;
+    }
+    // legibility for the white widget text: the drawn themes' soft top / bottom scrims (half strength)
+    Rectangle { y: 0; height: 90px; opacity: 0.5; background: @linear-gradient(180deg, #00000040 0%, #00000000 100%); }
+    Rectangle { y: root.height - 230px; height: 230px; opacity: 0.5; background: @linear-gradient(180deg, #00000000 0%, #00000059 100%); }
+    @children
+}

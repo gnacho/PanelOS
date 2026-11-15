@@ -1,0 +1,252 @@
+// Camera panel: one camera live (the whole picture over its blurred copy, or filling the screen), all cameras as a grid
+// (also the camera picker), and the visitor overlay (doorbell / someone at the door) above any panel.
+// The app scales every frame to the size it is shown at (the software renderer scales images without filtering).
+import { Theme, Act } from "theme.slint";
+import { Icon, GlowText } from "widgets.slint";
+
+export struct CamItem {
+    name: string,
+    frame: image,          // the latest frame at the size of the current view
+    state: int,            // 0 live, 1 offline, 2 privacy mode
+}
+
+// a linked entity, as set up in the integration (entity, label, icon; shown as icon only, label only, or both):
+// an empty icon gives a label-only pill, an empty text an icon-only one
+export struct CamAction {
+    icon: string,
+    text: string,
+    tap: bool,             // false: display only (a sensor)
+}
+
+// glass pill over a picture: icon + label, icon only (round) or label only; white with the soft rim.
+// The label is at most 92 px (elided), so three pills with icons always fit in 448 px.
+component GlassPill inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> light;          // over the light veil (fill the screen, light mode): dark ink, no glow
+    property <bool> has-icon: root.icon != "";
+    property <bool> has-text: root.text != "";
+    property <length> lw: root.has-text ? min(pt.preferred-width, 92px) : 0px;
+    height: 36px; border-radius: 18px;
+    width: !root.has-text ? 36px : root.has-icon ? root.lw + 52px : root.lw + 28px;
+    background: root.light ? #0000000f : #ffffff2b; border-width: 1px; border-color: root.light ? #0000001a : #ffffff3d;
+    if root.has-icon: GlowText { x: root.has-text ? 13px : 8px; y: 0; width: 20px; height: parent.height; icon: true; text: root.icon; font-size: 18px;
+        color: root.light ? #18181b : #ffffff; k: root.light ? 0 : 1; horizontal-alignment: center; }
+    pt := GlowText { x: root.has-icon ? 39px : 14px; y: 0; width: root.lw; height: parent.height; visible: root.has-text; text: root.text;
+        font-size: 14px; font-weight: 600; color: root.light ? #18181b : #ffffff; k: root.light ? 0 : 1; overflow: elide; }
+}
+
+// rounded corners over a square picture, in the colour behind it (one colour, or one per corner: top left, top right,
+// bottom left, bottom right)
+component Corners inherits Rectangle {
+    in property <length> r: 14px;
+    in property <color> fill;
+    in property <[color]> fills;
+    for c[i] in [0, 1, 2, 3]: Path {
+        x: Math.mod(i, 2) == 0 ? 0 : root.width - root.r; y: i < 2 ? 0 : root.height - root.r; width: root.r; height: root.r;
+        viewbox-width: 10; viewbox-height: 10; fill: root.fills.length == 4 ? root.fills[i] : root.fill;
+        commands: i == 0 ? "M 0 0 L 10 0 A 10 10 0 0 0 0 10 Z" : i == 1 ? "M 10 0 L 10 10 A 10 10 0 0 0 0 0 Z"
+                : i == 2 ? "M 0 10 L 0 0 A 10 10 0 0 0 10 10 Z" : "M 10 10 L 0 10 A 10 10 0 0 0 10 0 Z";
+    }
+}
+
+component SheetChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    height: 40px; width: lbl.preferred-width + 28px; border-radius: 20px;
+    background: root.on ? Theme.text : transparent;
+    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
+    lbl := Text { x: 14px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
+        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
+}
+
+// a camera that shows no picture: offline or privacy mode
+component NoPicture inherits Rectangle {
+    in property <int> state;
+    in property <length> icon-size: 30px;
+    in property <bool> big;
+    background: Theme.surface;
+    Icon { x: 0; y: root.big ? root.height / 2 - 70px : root.height / 2 - 34px; width: root.width; height: root.icon-size + 8px;
+        text: root.state == 2 ? "\u{F06D1}" : "\u{F19BF}"; font-size: root.icon-size; color: Theme.faint; horizontal-alignment: center; }
+    Text { x: 8px; y: root.big ? root.height / 2 - 10px : root.height / 2 + 4px; width: root.width - 16px; height: 22px;
+        text: root.state == 2 ? "Privacy mode" : "Offline"; font-size: root.big ? 18px : 13px; font-weight: root.big ? 600 : 500;
+        color: root.big ? Theme.text : Theme.muted; horizontal-alignment: center; }
+}
+
+export component CameraPage inherits Rectangle {
+    in property <[CamItem]> cams;
+    in property <int> sel;
+    in property <int> view;                // 0 one camera, 1 all cameras (grid; also the picker)
+    in property <int> fit;                 // 0 the whole picture over its blurred copy, 1 fill the screen (cropped)
+    in property <image> bg;                // the blurred copy of the frame (the app refreshes it now and then)
+    in property <[color]> bg-corners;      // the blurred copy's colour at the picture's four corners (read when the copy is refreshed)
+    in property <[CamAction]> actions;     // the camera's linked entities (lock, door sensor, light …) from HA
+    in property <bool> settings;           // the page's settings sheet
+    in property <length> grid-scroll;      // all cameras: how far the grid is scrolled (the app brings the selected camera into view)
+    // visitor overlay (doorbell, or what HA is set to treat as one), above any panel
+    in property <bool> ring;
+    in property <image> ring-frame;
+    in property <image> ring-bg;
+    in property <string> ring-title;
+    in property <string> ring-sub;         // camera · time
+    in property <[CamAction]> ring-state;  // door sensor, lock
+    in property <bool> can-open;           // a lock / opener is linked
+    in property <bool> can-talk;           // the camera has a speaker
+    in property <float> hold;              // 0 … 1: holding "open"
+    in property <float> pulse: 1;
+    in property <bool> replies;            // the reply sheet (tap on talk)
+    in property <[string]> reply-list;
+
+    property <CamItem> c: root.cams[root.sel];
+    // filling the screen: a veil at the top and bottom for the status line, chip, badge and buttons, black in dark mode, white in light
+    // mode (then the ink is dark). Eased (smoothstep): no visible edge where it ends. Drawn in 8 px strips with one gradient stop each
+    // (the software renderer leaves a 1 px seam at an inner stop).
+    property <bool> veiled: root.view == 0 && root.c.state == 0 && root.fit == 1;
+    property <bool> light-veil: root.veiled && !Theme.dark;
+    property <color> veil: root.light-veil ? #ffffff : #000000;
+    property <float> veil-a: root.light-veil ? 0.9 : 0.8;          // at the screen edge
+    property <int> veil-tn: 9;                                     // top: 72 px
+    property <int> veil-bn: root.actions.length > 0 ? 14 : 7;      // bottom: 112 px with buttons, 56 px with only the page dots
+    pure function veil-at(k: float, n: int) -> float {             // k strips in from the edge of n
+        return root.veil-a * (1 - (k / n) * (k / n) * (3 - 2 * k / n));
+    }
+    property <int> n: root.cams.length;
+    property <int> rows: root.n > 4 ? 3 : 2;
+    property <length> tw: 220px;
+    property <length> th: root.rows == 3 ? 125px : 192px;
+
+    // ---------------------------------------------------------------- one camera
+    if root.view == 0 && root.c.state == 0 && root.fit == 0: Image { x: 0; y: 0; width: 480px; height: 480px; source: root.bg; }
+    // the whole picture, inset with rounded corners: corner shapes over it in the blurred copy's colour at each corner
+    // (no round clip in the renderer; the copy is so blurred that one colour per corner matches it)
+    if root.view == 0 && root.c.state == 0 && root.fit == 0: Image { x: 16px; y: 114px; width: 448px; height: 252px; source: root.c.frame; }
+    if root.view == 0 && root.c.state == 0 && root.fit == 0: Corners { x: 16px; y: 114px; width: 448px; height: 252px; fills: root.bg-corners; }
+    if root.view == 0 && root.c.state == 0 && root.fit == 1: Image { x: 0; y: 0; width: 480px; height: 480px; source: root.c.frame; }
+    if root.view == 0 && root.c.state != 0: NoPicture { x: 0; y: 0; width: 480px; height: 480px; state: root.c.state; big: true; icon-size: 56px;
+        background: Theme.background; }
+    for i in (root.veiled ? root.veil-tn : 0): Rectangle {
+        y: i * 8px; height: 8px;
+        background: @linear-gradient(180deg, root.veil.with-alpha(root.veil-at(i, root.veil-tn)) 0%, root.veil.with-alpha(root.veil-at(i + 1, root.veil-tn)) 100%);
+    }
+    for i in (root.veiled ? root.veil-bn : 0): Rectangle {
+        y: root.height - (i + 1) * 8px; height: 8px;
+        background: @linear-gradient(180deg, root.veil.with-alpha(root.veil-at(i + 1, root.veil-bn)) 0%, root.veil.with-alpha(root.veil-at(i, root.veil-bn)) 100%);
+    }
+    // live badge top right (the camera prints its own name / time top left), the linked entities (up to three) at the bottom
+    if root.view == 0 && root.c.state == 0: Rectangle {
+        x: root.width - (root.fit == 0 ? 26px : 16px) - self.width; y: root.fit == 0 ? 124px : 54px; width: lv.preferred-width + 34px; height: 26px; border-radius: 13px; background: #e8262d;
+        Rectangle { x: 11px; y: 10px; width: 6px; height: 6px; border-radius: 3px; background: #ffffff; }
+        lv := Text { x: 23px; y: 0; width: self.preferred-width; height: parent.height; text: "LIVE"; font-size: 12px; font-weight: 800; letter-spacing: 1px;
+            color: #ffffff; vertical-alignment: center; }
+    }
+    if root.view == 0 && root.c.state == 0: HorizontalLayout {
+        x: 16px; y: root.fit == 0 ? 391px : 400px; width: 448px; height: 36px; alignment: center; spacing: 8px;
+        for a[i] in root.actions: GlassPill { icon: a.icon; text: a.text; light: root.light-veil;
+            TouchArea { enabled: a.tap; clicked => { Act.act("cam.action", i); } } }
+    }
+
+    // ---------------------------------------------------------------- all cameras
+    // up to four cameras 2×2, five or six 2×3; from seven on the grid scrolls up and down under the fixed top bar
+    // (a part of the next row always shows at the bottom). Opening it scrolls the selected camera into view.
+    if root.view == 1: Rectangle { background: Theme.background; }
+    Flickable {
+        visible: root.view == 1;
+        x: 0; y: 44px; width: root.width; height: root.height - 44px;
+        content-width: root.width;
+        content-height: max(self.height, 8px + Math.ceil(root.n / 2) * (root.th + 8px) + 29px);   // room under the last row for the page dots
+        content-y: -root.grid-scroll;
+        for cam[i] in root.cams: Rectangle {
+            x: 16px + Math.mod(i, 2) * (root.tw + 8px); y: 8px + Math.floor(i / 2) * (root.th + 8px); width: root.tw; height: root.th;
+            TouchArea { clicked => { Act.act("cam.pick", i); } }
+            if cam.state == 0: Image { x: 0; y: 0; width: parent.width; height: parent.height; source: cam.frame; }
+            if cam.state != 0: NoPicture { x: 0; y: 0; width: parent.width; height: parent.height; state: cam.state; }
+            GlowText { x: 10px; y: parent.height - 30px; width: parent.width - 20px; height: 24px; text: cam.name; font-size: 14px; font-weight: 600;
+                color: cam.state == 0 ? #ffffff : Theme.text; k: cam.state == 0 ? 1 : 0; overflow: elide; }
+            Corners { x: 0; y: 0; width: parent.width; height: parent.height; fill: Theme.background; }
+            if i == root.sel: Rectangle { x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; border-radius: 17px;
+                border-width: 3px; border-color: Theme.accent; }
+        }
+    }
+
+    // ---------------------------------------------------------------- camera chip (top right): all cameras
+    Rectangle {
+        property <bool> on-pic: root.view == 0 && root.c.state == 0 && !root.light-veil;
+        property <color> ink: self.on-pic || Theme.dark ? #ffffff : #2a2a2e;
+        x: root.width - 16px - self.width; y: 10px; height: 32px;
+        width: min(240px, cn.preferred-width + (root.view == 0 && root.n > 1 ? 66px : 48px));
+        border-radius: 16px;
+        background: self.on-pic ? #ffffff2b : Theme.dark ? #ffffff1f : #00000012;
+        border-width: self.on-pic ? 1px : 0px; border-color: #ffffff3d;
+        Icon { x: 12px; y: 0; width: 20px; height: parent.height; text: root.view == 1 ? "\u{F11D9}" : "\u{F07AE}"; font-size: 18px; color: parent.ink.with-alpha(0.9); }
+        cn := Text { x: 36px; y: 0; width: parent.width - (root.view == 0 && root.n > 1 ? 62px : 48px); height: parent.height;
+            text: root.view == 1 ? "Cameras" : root.c.name; font-size: 14px; font-weight: 600; color: parent.ink; vertical-alignment: center; overflow: elide; }
+        if root.view == 0 && root.n > 1: Icon { x: parent.width - 26px; y: 0; width: 18px; height: parent.height; text: "\u{F0140}"; font-size: 18px; color: parent.ink.with-alpha(0.7); }
+        TouchArea { y: -6px; height: parent.height + 12px; clicked => { Act.act("cam.view", root.view == 0 && root.n > 1 ? 1 : 0); } }
+    }
+
+    // ---------------------------------------------------------------- settings sheet
+    if root.settings: Rectangle { background: #00000080; }
+    if root.settings: Rectangle {
+        property <length> need: 72px + 2 * 62px + 26px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; height: 28px; text: "Cameras"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Icon { x: 132px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
+            SheetChip { text: "Whole picture"; on: root.fit == 0; }
+            SheetChip { text: "Fill the screen"; on: root.fit == 1; } }
+        HorizontalLayout { x: 24px; y: 134px; height: 40px; spacing: 8px; alignment: start;
+            SheetChip { text: "One camera"; on: root.view == 0; }
+            SheetChip { text: "All cameras"; on: root.view == 1; } }
+    }
+
+    // ---------------------------------------------------------------- visitor overlay
+    if root.ring: Image { x: 0; y: 0; width: 480px; height: 480px; source: root.ring-bg; }
+    if root.ring: GlowText { x: 16px; y: 50px; width: 448px; height: 30px; text: root.ring-title; font-size: 22px; font-weight: 600; color: #ffffff;
+        horizontal-alignment: center; overflow: elide; }
+    if root.ring: GlowText { x: 16px; y: 80px; width: 448px; height: 20px; text: root.ring-sub; font-size: 14px; font-weight: 500; color: #ffffffcc;
+        horizontal-alignment: center; overflow: elide; }
+    // the picture with a breathing accent ring (a soft outer band and a firm edge; the edge also rounds the picture's corners)
+    if root.ring: Rectangle { x: 24px - 12px; y: 108px - 12px; width: 432px + 24px; height: 243px + 24px; border-radius: 22px;
+        border-width: 8px; border-color: Theme.accent.with-alpha(0.16 + 0.16 * root.pulse); }
+    if root.ring: Image { x: 24px; y: 108px; width: 432px; height: 243px; source: root.ring-frame; }
+    if root.ring: Rectangle { x: 24px - 4px; y: 108px - 4px; width: 432px + 8px; height: 243px + 8px; border-radius: 12px;
+        border-width: 4px; border-color: Theme.accent.with-alpha(0.7 + 0.3 * root.pulse); }
+    if root.ring: HorizontalLayout {
+        x: 16px; y: 364px; width: 448px; height: 24px; alignment: center; spacing: 18px;
+        for s in root.ring-state: HorizontalLayout { spacing: 6px;
+            GlowText { width: 20px; height: 24px; icon: true; text: s.icon; font-size: 18px; color: #ffffffd9; horizontal-alignment: center; }
+            GlowText { width: self.preferred-width; height: 24px; text: s.text; font-size: 14px; font-weight: 500; color: #ffffffd9; } }
+    }
+    if root.ring: HorizontalLayout {
+        x: 0; y: 400px; width: 480px; height: 64px; alignment: center; spacing: 16px;
+        if root.can-talk: Rectangle { width: 64px; height: 64px; border-radius: 32px; background: #ffffff2b; border-width: 1px; border-color: #ffffff3d;
+            GlowText { width: 64px; height: 64px; icon: true; text: "\u{F036C}"; font-size: 28px; color: #ffffff; horizontal-alignment: center; } }
+        if root.can-open: Rectangle {
+            width: 200px; height: 64px; border-radius: 32px; background: #ffffff2b; border-width: 1px; border-color: #ffffff3d;
+            // holding fills it from the left (a solid fill: gradients ignore the corner radius)
+            if root.hold > 0: Rectangle { x: 0; y: 0; width: max(64px, parent.width * root.hold); height: 64px; border-radius: 32px; background: Theme.success; }
+            HorizontalLayout { alignment: center; spacing: 8px;
+                GlowText { width: 24px; height: 64px; icon: true; text: "\u{F0FC7}"; font-size: 22px; color: #ffffff; horizontal-alignment: center; }
+                GlowText { width: self.preferred-width; height: 64px; text: root.hold > 0 ? "Keep holding" : "Hold to open"; font-size: 16px; font-weight: 600; color: #ffffff; } }
+        }
+        Rectangle { width: 64px; height: 64px; border-radius: 32px; background: #ffffff2b; border-width: 1px; border-color: #ffffff3d;
+            GlowText { width: 64px; height: 64px; icon: true; text: "\u{F0156}"; font-size: 28px; color: #ffffff; horizontal-alignment: center; } }
+    }
+    // replies: tap on talk (holding talk records a voice message for the door instead)
+    if root.ring && root.replies: Rectangle { background: #00000080; }
+    if root.ring && root.replies: Rectangle {
+        property <length> need: 72px + root.reply-list.length * 54px - 10px + 26px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; height: 28px; text: "Reply"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
+        Icon { x: parent.width - 52px; y: 22px; width: 32px; height: 32px; text: "\u{F0156}"; font-size: 22px; color: Theme.muted; }
+        for r[i] in root.reply-list: Rectangle {
+            x: 16px; y: 66px + i * 54px; width: parent.width - 32px; height: 46px; border-radius: 14px; background: Theme.surface-raised;
+            Icon { x: 14px; y: 0; width: 22px; height: parent.height; text: "\u{F173E}"; font-size: 19px; color: Theme.muted; }
+            Text { x: 46px; y: 0; width: parent.width - 60px; height: parent.height; text: r; font-size: 15px; font-weight: 500; color: Theme.text;
+                vertical-alignment: center; overflow: elide; }
+        }
+    }
+}

@@ -4,8 +4,235 @@ import { Theme } from "theme.slint";
 
 export component Icon inherits Text {
     font-family: "Material Design Icons";
+    // No layer of its own: a cached Text item kept showing the old glyph after
+    // its text changed (play / pause), and a glyph is cheap on the GPU.
     horizontal-alignment: center;
     vertical-alignment: center;
+}
+
+// White text over the weather picture with a soft dark rim hugging the glyphs: four faint copies
+// offset diagonally (a little more downwards). Readable over white clouds without a dark patch
+// behind it. (The software renderer ignores Text stroke, so the rim is drawn this way.)
+// k: strength (0 = plain text); icon: use the icon font.
+export component GlowText {
+    in property <string> text;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <float> k: 1;
+    in property <bool> icon;
+    in property <string> family;      // another font (e.g. the to-do terminal look's monospace); empty: the default
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    in property <TextOverflow> overflow: clip;
+    // neon letters (home page, "In the Fast Lane" background): a coloured glow around the letters and a
+    // firm dark rim instead of the soft one (as the timers page's synthwave theme)
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    // Text that changes every second (time labels): drawn directly. Any other
+    // text is drawn once into its own layer: the rim copies cost nothing then.
+    in property <bool> live;
+    cache-rendering-hint: !root.live;
+    property <length> d: max(0.8px, min(2.2px, root.font-size / 46));
+    property <color> rim: #000000.with-alpha(0.18 * min(1, root.k));
+    // the glow: one ring of copies just outside the thin dark rim, enough to show on every background
+    // without turning into a halo (owner: two rings were too much neon); the rim keeps the letters
+    // readable on bright skies
+    property <length> gi: max(1.8px, min(5px, root.font-size / 22));
+    property <length> nr: max(0.7px, min(1.6px, root.font-size / 48));
+    property <float> neon-rim: 0;     // the dark rim under the glow: off (owner: with neon no black frame)
+    preferred-width: t.preferred-width;
+    preferred-height: t.preferred-height;
+    min-height: t.preferred-height;
+    for o in [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -0.71, y: -0.71 }, { x: 0.71, y: -0.71 }, { x: -0.71, y: 0.71 }, { x: 0.71, y: 0.71 }]: Text {
+        visible: root.neon;
+        x: o.x * root.gi; y: o.y * root.gi; width: root.width; height: root.height;
+        text: root.text; font-size: root.font-size; font-weight: root.font-weight; color: root.glow.with-alpha(0.24);
+        font-family: root.icon ? "Material Design Icons" : root.family;
+        horizontal-alignment: root.horizontal-alignment; vertical-alignment: center; overflow: root.overflow;
+    }
+    for o in [{ x: -1, y: -1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: 1, y: 1 }, { x: 0, y: -1.4 }, { x: 0, y: 1.4 }, { x: -1.4, y: 0 }, { x: 1.4, y: 0 }]: Text {
+        visible: root.neon && root.neon-rim > 0;
+        x: o.x * root.nr; y: o.y * root.nr; width: root.width; height: root.height;
+        text: root.text; font-size: root.font-size; font-weight: root.font-weight; color: root.glow.mix(#000000, 0.22).with-alpha(0.85 * root.neon-rim);
+        font-family: root.icon ? "Material Design Icons" : root.family;
+        horizontal-alignment: root.horizontal-alignment; vertical-alignment: center; overflow: root.overflow;
+    }
+    for o in [{ x: -1, y: -0.35 }, { x: 1, y: -0.35 }, { x: -1, y: 1.5 }, { x: 1, y: 1.5 }]: Text {
+        visible: root.k > 0.01 && !root.neon;
+        x: o.x * root.d; y: o.y * root.d; width: root.width; height: root.height;
+        text: root.text; font-size: root.font-size; font-weight: root.font-weight; color: root.rim;
+        font-family: root.icon ? "Material Design Icons" : root.family;
+        horizontal-alignment: root.horizontal-alignment; vertical-alignment: center; overflow: root.overflow;
+    }
+    t := Text {
+        width: root.width; height: root.height;
+        text: root.text; font-size: root.font-size; font-weight: root.font-weight; color: root.color;
+        font-family: root.icon ? "Material Design Icons" : root.family;
+        horizontal-alignment: root.horizontal-alignment; vertical-alignment: center; overflow: root.overflow;
+    }
+    // neon: a hot, whiter core (as a lit tube) — coloured letters turn pastel and stand out from a glow
+    // of their own colour on a sky of the same hue; white letters stay white
+    if root.neon: Text {
+        width: root.width; height: root.height;
+        text: root.text; font-size: root.font-size; font-weight: root.font-weight; color: #ffffff73;
+        font-family: root.icon ? "Material Design Icons" : root.family;
+        horizontal-alignment: root.horizontal-alignment; vertical-alignment: center; overflow: root.overflow;
+    }
+}
+
+// A text line for titles: when it does not fit, it is either cut off with … or, with `scroll`, it
+// runs to the left in a loop (holds 1.5 s at the start of each round). speed 1..5 = slow..fast.
+// Short texts never move. k = GlowText rim (0 = plain).
+export component Marquee {
+    in property <string> text;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <float> k;
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    in property <bool> scroll;
+    in property <float> speed: 3;
+    property <length> tw: probe.preferred-width;
+    property <bool> moving: root.scroll && self.tw > root.width;
+    property <length> gap: 48px;
+    property <float> v: root.speed <= 1 ? 14 : root.speed <= 2 ? 22 : root.speed <= 3 ? 32 : root.speed <= 4 ? 46 : 64;   // px / s
+    property <float> period: (self.tw + self.gap) / 1px / self.v + 1.5;                                                  // s
+    property <float> t: Math.mod(animation-tick() / 1ms / 1000, self.period);
+    property <length> off: max(0, self.t - 1.5) * self.v * 1px;
+    probe := Text { visible: false; text: root.text; font-size: root.font-size; font-weight: root.font-weight; }
+    Rectangle {
+    clip: root.moving;
+    if !root.moving: GlowText {
+        width: root.width; height: root.height; text: root.text; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow; horizontal-alignment: root.horizontal-alignment; overflow: elide;
+    }
+    if root.moving: GlowText {
+        x: -root.off; width: root.tw; height: root.height; text: root.text; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow;
+    }
+    if root.moving: GlowText {
+        x: -root.off + root.tw + root.gap; width: root.tw; height: root.height; text: root.text; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow;
+    }
+    }
+}
+
+// The LAUDEN logo mark (red disc with the house), from assets/logo.svg.
+// The software renderer fills paths non-zero only, so the even-odd cut-outs
+// of the SVG are drawn as layers: disc, house lines, house inside.
+export component LogoMark inherits Rectangle {
+    // the PanelOS mark: P in Morse in two rows (dot dash / dash dot); dots Signal, dashes the text colour of the ground
+    in property <length> size: 32px;
+    in property <color> lines: Theme.text;    // the dashes
+    in property <color> disc: Theme.brand;    // the dots (grey while the panel is offline)
+    property <length> u: self.size / 10;
+    width: self.size;
+    height: self.size;
+    Rectangle { x: 0; y: (root.size - root.u * 6) / 2; width: root.size; height: root.u * 6;
+        Rectangle { x: 0; y: 0; width: root.u * 2; height: root.u * 2; border-radius: root.u; background: root.disc; }
+        Rectangle { x: root.u * 4; y: 0; width: root.u * 6; height: root.u * 2; border-radius: root.u; background: root.lines; }
+        Rectangle { x: 0; y: root.u * 4; width: root.u * 6; height: root.u * 2; border-radius: root.u; background: root.lines; }
+        Rectangle { x: root.u * 8; y: root.u * 4; width: root.u * 2; height: root.u * 2; border-radius: root.u; background: root.disc; }
+    }
+}
+
+// Three-way theme switch: 0 light, 1 dark, 2 auto (light sensor).
+component ThemeSegment inherits Rectangle {
+    in property <string> icon;
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked;
+    height: 36px;
+    border-radius: 18px;
+    // Brand: Signal is never a ground for text. The chosen one is set off in
+    // the text colour (Ink on light, Paper on dark); its icon is lit in Signal.
+    background: root.selected ? Theme.text : (t.pressed ? Theme.surface-pressed : transparent);
+    t := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 14px;
+        spacing: 6px;
+        Icon { text: root.icon; font-size: 18px; color: root.selected ? Theme.accent : Theme.muted; }
+        Text {
+            text: root.label;
+            font-size: Theme.font-label;
+            font-weight: root.selected ? Theme.weight-strong : Theme.weight-regular;
+            color: root.selected ? Theme.background : Theme.muted;
+            vertical-alignment: center;
+        }
+    }
+}
+
+
+// the app icon's shape: a superellipse (n = 4, continuous curvature, every side gently curved)
+export component Squircle inherits Path {
+    in property <color> tone;
+    viewbox-width: 100; viewbox-height: 100;
+    fill: root.tone;
+    commands: "M 100.00 50.00 L 99.98 59.91 L 99.92 64.01 L 99.83 67.14 L 99.69 69.78 L 99.52 72.08 L 99.30 74.16 L 99.05 76.05 L 98.76 77.79 L 98.43 79.42 L 98.06 80.93 L 97.65 82.35 L 97.20 83.69 L 96.70 84.95 L 96.17 86.14 L 95.59 87.27 L 94.97 88.33 L 94.31 89.34 L 93.60 90.29 L 92.85 91.19 L 92.04 92.04 L 91.19 92.85 L 90.29 93.60 L 89.34 94.31 L 88.33 94.97 L 87.27 95.59 L 86.14 96.17 L 84.95 96.70 L 83.69 97.20 L 82.35 97.65 L 80.93 98.06 L 79.42 98.43 L 77.79 98.76 L 76.05 99.05 L 74.16 99.30 L 72.08 99.52 L 69.78 99.69 L 67.14 99.83 L 64.01 99.92 L 59.91 99.98 L 50.00 100.00 L 40.09 99.98 L 35.99 99.92 L 32.86 99.83 L 30.22 99.69 L 27.92 99.52 L 25.84 99.30 L 23.95 99.05 L 22.21 98.76 L 20.58 98.43 L 19.07 98.06 L 17.65 97.65 L 16.31 97.20 L 15.05 96.70 L 13.86 96.17 L 12.73 95.59 L 11.67 94.97 L 10.66 94.31 L 9.71 93.60 L 8.81 92.85 L 7.96 92.04 L 7.15 91.19 L 6.40 90.29 L 5.69 89.34 L 5.03 88.33 L 4.41 87.27 L 3.83 86.14 L 3.30 84.95 L 2.80 83.69 L 2.35 82.35 L 1.94 80.93 L 1.57 79.42 L 1.24 77.79 L 0.95 76.05 L 0.70 74.16 L 0.48 72.08 L 0.31 69.78 L 0.17 67.14 L 0.08 64.01 L 0.02 59.91 L 0.00 50.00 L 0.02 40.09 L 0.08 35.99 L 0.17 32.86 L 0.31 30.22 L 0.48 27.92 L 0.70 25.84 L 0.95 23.95 L 1.24 22.21 L 1.57 20.58 L 1.94 19.07 L 2.35 17.65 L 2.80 16.31 L 3.30 15.05 L 3.83 13.86 L 4.41 12.73 L 5.03 11.67 L 5.69 10.66 L 6.40 9.71 L 7.15 8.81 L 7.96 7.96 L 8.81 7.15 L 9.71 6.40 L 10.66 5.69 L 11.67 5.03 L 12.73 4.41 L 13.86 3.83 L 15.05 3.30 L 16.31 2.80 L 17.65 2.35 L 19.07 1.94 L 20.58 1.57 L 22.21 1.24 L 23.95 0.95 L 25.84 0.70 L 27.92 0.48 L 30.22 0.31 L 32.86 0.17 L 35.99 0.08 L 40.09 0.02 L 50.00 0.00 L 59.91 0.02 L 64.01 0.08 L 67.14 0.17 L 69.78 0.31 L 72.08 0.48 L 74.16 0.70 L 76.05 0.95 L 77.79 1.24 L 79.42 1.57 L 80.93 1.94 L 82.35 2.35 L 83.69 2.80 L 84.95 3.30 L 86.14 3.83 L 87.27 4.41 L 88.33 5.03 L 89.34 5.69 L 90.29 6.40 L 91.19 7.15 L 92.04 7.96 L 92.85 8.81 L 93.60 9.71 L 94.31 10.66 L 94.97 11.67 L 95.59 12.73 L 96.17 13.86 L 96.70 15.05 L 97.20 16.31 L 97.65 17.65 L 98.06 19.07 L 98.43 20.58 L 98.76 22.21 L 99.05 23.95 L 99.30 25.84 L 99.52 27.92 L 99.69 30.22 L 99.83 32.86 L 99.92 35.99 L 99.98 40.09 Z";
+}
+
+// the settings button: the PanelOS mark on the app icon's shape (never a gear)
+export component MarkButton inherits Rectangle {
+    in property <length> size: 44px;
+    callback clicked;
+    width: self.size;
+    height: self.size;
+    Squircle { width: root.size; height: root.size; tone: touch.pressed ? Theme.button-pressed : Theme.button; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    LogoMark { x: (root.size - self.width) / 2; y: (root.size - self.height) / 2; size: root.size * 0.58; }
+}
+
+// the mark as a signal: its four parts light up one after another in Morse rhythm (dot, dash, dash, dot), each fading
+// like an ember after it went out; the app drives `t` (seconds). Offline: slower, and the parts never fully dark.
+export component MorseMark inherits Rectangle {
+    in property <length> size: 120px;
+    in property <float> t;
+    in property <bool> slow;
+    in property <color> dot-col: Theme.brand;
+    in property <color> dash-col: Theme.text;
+    property <length> u: self.size / 10;
+    property <float> unit: root.slow ? 0.42 : 0.2;                 // one Morse unit in seconds
+    property <float> ph: Math.mod(root.t / root.unit, 18);          // dot 1, gap 1, dash 3, gap 1, dash 3, gap 1, dot 1, pause 7
+    property <float> base: root.slow ? 0.30 : 0.16;
+    pure function lvl(start: float, len: float) -> float {
+        root.ph < start ? 0.0 : root.ph < start + len ? 1.0 : max(0.0, 1.0 - (root.ph - start - len) / 3.0)
+    }
+    property <float> l0: root.lvl(0, 1);
+    property <float> l1: root.lvl(2, 3);
+    property <float> l2: root.lvl(6, 3);
+    property <float> l3: root.lvl(10, 1);
+    width: self.size;
+    height: self.size;
+    for e in [{ x: 0, y: 0, w: 2, dot: true, l: root.l0 }, { x: 4, y: 0, w: 6, dot: false, l: root.l1 },
+              { x: 0, y: 4, w: 6, dot: false, l: root.l2 }, { x: 8, y: 4, w: 2, dot: true, l: root.l3 }]: Rectangle {
+        property <color> c: e.dot ? root.dot-col : root.dash-col;
+        x: e.x * root.u; y: (root.size - root.u * 6) / 2 + e.y * root.u; width: e.w * root.u; height: root.u * 2;
+        Rectangle { x: -root.u * 1.6; y: -root.u * 1.6; width: parent.width + root.u * 3.2; height: parent.height + root.u * 3.2; border-radius: root.u * 2.6;
+            background: parent.c.with-alpha(0.10 * e.l); }
+        Rectangle { x: -root.u * 0.8; y: -root.u * 0.8; width: parent.width + root.u * 1.6; height: parent.height + root.u * 1.6; border-radius: root.u * 1.8;
+            background: parent.c.with-alpha(0.22 * e.l); }
+        Rectangle { border-radius: root.u; background: parent.c.with-alpha(root.base + (1 - root.base) * e.l); }
+    }
+}
+
+export component ThemeSwitch inherits Rectangle {
+    in property <int> selected: 2;
+    callback changed(int);
+    height: 40px;
+    border-radius: 20px;
+    background: Theme.surface;
+    HorizontalLayout {
+        padding: 2px;
+        spacing: 2px;
+        ThemeSegment { icon: "\u{F05A8}"; label: "Light"; selected: root.selected == 0; clicked => { root.changed(0); } }
+        ThemeSegment { icon: "\u{F0594}"; label: "Dark"; selected: root.selected == 1; clicked => { root.changed(1); } }
+        ThemeSegment { icon: "\u{F050E}"; label: "Auto"; selected: root.selected == 2; clicked => { root.changed(2); } }
+    }
 }
 
 export component RoundButton inherits Rectangle {

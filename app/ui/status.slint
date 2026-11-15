@@ -1,0 +1,71 @@
+// Status screens: whole-screen states set up in the integration (a toilet in use, someone on a call, a nap …). Each has a
+// category whose text pack lives on the panel (headline, line and button picked at random, a surprise); the integration can
+// give its own headline, line, icon (an own pictogram or any MDI icon) and colour instead, and says whether there is a button.
+// Swiping away (or the button) leaves the screen; while the state lasts a strip in its colour stays on top of every panel,
+// and a tap on it brings the screen back. Critical alerts use the same strip in red.
+import { Icon } from "widgets.slint";
+
+export struct StatusScreen {
+    title: string,
+    message: string,
+    icon: string,          // MDI glyph, when no own pictogram is used
+    picto: image,          // own pictogram, 144 px, white
+    picto-small: image,    // the same at 24 px, for the strip
+    has-picto: bool,
+    tint: color,
+    since: string,         // "since 14:20 · 6 min"
+    button: string,        // empty: no button (set in the integration)
+    left: float,           // a countdown (air recovery): 0 … 1 left, below 0 none
+    left-text: string,     // "3:48 left"
+}
+
+export component StatusPage inherits Rectangle {
+    in property <StatusScreen> s;
+    property <bool> btn: root.s.button != "";
+    background: root.s.tint;
+    VerticalLayout { x: 24px; y: 44px; width: 432px; height: root.height - 44px - (root.btn ? 92px : 30px); alignment: center; spacing: 6px;
+        HorizontalLayout { alignment: center;
+            if root.s.has-picto: Image { width: 144px; height: 144px; source: root.s.picto; }
+            if !root.s.has-picto: Rectangle { width: 144px; height: 144px; border-radius: 72px; background: #ffffff1f;
+                Icon { text: root.s.icon; font-size: 88px; color: #ffffff; } } }
+        Rectangle { height: min(tt.preferred-height, 92px); clip: true;
+            tt := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.s.title; font-size: 32px; font-weight: 800; color: #ffffff;
+                horizontal-alignment: center; wrap: word-wrap; overflow: elide; } }
+        Rectangle { height: min(mt.preferred-height, 46px); clip: true;
+            mt := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.s.message; font-size: 16px; color: #ffffffe0;
+                horizontal-alignment: center; wrap: word-wrap; overflow: elide; } }
+        if root.s.left >= 0: HorizontalLayout { alignment: center; padding-top: 4px;
+            Rectangle { width: 240px; height: 8px; border-radius: 4px; background: #ffffff40;
+                Rectangle { x: 0; y: 0; width: max(8px, parent.width * root.s.left); height: parent.height; border-radius: 4px; background: #ffffff; } } }
+        HorizontalLayout { alignment: center;
+            Rectangle { width: st.preferred-width + 24px; height: 26px; border-radius: 13px; background: #0000002e;
+                st := Text { x: 12px; y: 0; width: self.preferred-width; height: parent.height; font-size: 13px; color: #ffffffd9; vertical-alignment: center;
+                    text: root.s.left >= 0 ? root.s.left-text : root.s.since; } } }
+    }
+    if root.btn: Rectangle { x: 90px; y: root.height - 86px; width: 300px; height: 56px; border-radius: 28px; background: #ffffff;
+        Text { x: 16px; y: 0; width: parent.width - 32px; height: parent.height; text: root.s.button; font-size: 17px; font-weight: 700; color: root.s.tint;
+            horizontal-alignment: center; vertical-alignment: center; overflow: elide; } }
+}
+
+// the strip on top of every panel while a status screen (or a critical alert) is active; a tap opens it again
+export component TopStrip inherits Rectangle {
+    in property <string> title;
+    in property <string> sub;              // "6 min", "3:48 left", "CO sensor · 2 min"
+    in property <string> icon;
+    in property <image> picto;
+    in property <bool> has-picto;
+    in property <color> tint;
+    in property <bool> critical;           // red and breathing, like the alert itself
+    in property <float> pulse: 1;
+    height: 44px;
+    background: root.critical ? #8e0d14 : root.tint;
+    if root.critical: Rectangle { background: #d8202a.with-alpha(0.35 + 0.45 * root.pulse); }
+    if root.has-picto: Image { x: 14px; y: 10px; width: 24px; height: 24px; source: root.picto; }
+    if !root.has-picto: Icon { x: 12px; y: 8px; width: 28px; height: 28px; text: root.icon; font-size: 22px; color: #ffffff; }
+    Text { x: 48px; y: 0; width: parent.width - 48px - sw.width - 46px; height: parent.height; text: root.title; font-size: 15px; font-weight: 700;
+        color: #ffffff; vertical-alignment: center; overflow: elide; }
+    sw := Text { x: parent.width - 40px - self.width; y: 0; width: self.preferred-width; height: parent.height; text: root.sub; font-size: 13px;
+        color: #ffffffcc; vertical-alignment: center; }
+    Icon { x: parent.width - 36px; y: 8px; width: 28px; height: 28px; text: "\u{F0140}"; font-size: 22px; color: #ffffff; }
+    Rectangle { y: parent.height - 1px; height: 1px; background: #00000040; }
+}

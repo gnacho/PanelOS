@@ -2,7 +2,8 @@
 // pairing (QR login).
 
 import { Theme } from "theme.slint";
-import { Icon, RoundButton, TextButton, Chip, ChipRow, Toggle, BigSlider } from "widgets.slint";
+import { Icon, LogoMark, ThemeSwitch, RoundButton, TextButton, Chip, ChipRow, Toggle, BigSlider, MorseMark } from "widgets.slint";
+import { MorseWrite } from "loading.slint";
 
 export struct MoreInfoData {
     entity: string,
@@ -474,40 +475,219 @@ export component TimerAlarm inherits Rectangle {
 
 export component PairingScreen inherits Rectangle {
     in property <image> qr;
-    in property <string> hint;
+    in property <string> hint;           // earlier plain hint (kept for the app)
+    in property <string> ha-url;         // the Home Assistant the code logs in to
+    in property <int> state: 0;          // 0 waiting, 1 logged in, 2 failed
+    in property <int> variant: 0;
+    in property <int> theme-mode: 2;
+    in property <int> wifi-bars: 4;
+    callback change-ha();
+    callback wifi-info();
+    callback theme-changed(int);
+    property <[string]> titles: [
+        "Let's make it official.",
+        "One last handshake.",
+        "Introduce us, please.",
+        "Show me your phone.",
+        "No strings attached. Mostly.",
+        "Scan me. I don't bite.",
+        "I've been waiting for you.",
+        "An offer you can't refuse.",
+        "Say hello to my little friend.",
+        "Let me in.",
+    ];
+    property <[string]> subtitles: [
+        "Your phone knows what to do.",
+        "Hold your phone up to my face.",
+        "A quick scan, and we're friends forever.",
+        "Look closely. The pattern looks back.",
+        "Go on, point that camera. I'm photogenic.",
+        "One scan. That's all I ask. For now.",
+        "Use the Force… I mean, the camera.",
+        "Snap me. I won't tell anyone.",
+        "I want to hold your hand. And your phone.",
+    ];
+    property <[string]> hints: [
+        "Home Assistant opens on your phone. Log in, and I'll slip in quietly.",
+        "Log in on your phone. I'll hear it. I always do.",
+        "Log in on your phone, then sit back. I've got this.",
+        "Log in where your phone takes you. I'll follow.",
+        "Log in there. Don't worry, I'll know when you're done.",
+        "Follow the white rabbit: log in on your phone.",
+    ];
+    property <[string]> done-texts: [
+        "You had me at hello.",
+        "Live long and prosper.",
+        "We're official now!",
+        "Logged in. I knew you'd come back.",
+        "That's it. We belong together now.",
+        "Welcome home.",
+        "Welcome to the family.",
+        "It's alive! It's alive!",
+        "I'm in. And I'm never leaving.",
+        "This is the beginning of a beautiful friendship.",
+        "Happy together.",
+    ];
+    property <[string]> failed-texts: [
+        "The login got lost somewhere between you and me. Scan again.",
+        "Something ate the login on the way. Scan the code again.",
+        "Nope. New code, new luck. Scan again.",
+        "Your phone said hi, but I didn't hear it. Scan once more.",
+        "Houston, we have a problem. Scan the code again.",
+        "Well, that escalated quickly. Scan the code again.",
+        "I have a bad feeling about this. Scan again.",
+        "Another one bites the dust. Scan again.",
+    ];
+    property <[string]> change-texts: [
+        "Wrong house? Change Home Assistant.",
+        "Not this one? Show me the other house.",
+        "Oops, wrong one? Go back.",
+        "Wrong brain? Swap it.",
+        "This isn't the one? Let's fix that.",
+        "Take the blue pill: pick another Home Assistant.",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
     background: Theme.background;
+    TouchArea {}
+
     VerticalLayout {
-        padding: 20px;
-        spacing: 12px;
-        alignment: center;
-        Text {
-            text: "Connect to Home Assistant";
-            font-size: 24px;
-            font-weight: 700;
-            color: Theme.text;
-            horizontal-alignment: center;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: Theme.switch-top - 8px;
+        padding: Theme.pad;
+        padding-bottom: 0px;
+        spacing: 6px;
+        alignment: start;
+
+        // Logo, title, what to do; the Wi-Fi signal as on the setup screen.
+        HorizontalLayout {
+            spacing: 12px;
+            padding-bottom: 4px;
+            VerticalLayout {
+                alignment: center;
+                LogoMark { size: 40px; }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: 0px;
+                Text {
+                    text: root.pick-text(root.titles, 1);
+                    font-size: Theme.font-title; font-family: Theme.heading-family;
+                    font-weight: Theme.weight-strong;
+                    color: Theme.text;
+                    overflow: elide;
+                }
+                Text {
+                    text: root.pick-text(root.subtitles, 7);
+                    font-size: Theme.font-label;
+                    color: Theme.muted;
+                    overflow: elide;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                RoundButton {
+                    icon: ["\u{F091F}", "\u{F0922}", "\u{F0925}", "\u{F0928}"][max(0, min(3, root.wifi-bars - 1))];
+                    size: 40px;
+                    tint: root.wifi-bars <= 1 ? Theme.warning : Theme.muted;
+                    clicked => { root.wifi-info(); }
+                }
+            }
         }
+
+        // The code, always black on white so every phone reads it.
         HorizontalLayout {
             alignment: center;
             Rectangle {
-                width: 270px;
-                height: 270px;
+                width: 236px;
+                height: 236px;
+                border-radius: 16px;
                 background: #ffffff;
-                border-radius: 12px;
+                border-width: Theme.dark ? 0px : 1px;
+                border-color: Theme.outline;
                 Image {
-                    width: 254px;
-                    height: 254px;
+                    width: 216px;
+                    height: 216px;
                     source: root.qr;
                     image-rendering: pixelated;
+                    opacity: root.state == 1 ? 0.15 : 1;
+                }
+                if root.state == 1: Rectangle {
+                    width: 72px;
+                    height: 72px;
+                    border-radius: 36px;
+                    background: Theme.success;
+                    Icon { text: "\u{F012C}"; font-size: 44px; color: #ffffff; }
                 }
             }
         }
         Text {
-            text: root.hint;
-            font-size: 15px;
-            color: Theme.muted;
-            wrap: word-wrap;
+            text: root.ha-url;
+            font-size: Theme.font-caption;
+            color: Theme.faint;
             horizontal-alignment: center;
+            overflow: elide;
+        }
+
+        // What to do / what happened.
+        HorizontalLayout {
+            height: 40px;
+            alignment: center;
+            spacing: 8px;
+            if root.state != 0: VerticalLayout {
+                alignment: start;
+                Icon {
+                    text: root.state == 1 ? "\u{F05E1}" : "\u{F05D6}";
+                    font-size: 18px;
+                    color: root.state == 1 ? Theme.success : Theme.danger;
+                }
+            }
+            Text {
+                text: root.state == 1 ? root.pick-text(root.done-texts, 13)
+                    : root.state == 2 ? root.pick-text(root.failed-texts, 13)
+                    : root.pick-text(root.hints, 13);
+                font-size: Theme.font-label;
+                color: root.state == 1 ? Theme.success : root.state == 2 ? Theme.danger : Theme.muted;
+                // With an icon the lines start next to it; without one they are centred.
+                horizontal-alignment: root.state != 0 ? left : center;
+                vertical-alignment: top;
+                wrap: word-wrap;
+                max-width: 400px;
+            }
+        }
+
+        // Back to the Home Assistant setup.
+        if root.state != 1: HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                height: 28px;
+                width: ch.preferred-width + 16px;
+                border-radius: 8px;
+                background: cht.pressed ? Theme.surface-pressed : transparent;
+                cht := TouchArea { clicked => { root.change-ha(); } }
+                ch := Text {
+                    x: 8px;
+                    text: root.pick-text(root.change-texts, 61);
+                    font-size: Theme.font-label;
+                    font-weight: Theme.weight-strong;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
         }
     }
 }
@@ -519,23 +699,66 @@ export struct FoundHa {
     url: string,
 }
 
+// Status / error line under an input: icon and up to two lines of text.
+// It always keeps its height, so nothing below it moves.
+component MessageLine inherits HorizontalLayout {
+    in property <string> message;
+    in property <int> kind: 0;       // 0 info, 1 error, 2 success
+    in property <bool> busy;
+    height: 40px;
+    spacing: 8px;
+    padding-left: 4px;
+    if root.message != "": VerticalLayout {
+        alignment: start;
+        Icon {
+            text: root.busy ? "\u{F051F}" : root.kind == 1 ? "\u{F05D6}" : root.kind == 2 ? "\u{F05E1}" : "\u{F02FD}";
+            font-size: 18px;
+            color: root.kind == 1 ? Theme.danger : root.kind == 2 ? Theme.success : Theme.muted;
+        }
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.message;
+        font-size: 14px;
+        color: root.kind == 1 ? Theme.danger : root.kind == 2 ? Theme.success : Theme.muted;
+        vertical-alignment: top;
+        wrap: word-wrap;
+        overflow: elide;
+    }
+}
+
+// Number pad key; same height and rows as the letter keyboard.
 component KeyButton inherits Rectangle {
     in property <string> label;
-    in property <bool> accent: false;
+    in property <string> icon;
+    in property <bool> primary: false;
+    in property <bool> small: false;     // shortcut keys with longer text
     callback clicked;
-    height: 46px;
-    border-radius: 12px;
-    background: root.accent ? (touch.pressed ? Theme.accent.darker(0.25) : Theme.accent) : (touch.pressed ? Theme.button-pressed : Theme.button);
+    height: Theme.key-height;
+    // Equal columns whatever the label.
+    preferred-width: 10px;
+    horizontal-stretch: 1;
+    border-radius: 10px;
+    background: root.primary ? (touch.pressed ? Theme.text.with-alpha(0.8) : Theme.text)
+        : (touch.pressed ? Theme.surface-pressed : Theme.surface-raised);
     touch := TouchArea {
         clicked => { root.clicked(); }
     }
-    Text {
-        text: root.label;
-        font-size: root.accent ? 17px : 21px;
-        font-weight: root.accent ? 700 : 400;
-        color: root.accent ? #ffffff : Theme.text;
-        horizontal-alignment: center;
-        vertical-alignment: center;
+    HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+        if root.label != "": Text {
+            text: root.label;
+            font-size: root.primary || root.small ? Theme.font-body : 22px;
+            font-weight: root.primary || root.small ? Theme.weight-strong : 400;
+            color: root.primary ? Theme.background : Theme.text;
+            vertical-alignment: center;
+        }
+        if root.icon != "": Icon {
+            text: root.icon;
+            font-size: 22px;
+            color: root.primary ? Theme.background : Theme.text;
+        }
     }
 }
 
@@ -543,104 +766,1424 @@ export component SetupScreen inherits Rectangle {
     in property <[FoundHa]> found;
     in property <string> address;
     in property <string> message;
+    in property <int> message-kind: 0;   // 0 info, 1 error, 2 success
     in property <bool> busy;
+    in property <int> variant: 0;        // random, picked when the screen opens
+    in property <int> theme-mode: 2;
+    // The Wi-Fi the panel is on: name, signal 1..4 bars, own address.
+    in property <string> wifi-name;
+    in property <int> wifi-bars: 4;
+    in property <string> wifi-ip;
+    in-out property <bool> wifi-info-open: false;
     callback pick(string);
     callback key(string);
     callback connect();
+    callback change-wifi();
+    callback choose-many();
+    callback theme-changed(int);
+    property <[string]> titles: [
+        "Where's the house's brain?",
+        "Now, the brains of the house.",
+        "Who's in charge here?",
+        "Take me to your leader.",
+        "Home Assistant, come out!",
+        "Something runs this house…",
+        "I can feel it nearby…",
+    ];
+    property <[string]> subtitles: [
+        "Tap it if I find it, or tell me where it lives.",
+        "Point me in the right direction.",
+        "I can smell it somewhere on this network.",
+        "Show me the way, I'll do the rest.",
+        "Pick it, or whisper its address.",
+    ];
+    property <[string]> searching: [
+        "Searching the network…",
+        "Sniffing around for Home Assistant…",
+        "Listening for a familiar voice…",
+        "Checking every corner…",
+        "Following the breadcrumbs…",
+        "Accio Home Assistant!",
+    ];
+    property <[string]> searching-hints: [
+        "Know where it lives? Key it in below.",
+        "Use those little fingers on the keys below.",
+        "Give me directions: the address goes below.",
+        "Faster than me? Punch in the numbers.",
+        "Help me out with a few digits below.",
+        "Or just tell me. I'm good with numbers.",
+    ];
+    // More than one found: count in the middle (text before / after).
+    property <[string]> many-before: ["I found ", "", "Wow, ", "", "There are "];
+    property <[string]> many-after: [" of them.", " brains in one house?", " Home Assistants.", " candidates. Interesting.", " of them…"];
+    property <[string]> many-hints: [
+        "Tap to pick the real one.",
+        "Tap and choose wisely.",
+        "Tap to see them all.",
+        "Tap, and I'll line them up.",
+        "Tap. They're waiting.",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
     background: Theme.background;
     TouchArea {}
+
+    // Everything above the keypad.
     VerticalLayout {
-        padding: 16px;
-        spacing: 10px;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: Theme.keyboard-top;
+        padding: Theme.pad;
+        padding-bottom: 0px;
+        spacing: 6px;
         alignment: start;
-        Text {
-            text: "Connect to Home Assistant";
-            font-size: 22px;
-            font-weight: 700;
-            color: Theme.text;
-        }
-        Text {
-            text: root.found.length > 0 ? "Found on the network, or type its address:" : "Address of Home Assistant (IP, and port if not 80):";
-            font-size: 14px;
-            color: Theme.muted;
-        }
-        for ha in root.found: Rectangle {
-            height: 46px;
-            border-radius: 12px;
-            background: t.pressed ? Theme.card-pressed : Theme.card;
-            t := TouchArea {
-                clicked => { root.pick(ha.url); }
+
+        // Logo, title, what to do; Wi-Fi can still be changed.
+        HorizontalLayout {
+            spacing: 12px;
+            VerticalLayout {
+                alignment: center;
+                LogoMark { size: 40px; }
             }
-            HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 10px;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: 0px;
                 Text {
-                    text: ha.name;
-                    font-size: 16px;
-                    font-weight: 700;
+                    text: root.pick-text(root.titles, 1);
+                    font-size: Theme.font-title; font-family: Theme.heading-family;
+                    font-weight: Theme.weight-strong;
                     color: Theme.text;
-                    vertical-alignment: center;
+                    overflow: elide;
                 }
                 Text {
-                    text: ha.url;
-                    font-size: 14px;
+                    text: root.pick-text(root.subtitles, 7);
+                    font-size: Theme.font-label;
                     color: Theme.muted;
-                    vertical-alignment: center;
-                    horizontal-alignment: right;
                     overflow: elide;
                 }
             }
-        }
-        Rectangle {
-            height: 48px;
-            border-radius: 12px;
-            background: Theme.card;
-            border-width: 2px;
-            border-color: Theme.accent;
-            Text {
-                x: 14px;
-                text: root.address == "" ? "192.168.1.10:8123" : root.address;
-                font-size: 20px;
-                color: root.address == "" ? Theme.faint : Theme.text;
-                vertical-alignment: center;
-            }
-        }
-        GridLayout {
-            spacing: 8px;
-            Row {
-                KeyButton { label: "1"; clicked => { root.key("1"); } }
-                KeyButton { label: "2"; clicked => { root.key("2"); } }
-                KeyButton { label: "3"; clicked => { root.key("3"); } }
-                KeyButton { label: "."; clicked => { root.key("."); } }
-            }
-            Row {
-                KeyButton { label: "4"; clicked => { root.key("4"); } }
-                KeyButton { label: "5"; clicked => { root.key("5"); } }
-                KeyButton { label: "6"; clicked => { root.key("6"); } }
-                KeyButton { label: ":"; clicked => { root.key(":"); } }
-            }
-            Row {
-                KeyButton { label: "7"; clicked => { root.key("7"); } }
-                KeyButton { label: "8"; clicked => { root.key("8"); } }
-                KeyButton { label: "9"; clicked => { root.key("9"); } }
-                KeyButton { label: "←"; clicked => { root.key("back"); } }
-            }
-            Row {
-                KeyButton { label: "0"; clicked => { root.key("0"); } }
-                KeyButton {
-                    colspan: 3;
-                    label: root.busy ? "Checking…" : "Connect";
-                    accent: true;
-                    clicked => { root.connect(); }
+            VerticalLayout {
+                alignment: center;
+                // Signal of the current Wi-Fi; tap: which network, change it.
+                RoundButton {
+                    icon: ["\u{F091F}", "\u{F0922}", "\u{F0925}", "\u{F0928}"][max(0, min(3, root.wifi-bars - 1))];
+                    size: 40px;
+                    tint: root.wifi-bars <= 1 ? Theme.warning : Theme.muted;
+                    clicked => { root.wifi-info-open = !root.wifi-info-open; }
                 }
             }
         }
+
+        // One found, several found, or still looking.
+        if root.found.length == 1: Rectangle {
+            height: 52px;
+            border-radius: Theme.radius-small;
+            background: t.pressed ? Theme.surface-pressed : Theme.surface;
+            t := TouchArea {
+                clicked => { root.pick(root.found[0].url); }
+            }
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 38px;
+                        height: 38px;
+                        border-radius: 19px;
+                        background: #18bcf226;
+                        Icon { text: "\u{F07D0}"; font-size: 22px; color: #18bcf2; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.found[0].name;
+                        font-size: Theme.font-body;
+                        font-weight: Theme.weight-strong;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.found[0].url;
+                        font-size: Theme.font-caption;
+                        color: Theme.muted;
+                        overflow: elide;
+                    }
+                }
+                Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.faint; }
+            }
+        }
+        if root.found.length > 1: Rectangle {
+            height: 52px;
+            border-radius: Theme.radius-small;
+            background: tm.pressed ? Theme.surface-pressed : Theme.surface;
+            tm := TouchArea {
+                clicked => { root.choose-many(); }
+            }
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 38px;
+                        height: 38px;
+                        border-radius: 19px;
+                        background: #18bcf226;
+                        Icon { text: "\u{F07D0}"; font-size: 22px; color: #18bcf2; }
+                        // How many were found.
+                        Rectangle {
+                            x: parent.width - 14px;
+                            y: -4px;
+                            width: 20px;
+                            height: 20px;
+                            border-radius: 10px;
+                            // brand: a number never sits on Signal
+                            background: Theme.text;
+                            Text {
+                                text: root.found.length;
+                                font-size: 12px;
+                                font-weight: Theme.weight-strong;
+                                color: Theme.background;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.pick-text(root.many-before, 37) + root.found.length + root.pick-text(root.many-after, 37);
+                        font-size: Theme.font-body;
+                        font-weight: Theme.weight-strong;
+                        color: Theme.text;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.pick-text(root.many-hints, 211);
+                        font-size: Theme.font-caption;
+                        color: Theme.muted;
+                        overflow: elide;
+                    }
+                }
+                Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.faint; }
+            }
+        }
+        if root.found.length == 0: Rectangle {
+            height: 52px;
+            border-radius: Theme.radius-small;
+            border-width: 1px;
+            border-color: Theme.outline;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 10px;
+                spacing: 12px;
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle {
+                        width: 38px;
+                        height: 38px;
+                        Icon { text: "\u{F0437}"; font-size: 22px; color: Theme.faint; }
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: root.pick-text(root.searching, 37);
+                        font-size: Theme.font-label;
+                        color: Theme.muted;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.pick-text(root.searching-hints, 211);
+                        font-size: Theme.font-caption;
+                        color: Theme.faint;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
+
+        // Typed address with a caret.
+        Rectangle {
+            height: 50px;
+            border-radius: Theme.radius-small;
+            background: Theme.surface;
+            border-width: 2px;
+            border-color: root.message-kind == 1 ? Theme.danger : Theme.accent;
+            HorizontalLayout {
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 2px;
+                alignment: start;
+                if root.address != "": Text {
+                    text: root.address;
+                    font-size: 22px;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    Rectangle { width: 2px; height: 26px; background: Theme.accent; }
+                }
+                if root.address == "": Text {
+                    text: "192.168.0.10";
+                    font-size: 22px;
+                    color: Theme.faint;
+                    vertical-alignment: center;
+                }
+            }
+        }
+
+        // What happened, right under the address.
+        MessageLine {
+            message: root.message;
+            kind: root.message-kind;
+            busy: root.busy;
+        }
+    }
+
+    // Phone-like keypad in the shared keyboard block.
+    GridLayout {
+        x: Theme.pad;
+        y: Theme.keyboard-top;
+        width: root.width - 2 * Theme.pad;
+        spacing-horizontal: 6px;
+        spacing-vertical: Theme.key-gap;
+        Row {
+            KeyButton { label: "1"; clicked => { root.key("1"); } }
+            KeyButton { label: "2"; clicked => { root.key("2"); } }
+            KeyButton { label: "3"; clicked => { root.key("3"); } }
+            KeyButton { icon: "\u{F0B5C}"; clicked => { root.key("back"); } }
+        }
+        Row {
+            KeyButton { label: "4"; clicked => { root.key("4"); } }
+            KeyButton { label: "5"; clicked => { root.key("5"); } }
+            KeyButton { label: "6"; clicked => { root.key("6"); } }
+            KeyButton { label: ":8123"; small: true; clicked => { root.key(":8123"); } }
+        }
+        Row {
+            KeyButton { label: "7"; clicked => { root.key("7"); } }
+            KeyButton { label: "8"; clicked => { root.key("8"); } }
+            KeyButton { label: "9"; clicked => { root.key("9"); } }
+            KeyButton { label: ":"; clicked => { root.key(":"); } }
+        }
+        Row {
+            KeyButton { label: "."; clicked => { root.key("."); } }
+            KeyButton { label: "0"; clicked => { root.key("0"); } }
+            KeyButton {
+                colspan: 2;
+                primary: true;
+                label: root.busy ? "…" : "Connect";
+                icon: root.busy ? "" : "\u{F0054}";
+                clicked => { root.connect(); }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
+        }
+    }
+
+    // Which Wi-Fi the panel is on, and a way back to the network picker.
+    if root.wifi-info-open: Rectangle {
+        TouchArea { clicked => { root.wifi-info-open = false; } }
+        Rectangle {
+            x: root.width - self.width - Theme.pad;
+            y: 64px;
+            width: 280px;
+            height: card.preferred-height;
+            border-radius: Theme.radius-small;
+            background: Theme.surface-raised;
+            border-width: 1px;
+            border-color: Theme.outline;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: #00000080;
+            TouchArea { }
+            card := VerticalLayout {
+                padding: 14px;
+                padding-top: 8px;
+                padding-right: 8px;
+                spacing: 8px;
+                HorizontalLayout {
+                    Text {
+                        horizontal-stretch: 1;
+                        text: "Connected to";
+                        font-size: Theme.font-caption;
+                        color: Theme.muted;
+                        vertical-alignment: center;
+                    }
+                    // Small close button.
+                    Rectangle {
+                        width: 28px;
+                        height: 28px;
+                        border-radius: 14px;
+                        background: cx.pressed ? Theme.surface-pressed : Theme.surface;
+                        cx := TouchArea { clicked => { root.wifi-info-open = false; } }
+                        Icon { text: "\u{F0156}"; font-size: 16px; color: Theme.muted; }
+                    }
+                }
+                HorizontalLayout {
+                    spacing: 10px;
+                    Icon {
+                        text: ["\u{F091F}", "\u{F0922}", "\u{F0925}", "\u{F0928}"][max(0, min(3, root.wifi-bars - 1))];
+                        font-size: 26px;
+                        color: root.wifi-bars <= 1 ? Theme.warning : Theme.text;
+                    }
+                    VerticalLayout {
+                        alignment: center;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: root.wifi-name;
+                            font-size: Theme.font-body;
+                            font-weight: Theme.weight-strong;
+                            color: Theme.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: (root.wifi-bars >= 4 ? "Strong signal" : root.wifi-bars == 3 ? "Good signal" : root.wifi-bars == 2 ? "Weak signal" : "Very weak signal") + " · " + root.wifi-ip;
+                            font-size: Theme.font-caption;
+                            color: Theme.muted;
+                            overflow: elide;
+                        }
+                    }
+                }
+                Rectangle {
+                    height: 40px;
+                    border-radius: 10px;
+                    border-width: 1.5px;
+                    border-color: Theme.accent;
+                    background: cn.pressed ? Theme.accent.with-alpha(0.15) : transparent;
+                    cn := TouchArea { clicked => { root.wifi-info-open = false; root.change-wifi(); } }
+                    Text {
+                        text: "Change network";
+                        font-size: Theme.font-label;
+                        font-weight: Theme.weight-strong;
+                        color: Theme.accent;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Phrase lists shared by more than one screen. The hidden-network row of the
+// Wi-Fi list and the title of the hidden-network screen use the same list and
+// the same random number, so the screen is titled with the row that was tapped.
+export global Phrases {
+    out property <[string]> wifi-hidden: [
+        "A shy, hidden one…",
+        "Secret network…",
+        "The one with no name…",
+        "It's there, I just can't see it…",
+        "Something is hiding…",
+        "Hiding something? Type its name…",
+        "The quiet one…",
+        "Not on the list? I won't ask why…",
+    ];
+    out property <int> wifi-hidden-stride: 28561;
+}
+
+// First start without network: pick a Wi-Fi network (scan results),
+// or a hidden one by name.
+export struct WifiNet {
+    ssid: string,
+    strength: int,     // 1..4 bars
+    secure: bool,
+    saved: bool,
+}
+
+component WifiRow inherits Rectangle {
+    in property <string> icon;
+    in property <color> icon-color: Theme.text;
+    in property <string> label;
+    in property <string> detail;
+    in property <bool> divider: true;
+    callback clicked;
+    height: 48px;
+    background: t.pressed ? Theme.surface-pressed : transparent;
+    t := TouchArea {
+        clicked => { root.clicked(); }
+    }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        spacing: 14px;
+        Icon { text: root.icon; font-size: 24px; color: root.icon-color; }
         Text {
-            text: root.message;
-            font-size: 14px;
+            horizontal-stretch: 1;
+            text: root.label;
+            font-size: Theme.font-body;
+            color: Theme.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.detail != "": Text {
+            text: root.detail;
+            font-size: Theme.font-caption;
             color: Theme.muted;
+            vertical-alignment: center;
+        }
+        Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.faint; }
+    }
+    if root.divider: Rectangle {
+        x: 52px;
+        y: parent.height - 1px;
+        width: parent.width - 52px;
+        height: 1px;
+        background: Theme.outline;
+    }
+}
+
+export component WifiScreen inherits Rectangle {
+    in property <[WifiNet]> networks;
+    in property <bool> scanning;
+    callback pick(string);
+    callback rescan();
+    callback other();
+    in property <int> theme-mode: 2;   // 0 light, 1 dark, 2 auto
+    callback theme-changed(int);
+    // Random number from the app (0..1e9), picked each time the screen
+    // opens. Every text below comes from its own list (lists may differ in
+    // length) and each list uses a different stride of the number, so any
+    // title can meet any subtitle; each title fits each subtitle.
+    in property <int> variant: 0;
+    property <[string]> titles: [
+        "Where's the Wi-Fi?",
+        "Let's get online!",
+        "Signal! Where is the signal?",
+        "Wi-Fi time!",
+        "I need some Wi-Fi.",
+        "Beam me up, Scotty.",
+    ];
+    property <[string]> subtitles: [
+        "I can see these. Which one is yours?",
+        "Tap yours. I won't judge the name.",
+        "Pick the one that feels like home.",
+        "I know which one is yours, but I won't tell.",
+        "One of these is yours, right?",
+        "I already know which one is yours. Do you?",
+        "I've been watching these for a while.",
+    ];
+    property <[string]> scanning-texts: [
+        "Sniffing the airwaves…",
+        "Listening for Wi-Fi…",
+        "Looking around…",
+        "Scanning the neighbourhood…",
+        "Peeking at the airwaves…",
+        "I see dead people…",
+        "Accio Wi-Fi!",
+        "Still haven't found what I'm looking for…",
+    ];
+    property <[string]> saved-texts: [
+        "I think I know this",
+        "We've met",
+        "Old friend",
+        "Been here before",
+        "Looks familiar",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
+    background: Theme.background;
+    TouchArea {}
+    VerticalLayout {
+        padding: Theme.pad;
+        spacing: 10px;
+
+        // Logo, title, what to do, scan again.
+        HorizontalLayout {
+            spacing: 12px;
+            padding-bottom: 2px;
+            VerticalLayout {
+                alignment: center;
+                LogoMark { size: 40px; }
+            }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                spacing: 2px;
+                Text {
+                    text: root.pick-text(root.titles, 1);
+                    font-size: Theme.font-title; font-family: Theme.heading-family;
+                    font-weight: Theme.weight-strong;
+                    color: Theme.text;
+                }
+                Text {
+                    text: root.scanning ? root.pick-text(root.scanning-texts, 169) : root.pick-text(root.subtitles, 13);
+                    font-size: Theme.font-label;
+                    color: Theme.muted;
+                }
+            }
+            VerticalLayout {
+                alignment: center;
+                RoundButton {
+                    icon: "\u{F0450}";
+                    size: 40px;
+                    tint: Theme.muted;
+                    clicked => { root.rescan(); }
+                }
+            }
+        }
+
+        // Networks, strongest first, then a hidden one by name.
+        Rectangle {
+            vertical-stretch: 1;
+            border-radius: Theme.radius-small;
+            background: Theme.surface;
+            clip: true;
+            Flickable {
+                content-height: list.preferred-height;
+                list := VerticalLayout {
+                    for n[i] in root.networks: WifiRow {
+                        icon: n.secure
+                            ? ["\u{F0921}", "\u{F0924}", "\u{F0927}", "\u{F092A}"][max(0, min(3, n.strength - 1))]
+                            : ["\u{F091F}", "\u{F0922}", "\u{F0925}", "\u{F0928}"][max(0, min(3, n.strength - 1))];
+                        icon-color: n.strength <= 1 ? Theme.muted : Theme.text;
+                        label: n.ssid;
+                        detail: n.saved ? root.pick-text(root.saved-texts, 2197) : "";
+                        clicked => { root.pick(n.ssid); }
+                    }
+                    WifiRow {
+                        icon: "\u{F16C3}";
+                        icon-color: Theme.muted;
+                        label: root.pick-text(Phrases.wifi-hidden, Phrases.wifi-hidden-stride);
+                        divider: false;
+                        clicked => { root.other(); }
+                    }
+                }
+            }
+        }
+
+        // Light, dark or automatic (light sensor), from the first start on.
+        HorizontalLayout {
+            alignment: center;
+            ThemeSwitch {
+                selected: root.theme-mode;
+                changed(m) => { root.theme-changed(m); }
+            }
+        }
+    }
+}
+
+// On-screen keyboard: letters (lower / upper case) and two symbol pages.
+// Every page has the same key grid (10 / 9 / shift + 7 + back / bottom row),
+// so a key never moves when the page changes. Keys send their text; special
+// keys send "shift", "symbols", "layout", "back", "enter". Holding a letter
+// shows its accented forms above it (popup-options).
+component Key inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <bool> primary: false;
+    in property <color> accent: Theme.accent;   // the primary key's colour (the screen's action colour)
+    in property <bool> active: false;
+    in property <bool> caption: false;   // small, muted label (space bar: language)
+    in property <string> value: self.label;
+    callback pressed-key(string);
+    height: Theme.key-height;
+    preferred-width: 10px;
+    border-radius: 10px;
+    background: root.primary ? (t.pressed ? Theme.text.with-alpha(0.8) : Theme.text)
+        : root.active ? Theme.surface-pressed
+        : (t.pressed ? Theme.surface-pressed : Theme.surface-raised);
+    t := TouchArea {
+        clicked => { root.pressed-key(root.value); }
+    }
+    if root.label != "": Text {
+        text: root.label;
+        font-size: root.caption ? Theme.font-caption : root.primary ? Theme.font-label : 20px;
+        font-weight: root.primary ? Theme.weight-strong : Theme.weight-regular;
+        color: root.primary ? Theme.background : root.caption ? Theme.muted : Theme.text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    if root.icon != "": Icon {
+        text: root.icon;
+        font-size: 22px;
+        color: root.primary ? Theme.background : Theme.text;
+    }
+}
+
+export component Keyboard inherits Rectangle {
+    in property <int> layer: 0;          // 0 lower case, 1 upper case, 2 symbols, 3 more symbols
+    in property <int> layout: 0;         // letters: 0 Latin, 1 Cyrillic (globe key switches)
+    in property <string> enter-label: "Connect";
+    in property <color> accent: Theme.accent;    // enter key and accent picker: the screen's action colour
+    // Long press on a letter: its accented forms, where to show them, which one the finger is on.
+    in property <string> held-key;
+    in property <[string]> popup-options;
+    in property <length> popup-x;
+    in property <length> popup-y;
+    in property <int> popup-selected: -1;
+    callback key(string);
+    height: 4 * Theme.key-height + 3 * Theme.key-gap;
+    property <[string]> row1: root.layer == 3 ? ["[", "]", "{", "}", "<", ">", "^", "~", "`", "|"]
+        : root.layer == 2 ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]
+        : root.layout == 1 ? (root.layer == 1 ? ["Й", "Ц", "У", "К", "Е", "Н", "Г", "Ш", "Щ", "З", "Х"] : ["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х"])
+        : root.layer == 1 ? ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P"]
+        : ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"];
+    property <[string]> row2: root.layer == 3 ? ["_", "=", "\\", "?", "€", "£", "¥", "§", "°"]
+        : root.layer == 2 ? ["@", "#", "$", "%", "&", "*", "-", "+", "("]
+        : root.layout == 1 ? (root.layer == 1 ? ["Ф", "Ы", "В", "А", "П", "Р", "О", "Л", "Д", "Ж", "Э"] : ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"])
+        : root.layer == 1 ? ["A", "S", "D", "F", "G", "H", "J", "K", "L"]
+        : ["a", "s", "d", "f", "g", "h", "j", "k", "l"];
+    property <[string]> row3: root.layer == 3 ? ["…", "«", "»", "„", "”", "¿", "¡"]
+        : root.layer == 2 ? [")", "!", "\"", "'", ":", ";", "/"]
+        : root.layout == 1 ? (root.layer == 1 ? ["Я", "Ч", "С", "М", "И", "Т", "Ь", "Б", "Ю"] : ["я", "ч", "с", "м", "и", "т", "ь", "б", "ю"])
+        : root.layer == 1 ? ["Z", "X", "C", "V", "B", "N", "M"]
+        : ["z", "x", "c", "v", "b", "n", "m"];
+    // Half-key indent on the second row, as on Latin keyboards (all pages).
+    property <bool> indent: root.layout == 0 || root.layer >= 2;
+    VerticalLayout {
+        spacing: Theme.key-gap;
+        HorizontalLayout {
+            spacing: 5px;
+            for k in root.row1: Key { horizontal-stretch: 1; label: k; active: k == root.held-key; pressed-key(v) => { root.key(v); } }
+        }
+        HorizontalLayout {
+            spacing: 5px;
+            if root.indent: Rectangle { horizontal-stretch: 0.5; preferred-width: 1px; }
+            for k in root.row2: Key { horizontal-stretch: 1; label: k; active: k == root.held-key; pressed-key(v) => { root.key(v); } }
+            if root.indent: Rectangle { horizontal-stretch: 0.5; preferred-width: 1px; }
+        }
+        HorizontalLayout {
+            spacing: 5px;
+            Key {
+                horizontal-stretch: 1.5;
+                // Letters: shift; symbols: the other symbol page.
+                icon: root.layer == 1 ? "\u{F0632}" : root.layer == 0 ? "\u{F0636}" : "";
+                label: root.layer == 2 ? "=\\<" : root.layer == 3 ? "?123" : "";
+                active: root.layer == 1;
+                value: "shift";
+                pressed-key(v) => { root.key(v); }
+            }
+            for k in root.row3: Key { horizontal-stretch: 1; label: k; active: k == root.held-key; pressed-key(v) => { root.key(v); } }
+            Key { horizontal-stretch: 1.5; icon: "\u{F0B5C}"; value: "back"; pressed-key(v) => { root.key(v); } }
+        }
+        HorizontalLayout {
+            spacing: 5px;
+            Key { horizontal-stretch: 1.5; label: root.layer >= 2 ? "abc" : "?123"; value: "symbols"; pressed-key(v) => { root.key(v); } }
+            Key { horizontal-stretch: 1; icon: "\u{F059F}"; value: "layout"; pressed-key(v) => { root.key(v); } }
+            Key { horizontal-stretch: 1; label: ","; pressed-key(v) => { root.key(v); } }
+            Key { horizontal-stretch: 3; caption: true; label: root.layout == 1 ? "Русский" : "English"; value: " "; pressed-key(v) => { root.key(v); } }
+            Key { horizontal-stretch: 1; label: "."; pressed-key(v) => { root.key(v); } }
+            Key { horizontal-stretch: 2.5; primary: true; accent: root.accent; label: root.enter-label; value: "enter"; pressed-key(v) => { root.key(v); } }
+        }
+    }
+
+    // Accented forms of the held letter; sliding the finger picks one.
+    if root.popup-options.length > 0: Rectangle {
+        x: root.popup-x;
+        y: root.popup-y;
+        width: root.popup-options.length * 42px + 8px;
+        height: 54px;
+        border-radius: 12px;
+        background: Theme.surface-raised;
+        border-width: 1px;
+        border-color: Theme.outline;
+        drop-shadow-blur: 14px;
+        drop-shadow-color: #00000070;
+        HorizontalLayout {
+            padding: 4px;
+            for o[i] in root.popup-options: Rectangle {
+                width: 42px;
+                border-radius: 9px;
+                background: i == root.popup-selected ? Theme.text : transparent;
+                Text {
+                    text: o;
+                    font-size: 22px;
+                    color: i == root.popup-selected ? Theme.background : Theme.text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}
+
+// Back button, title and subtitle at the top of the keyboard screens.
+component BackHeader inherits HorizontalLayout {
+    in property <string> title;
+    in property <string> subtitle;
+    callback back();
+    spacing: 12px;
+    VerticalLayout {
+        alignment: center;
+        RoundButton { icon: "\u{F0141}"; size: 40px; tint: Theme.text; clicked => { root.back(); } }
+    }
+    VerticalLayout {
+        alignment: center;
+        horizontal-stretch: 1;
+        spacing: 0px;
+        Text {
+            text: root.title;
+            font-size: Theme.font-title; font-family: Theme.heading-family;
+            font-weight: Theme.weight-strong;
+            color: Theme.text;
+            overflow: elide;
+        }
+        Text {
+            text: root.subtitle;
+            font-size: Theme.font-label;
+            color: Theme.muted;
+            overflow: elide;
+        }
+    }
+}
+
+// One input line (name or password).
+component InputField inherits Rectangle {
+    in property <string> text;
+    in property <string> placeholder;
+    in property <bool> focused;
+    in property <bool> error;
+    in property <bool> secret;           // shows the eye button
+    in property <bool> show;
+    callback tapped();
+    callback toggle-show();
+    height: 46px;
+    border-radius: Theme.radius-small;
+    background: Theme.surface;
+    border-width: root.focused || root.error ? 2px : 1px;
+    border-color: root.error ? Theme.danger : root.focused ? Theme.accent : Theme.outline;
+    TouchArea { clicked => { root.tapped(); } }
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 4px;
+        spacing: 2px;
+        if root.text != "": Text {
+            text: root.text;
+            font-size: Theme.font-body;
+            color: Theme.text;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        if root.focused: VerticalLayout {
+            alignment: center;
+            Rectangle { width: 2px; height: 24px; background: Theme.accent; }
+        }
+        if root.text == "": Text {
+            text: root.placeholder;
+            font-size: Theme.font-body;
+            color: Theme.faint;
+            vertical-alignment: center;
+        }
+        Rectangle { horizontal-stretch: 1; }
+        if root.secret: VerticalLayout {
+            alignment: center;
+            Rectangle {
+                width: 38px;
+                height: 38px;
+                border-radius: 19px;
+                background: st.pressed ? Theme.surface-pressed : transparent;
+                st := TouchArea { clicked => { root.toggle-show(); } }
+                Icon { text: root.show ? "\u{F06D1}" : "\u{F06D0}"; font-size: 22px; color: Theme.muted; }
+            }
+        }
+    }
+}
+
+// Password of the picked network.
+export component WifiPasswordScreen inherits Rectangle {
+    in property <string> ssid;
+    in property <string> shown-text;     // the password, or dots while hidden
+    in property <bool> show: false;
+    in property <int> layer: 0;
+    in property <int> layout: 0;
+    in property <string> message;
+    in property <int> message-kind: 0;   // 0 working, 1 error, 2 success
+    in property <bool> busy;
+    in property <int> variant: 0;
+    in property <int> theme-mode: 2;
+    in property <string> held-key;
+    in property <[string]> popup-options;
+    in property <length> popup-x;
+    in property <length> popup-y;
+    in property <int> popup-selected: -1;
+    callback back();
+    callback key(string);
+    callback toggle-show();
+    callback theme-changed(int);
+    property <[string]> prompts: [
+        "What's the secret word?",
+        "Whisper the password. I won't tell anyone.",
+        "Password, please.",
+        "I promise to keep it secret.",
+        "Type the password. I'm not looking.",
+        "Speak, friend, and enter.",
+        "Alohomora?",
+        "Don't speak. Just type the password.",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
+    background: Theme.background;
+    TouchArea {}
+
+    VerticalLayout {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: Theme.keyboard-top;
+        padding: Theme.pad;
+        padding-bottom: 0px;
+        spacing: 8px;
+        alignment: start;
+        BackHeader {
+            title: root.ssid;
+            subtitle: root.pick-text(root.prompts, 1);
+            back => { root.back(); }
+        }
+        InputField {
+            height: 52px;
+            text: root.shown-text;
+            placeholder: "Password";
+            focused: true;
+            error: root.message-kind == 1;
+            secret: true;
+            show: root.show;
+            toggle-show => { root.toggle-show(); }
+        }
+        MessageLine {
+            message: root.message;
+            kind: root.message-kind;
+            busy: root.busy;
+        }
+    }
+
+    Keyboard {
+        x: Theme.pad;
+        y: Theme.keyboard-top;
+        width: root.width - 2 * Theme.pad;
+        layer: root.layer;
+        layout: root.layout;
+        held-key: root.held-key;
+        popup-options: root.popup-options;
+        popup-x: root.popup-x;
+        popup-y: root.popup-y;
+        popup-selected: root.popup-selected;
+        enter-label: root.busy ? "…" : "Connect";
+        key(k) => { root.key(k); }
+    }
+
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
+        }
+    }
+}
+
+// A hidden network: its name and password, typed.
+export component HiddenNetworkScreen inherits Rectangle {
+    in property <string> name;
+    in property <string> shown-password;  // the password, or dots while hidden
+    in property <bool> show: false;
+    in property <int> field: 0;           // focused field: 0 name, 1 password
+    in property <int> layer: 0;
+    in property <int> layout: 0;
+    in property <string> message;
+    in property <int> message-kind: 0;    // 0 working, 1 error, 2 success
+    in property <bool> busy;
+    in property <int> variant: 0;
+    in property <int> theme-mode: 2;
+    callback back();
+    callback key(string);
+    callback focus-field(int);
+    callback toggle-show();
+    callback theme-changed(int);
+    property <[string]> subtitles: [
+        "Tell me its name and password.",
+        "Type its exact name. Capitals count.",
+        "Name first, then the password.",
+        "I'll find it if you tell me what it's called.",
+        "Say its name and it will come out.",
+        "Spell it right, or it stays in the dark.",
+        "What do you call it when no one's around?",
+        "First rule: we don't talk about this network.",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
+    background: Theme.background;
+    TouchArea {}
+
+    VerticalLayout {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: Theme.keyboard-top;
+        padding: Theme.pad;
+        padding-bottom: 0px;
+        spacing: 6px;
+        alignment: start;
+        BackHeader {
+            // The row tapped on the Wi-Fi list.
+            title: root.pick-text(Phrases.wifi-hidden, Phrases.wifi-hidden-stride);
+            subtitle: root.pick-text(root.subtitles, 3);
+            back => { root.back(); }
+        }
+        InputField {
+            text: root.name;
+            placeholder: "Network name";
+            focused: root.field == 0;
+            error: root.message-kind == 1;
+            tapped => { root.focus-field(0); }
+        }
+        InputField {
+            text: root.shown-password;
+            placeholder: "Password (empty if open)";
+            focused: root.field == 1;
+            secret: true;
+            show: root.show;
+            tapped => { root.focus-field(1); }
+            toggle-show => { root.toggle-show(); }
+        }
+        MessageLine {
+            message: root.message;
+            kind: root.message-kind;
+            busy: root.busy;
+        }
+    }
+
+    Keyboard {
+        x: Theme.pad;
+        y: Theme.keyboard-top;
+        width: root.width - 2 * Theme.pad;
+        layer: root.layer;
+        layout: root.layout;
+        enter-label: root.field == 0 ? "Next" : (root.busy ? "…" : "Connect");
+        key(k) => { root.key(k); }
+    }
+
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
+        }
+    }
+}
+
+// Several Home Assistants found: pick the one this panel belongs to.
+export component HaPickScreen inherits Rectangle {
+    in property <[FoundHa]> found;
+    in property <int> variant: 0;
+    in property <int> theme-mode: 2;
+    callback back();
+    callback pick(string);
+    callback theme-changed(int);
+    property <string> multiples: root.found.length == 2 ? "Twins" : root.found.length == 3 ? "Triplets"
+        : root.found.length == 4 ? "Quadruplets" : root.found.length == 5 ? "Quintuplets" : "A whole crowd";
+    property <[string]> titles: [
+        "More than one? Fancy.",
+        "Which one is the boss?",
+        root.multiples + "! Pick the real one.",
+        "A whole family of them.",
+        "Choose wisely.",
+        "Only one may rule this panel.",
+        "There can be only one.",
+        "I am inevitable.",
+    ];
+    property <[string]> subtitles: [
+        "Tap the one this panel should obey.",
+        "The others won't be offended. Probably.",
+        "Pick the one that runs this house.",
+        "I'll listen to whichever you tap.",
+        "The rest will keep watching.",
+        "I don't have Home Assistants. I have family.",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
+    background: Theme.background;
+    TouchArea {}
+    VerticalLayout {
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: Theme.switch-top - 8px;
+        padding: Theme.pad;
+        padding-bottom: 0px;
+        spacing: 10px;
+        alignment: start;
+        BackHeader {
+            title: root.pick-text(root.titles, 1);
+            subtitle: root.pick-text(root.subtitles, 7);
+            back => { root.back(); }
+        }
+        Rectangle {
+            height: min(root.found.length * 60px, 5 * 60px);
+            border-radius: Theme.radius-small;
+            background: Theme.surface;
+            clip: true;
+            Flickable {
+                content-height: list.preferred-height;
+                list := VerticalLayout {
+                    for ha[i] in root.found: Rectangle {
+                        height: 60px;
+                        background: t.pressed ? Theme.surface-pressed : transparent;
+                        t := TouchArea { clicked => { root.pick(ha.url); } }
+                        HorizontalLayout {
+                            padding-left: 10px;
+                            padding-right: 10px;
+                            spacing: 12px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 38px;
+                                    height: 38px;
+                                    border-radius: 19px;
+                                    background: #18bcf226;
+                                    Icon { text: "\u{F07D0}"; font-size: 22px; color: #18bcf2; }
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                horizontal-stretch: 1;
+                                Text {
+                                    text: ha.name;
+                                    font-size: Theme.font-body;
+                                    font-weight: Theme.weight-strong;
+                                    color: Theme.text;
+                                    overflow: elide;
+                                }
+                                Text {
+                                    text: ha.url;
+                                    font-size: Theme.font-caption;
+                                    color: Theme.muted;
+                                    overflow: elide;
+                                }
+                            }
+                            Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.faint; }
+                        }
+                        if i < root.found.length - 1: Rectangle {
+                            x: 60px;
+                            y: parent.height - 1px;
+                            width: parent.width - 60px;
+                            height: 1px;
+                            background: Theme.outline;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
+        }
+    }
+}
+
+// First connection to Home Assistant (after pairing, or when the data is
+// late after a start): logo in a progress ring, what is happening, which
+// Home Assistant. The ring follows the real milestones of the session;
+// a faint glow keeps running ahead of it so it never looks stuck.
+export component ConnectingScreen inherits Rectangle {
+    in property <float> morse-t;          // the Morse light's clock (seconds)
+    in property <string> ha-url;
+    in property <bool> slow: false;       // no data after ~10 s
+    in property <float> progress: 0;      // 0..1, reached milestones
+    in property <int> step: 0;            // the current milestone, 0..5
+    in property <int> variant: 0;
+    in property <int> theme-mode: 2;
+    callback theme-changed(int);
+    property <[string]> titles: [
+        "Phoning home…",
+        "Moving my things in…",
+        "Getting to know your house…",
+        "Learning the names of your lights…",
+        "Reading your house's mind…",
+        "Wake up, Neo…",
+        "Unpacking the furniture…",
+        "Counting your light switches…",
+        "Don't stop me now…",
+    ];
+    property <[string]> slow-texts: [
+        "Home Assistant is taking its sweet time.",
+        "Still here. Still waiting. Home Assistant is thinking hard.",
+        "This is taking a while. Don't worry, I never give up.",
+        "Patience, young Padawan. Home Assistant is slow today.",
+        "Hmm, Home Assistant is shy today. Hang on.",
+        "I can wait. I'm very good at waiting.",
+        "Tick tock. I'm still here.",
+        "Are we there yet?",
+        "Hold on to your butts.",
+        "Just keep swimming.",
+    ];
+    // One short line per milestone (they pass quickly).
+    property <[string]> step0: ["Ringing the doorbell…", "Dialing the house…", "Saying hi to Home Assistant…"];
+    property <[string]> step1: ["Showing my ID…", "Doing the secret handshake…", "Flashing my badge…"];
+    property <[string]> step2: ["Reading the floor plan…", "Studying the blueprints…", "Unrolling the map…"];
+    property <[string]> step3: ["Meeting your devices…", "Shaking hands with every switch…", "Taking attendance…"];
+    property <[string]> step4: ["Tuning in…", "Signing up for the gossip…", "Plugging into the walls…"];
+    property <[string]> step5: ["Wiping my feet…", "Fluffing the pillows…", "Almost home…"];
+    function step-label() -> string {
+        root.step == 0 ? root.pick-text(root.step0, 11) : root.step == 1 ? root.pick-text(root.step1, 11)
+            : root.step == 2 ? root.pick-text(root.step2, 11) : root.step == 3 ? root.pick-text(root.step3, 11)
+            : root.step == 4 ? root.pick-text(root.step4, 11) : root.pick-text(root.step5, 11)
+    }
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
+
+    // The mark writes itself over the calm Morse pattern, as on the start-up
+    // and the dashboard's loading screen (no glow, nothing in its clear space).
+    background: Theme.background;
+    TouchArea {}
+    Image {
+        width: 480px;
+        height: 480px;
+        source: Theme.dark ? @image-url("images/wait-dark.png") : @image-url("images/wait-light.png");
+    }
+    MorseWrite {
+        u: 16px;
+        dark: Theme.dark;
+        x: (parent.width - self.width) / 2;
+        y: 180px - self.height / 2;
+    }
+
+    VerticalLayout {
+        x: Theme.pad;
+        y: 254px;
+        width: root.width - 2 * Theme.pad;
+        height: Theme.switch-top - 8px - self.y;
+        alignment: start;
+        spacing: 8px;
+        Text {
+            text: root.pick-text(root.titles, 1);
+            font-size: Theme.font-title; font-family: Theme.heading-family;
+            font-weight: Theme.weight-strong;
+            color: Theme.text;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.step-label() + " · " + root.ha-url;
+            font-size: Theme.font-label;
+            color: Theme.muted;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+        // Shown only when it takes long.
+        Text {
+            height: 40px;
+            text: root.slow ? root.pick-text(root.slow-texts, 7) : "";
+            font-size: Theme.font-label;
+            color: Theme.warning;
+            horizontal-alignment: center;
+            vertical-alignment: top;
             wrap: word-wrap;
+        }
+    }
+
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
+        }
+    }
+}
+
+// No data at all yet and nothing to connect to: no network, or Home
+// Assistant does not answer. The ring empties towards the next attempt.
+export component OfflineScreen inherits Rectangle {
+    in property <float> morse-t;          // the Morse light's clock (seconds)
+    in property <int> cause: 1;           // 1 no network, 2 Home Assistant not answering
+    // Next attempt: started at retry-start (ms on the animation clock, the
+    // platform's time since start) and comes after retry-total ms.
+    in property <float> retry-start: 0;
+    in property <float> retry-total: 0;   // 0: trying right now
+    in property <string> net-name;
+    in property <string> ha-url;
+    in property <int> variant: 0;
+    in property <int> theme-mode: 2;
+    callback try-now();
+    callback change-wifi();
+    callback change-ha();
+    callback theme-changed(int);
+    property <[string]> net-titles: [
+        "Where does the Wi-Fi go?",
+        "The Wi-Fi left me.",
+        "No network. This is fine.",
+        "Alone in the dark…",
+        "Home alone. Again.",
+        "Is there anybody out there?",
+        "Wi-Fi, somebody that I used to know.",
+        "I've lost my signal. And my mind.",
+        "The final countdown…",
+    ];
+    property <[string]> net-hints: [
+        "Maybe the router is napping. I'll wait.",
+        "I'm not going anywhere. Literally. I'm screwed to the wall.",
+        "Never gonna give you up. I'll keep trying.",
+        "Should I stay or should I go? I'll stay.",
+        "Stayin' alive. Waiting for the Wi-Fi.",
+        "The router will come back. They always come back.",
+        "This is it. Don't get scared now.",
+    ];
+    property <[string]> ha-titles: [
+        "I'll be back.",
+        "Hello? Anybody home?",
+        "Knock, knock. No answer.",
+        "Kevin? KEVIN!",
+        "Psst. Home Assistant. Wake up.",
+        "Where is my mind?",
+        "Home Assistant, call me maybe?",
+        "The sound of silence…",
+        "The final countdown…",
+    ];
+    property <[string]> ha-hints: [
+        "Maybe it's restarting. I'll keep knocking.",
+        "I'm patient. Very patient. Disturbingly patient.",
+        "Did it move house? Give me the new address below.",
+        "Updating, maybe? Grab a coffee. I'll keep watching.",
+        "Don't stop believin'. It'll be back.",
+        "Livin' on a prayer. And on retries.",
+        "I will survive. Home Assistant too, hopefully.",
+        "I can see the house from here. It's just not talking to me.",
+    ];
+    function pick-text(list: [string], stride: int) -> string {
+        list[Math.mod(floor(root.variant / stride), list.length)]
+    }
+    property <float> now: animation-tick() / 1ms;
+    property <float> left-ms: root.retry-total > 0 ? max(0, root.retry-start + root.retry-total - root.now) : 0;
+    property <float> wait: root.retry-total > 0 ? root.left-ms / root.retry-total : 0;
+    property <int> seconds: ceil(root.left-ms / 1000);
+    // The mark writes itself over the calm Morse pattern (one family with the
+    // start-up and the loading screen); what is missing is said in the text
+    // under it, nothing enters the mark's clear space.
+    background: Theme.background;
+    TouchArea {}
+    Image {
+        width: 480px;
+        height: 480px;
+        source: Theme.dark ? @image-url("images/wait-dark.png") : @image-url("images/wait-light.png");
+    }
+    MorseWrite {
+        u: 16px;
+        dark: Theme.dark;
+        x: (parent.width - self.width) / 2;
+        y: 180px - self.height / 2;
+    }
+
+    VerticalLayout {
+        x: Theme.pad;
+        y: 248px;
+        width: root.width - 2 * Theme.pad;
+        height: Theme.switch-top - 4px - self.y;
+        alignment: start;
+        spacing: 8px;
+
+        Text {
+            text: root.cause == 1 ? root.pick-text(root.net-titles, 1) : root.pick-text(root.ha-titles, 1);
+            font-size: Theme.font-title; font-family: Theme.heading-family;
+            font-weight: Theme.weight-strong;
+            color: Theme.text;
+            horizontal-alignment: center;
+        }
+        HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            Icon {
+                text: root.cause == 1 ? "\u{F05AA}" : "\u{F15D0}";
+                font-size: 17px;
+                color: Theme.warning;
+            }
+            Text {
+                text: (root.cause == 1 ? "Wi-Fi " + root.net-name + " · no connection" : root.ha-url + " · not answering")
+                    + " · " + (root.seconds > 0 ? "trying again in " + root.seconds + " s" : "trying now…");
+                font-size: Theme.font-label;
+                color: Theme.muted;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+        }
+        Text {
+            height: 40px;
+            text: root.cause == 1 ? root.pick-text(root.net-hints, 7) : root.pick-text(root.ha-hints, 7);
+            font-size: Theme.font-label;
+            color: Theme.warning;
+            horizontal-alignment: center;
+            vertical-alignment: top;
+            wrap: word-wrap;
+        }
+
+        // Try at once, or fix the setting.
+        HorizontalLayout {
+            alignment: center;
+            spacing: 10px;
+            Rectangle {
+                height: 40px;
+                width: tn.preferred-width + 32px;
+                border-radius: 20px;
+                border-width: 1.5px;
+                border-color: Theme.accent;
+                background: tt.pressed ? Theme.accent.with-alpha(0.15) : transparent;
+                tt := TouchArea { clicked => { root.try-now(); } }
+                tn := Text {
+                    x: 16px;
+                    text: "Try now";
+                    font-size: Theme.font-label;
+                    font-weight: Theme.weight-strong;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+            }
+            Rectangle {
+                height: 40px;
+                width: cg.preferred-width + 32px;
+                border-radius: 20px;
+                background: ct.pressed ? Theme.surface-pressed : Theme.surface-raised;
+                ct := TouchArea { clicked => { if root.cause == 1 { root.change-wifi(); } else { root.change-ha(); } } }
+                cg := Text {
+                    x: 16px;
+                    text: root.cause == 1 ? "Change Wi-Fi" : "Change Home Assistant";
+                    font-size: Theme.font-label;
+                    color: Theme.text;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    HorizontalLayout {
+        y: Theme.switch-top;
+        height: 40px;
+        alignment: center;
+        ThemeSwitch {
+            selected: root.theme-mode;
+            changed(m) => { root.theme-changed(m); }
         }
     }
 }

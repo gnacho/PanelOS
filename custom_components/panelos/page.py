@@ -41,6 +41,7 @@ from .const import (
     CONF_DEVICE,
     CONF_MEDIA_PLAYER,
     CONF_SHOW_CONVERSATION,
+    CONF_VOICE_LOOK,
     CONF_SHOW_HEADER,
     CONF_KEEP_RESOURCES,
     CONF_SHOW_SIDEBAR,
@@ -49,7 +50,10 @@ from .const import (
     CONF_WEATHER,
     CONF_ZOOM,
     CONF_LOADING_SCREEN,
+    CONF_PAGES,
     DOMAIN,
+    MAX_PAGES,
+    PAGE_KINDS,
     REPORTING,
     SIGNAL_CONFIG_UPDATED,
     SIGNAL_LINKS,
@@ -67,6 +71,26 @@ _PNG_MAX = 4 * 1024 * 1024
 _DASHBOARD_PATH = re.compile(r"^[a-z0-9_-]{0,64}$")
 _EMPTY_CLEARS = (CONF_WEATHER, CONF_MEDIA_PLAYER)
 
+def _page(value: Any) -> dict[str, Any]:
+    """One page of the panel: its kind, look, entities (of the kind's domains) and switches."""
+    page = vol.Schema(
+        {
+            vol.Required("kind"): vol.In(list(PAGE_KINDS)),
+            vol.Optional("variant", default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=9)),
+            vol.Optional("entities", default=list): [cv.entity_id],
+            vol.Optional("options", default=dict): {
+                vol.All(str, vol.Length(max=40)): vol.Any(None, bool, int, float, vol.All(str, vol.Length(max=120)))
+            },
+        }
+    )(value)
+    looks, domains, most = PAGE_KINDS[page["kind"]]
+    if page["variant"] >= looks:
+        raise vol.Invalid(f"{page['kind']} has {looks} looks")
+    if len(page["entities"]) > most or any(e.split(".")[0] not in domains for e in page["entities"]):
+        raise vol.Invalid(f"{page['kind']} takes up to {most} entities of {', '.join(domains) or 'no domain'}")
+    return page
+
+
 OPTIONS_SCHEMA = vol.Schema(
     {
         vol.Optional(CONF_DASHBOARD): vol.All(str, vol.Match(_DASHBOARD_PATH)),
@@ -76,10 +100,12 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_MEDIA_PLAYER): vol.Any("", cv.entity_domain("media_player")),
         vol.Optional(CONF_TILES): vol.All([cv.entity_domain(list(TILE_DOMAINS))], vol.Length(max=24)),
         vol.Optional(CONF_SHOW_CONVERSATION): bool,
+        vol.Optional(CONF_VOICE_LOOK): vol.All(vol.Coerce(int), vol.Range(min=0, max=3)),
         vol.Optional(CONF_SKIP_UNUSED): bool,
         vol.Optional(CONF_KEEP_RESOURCES): vol.All([vol.All(str, vol.Length(max=300))], vol.Length(max=100)),
         vol.Optional(CONF_ZOOM): vol.All(vol.Coerce(int), vol.Range(min=50, max=150)),
         vol.Optional(CONF_LOADING_SCREEN): bool,
+        vol.Optional(CONF_PAGES): vol.All([_page], vol.Length(min=1, max=MAX_PAGES)),
         **{
             vol.Optional(key): vol.All(vol.Coerce(float), vol.Range(min=low, max=high))
             for key, (_default, low, high, _step, _unit) in REPORTING.items()
@@ -157,6 +183,7 @@ def _page_data(hass: HomeAssistant) -> dict[str, Any]:
         "panels": panels,
         "dashboards": [dict(choice) for choice in dashboard_choices(hass)],
         "tile_domains": list(TILE_DOMAINS),
+        "page_kinds": {kind: {"looks": looks, "domains": list(domains), "most": most} for kind, (looks, domains, most) in PAGE_KINDS.items()},
         "reporting": {
             key: {"default": default, "min": low, "max": high, "step": step, "unit": unit}
             for key, (default, low, high, step, unit) in REPORTING.items()

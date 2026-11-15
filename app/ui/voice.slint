@@ -1,0 +1,144 @@
+// Voice feedback: the full-screen conversation view while the assistant listens, thinks and answers.
+// States: 1 listening, 2 thinking, 3 answering, 4 error, 5 listening for more (follow-up, ends after 5 s), 6 not understood.
+// Looks: 0 plain, 1 terminal, 2 comic, 3 oscilloscope. The status line (`line`) is a playful text picked by the app for the
+// state; heard / answer are the real texts of the turn. `level` is the microphone level (0 … 1), `left` the follow-up time left.
+import { Theme, Act } from "theme.slint";
+import { Icon } from "widgets.slint";
+
+export component VoicePage inherits Rectangle {
+    in property <int> look;
+    in property <int> state: 1;
+    in property <string> assistant;        // the pipeline's name
+    in property <string> heard;
+    in property <string> answer;
+    in property <string> line;
+    in property <string> detail;           // error detail (plain words, not playful)
+    in property <float> level;
+    in property <float> left: -1;
+    in property <string> wave;             // oscilloscope trace (path commands in a 400 x 160 box)
+    in property <image> scan;              // terminal: scanlines + vignette
+    in property <image> dots;              // comic: halftone page
+    in property <bool> blink: true;
+    in property <string> version: "0.0.3";  // the app's version (terminal header)
+    property <bool> listening: root.state == 1 || root.state == 5;
+    property <color> tone: root.state == 2 ? #f59e0b : root.state == 3 ? #22c55e : root.state == 4 ? #ef4444 : root.state == 6 ? #a78bfa : #3b82f6;
+    background: Theme.background;
+
+    // ------------------------------------------------------------------ 0 plain
+    if root.look == 0: Rectangle {
+        Text { x: 20px; y: 12px; height: 22px; text: root.assistant; font-size: 13px; font-weight: 600; color: Theme.muted; vertical-alignment: center; }
+        Icon { x: parent.width - 44px; y: 8px; width: 30px; height: 30px; text: "\u{F0156}"; font-size: 22px; color: Theme.muted; }
+        // the state disc: a soft halo that follows the voice, a solid disc with the state icon
+        Rectangle { x: (parent.width - self.width) / 2; y: 118px - self.height / 2; width: 120px + (root.listening ? 44px * root.level : 0px);
+            height: self.width; border-radius: self.width / 2; background: root.tone.with-alpha(0.16); }
+        Rectangle { x: (parent.width - 92px) / 2; y: 72px; width: 92px; height: 92px; border-radius: 46px; background: root.tone;
+            Icon { text: root.listening ? "\u{F036C}" : root.state == 2 ? "\u{F01D8}" : root.state == 3 ? "\u{F057E}" : root.state == 4 ? "\u{F0026}" : "\u{F02D6}";
+                font-size: 46px; color: #ffffff; } }
+        VerticalLayout { x: 28px; y: 186px; width: parent.width - 56px; height: parent.height - 186px - (root.left >= 0 ? 52px : 20px); spacing: 10px; alignment: start;
+            Text { text: root.line; font-size: 17px; color: root.state == 4 ? #ef4444 : Theme.muted; horizontal-alignment: center; overflow: elide; }
+            if root.heard != "": Rectangle { height: min(hh.preferred-height, 56px); clip: true;
+                hh := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: "“" + root.heard + "”"; font-size: 20px; color: Theme.text.with-alpha(0.62);
+                    horizontal-alignment: center; wrap: word-wrap; overflow: elide; } }
+            if root.answer != "": Rectangle { height: min(aa.preferred-height, 196px); clip: true;
+                aa := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.answer; font-weight: 700; color: Theme.text;
+                    font-size: root.answer.character-count > 150 ? 21px : root.answer.character-count > 80 ? 25px : 30px;
+                    horizontal-alignment: center; wrap: word-wrap; overflow: elide; } }
+            if root.detail != "": Text { text: root.detail; font-size: 15px; color: Theme.muted; horizontal-alignment: center; wrap: word-wrap; }
+        }
+        if root.left >= 0: Rectangle { x: (parent.width - 200px) / 2; y: parent.height - 34px; width: 200px; height: 6px; border-radius: 3px; background: Theme.text.with-alpha(0.12);
+            Rectangle { x: 0; y: 0; width: parent.width * root.left; height: parent.height; border-radius: 3px; background: root.tone; } }
+    }
+
+    // ------------------------------------------------------------------ 1 terminal
+    if root.look == 1: term := Rectangle {
+        background: #021208;
+        property <color> ink: root.state == 4 ? #ff5a4d : #3dff7a;
+        property <string> bar: root.level > 0.9 ? "##########" : root.level > 0.8 ? "#########." : root.level > 0.7 ? "########.." : root.level > 0.6 ? "#######..."
+            : root.level > 0.5 ? "######...." : root.level > 0.4 ? "#####....." : root.level > 0.3 ? "####......" : root.level > 0.2 ? "###......." : root.level > 0.1 ? "##........" : "#.........";
+        property <string> mode: root.state == 5 ? "MORE?" : root.listening ? "LISTEN" : root.state == 2 ? "THINK" : root.state == 3 ? "REPLY" : root.state == 4 ? "ERROR" : "HUH?";
+        // the follow-up time left as a character bar too
+        property <string> tbar: root.left > 0.9 ? "##########" : root.left > 0.8 ? "#########." : root.left > 0.7 ? "########.." : root.left > 0.6 ? "#######..."
+            : root.left > 0.5 ? "######...." : root.left > 0.4 ? "#####....." : root.left > 0.3 ? "####......" : root.left > 0.2 ? "###......." : root.left > 0.1 ? "##........" : "#.........";
+        for t[i] in [
+            { y: 12px, s: "PanelOS " + root.version + " · " + root.assistant, dim: true },
+            { y: 32px, s: "MODE " + term.mode + (root.listening ? "   MIC [" + term.bar + "]" : ""), dim: false },
+            { y: 52px, s: "-------------------------------------------", dim: true },
+        ]: Text { x: 22px; y: t.y; text: t.s; font-family: "DejaVu Sans Mono"; font-size: 14px; color: term.ink.with-alpha(t.dim ? 0.55 : 0.9); overflow: elide; width: 436px; }
+        VerticalLayout { x: 22px; y: 78px; width: parent.width - 44px; height: parent.height - 104px; spacing: 12px; alignment: start;
+            Text { text: "// " + root.line; font-family: "DejaVu Sans Mono"; font-size: 16px; color: term.ink.with-alpha(0.55); wrap: word-wrap; }
+            Text { text: "> " + (root.heard != "" ? root.heard : "") + (root.listening && root.blink ? "█" : ""); font-family: "DejaVu Sans Mono"; font-size: 19px;
+                color: term.ink; wrap: word-wrap; }
+            if root.state == 2: Text { text: root.blink ? "  ...█" : "  ..."; font-family: "DejaVu Sans Mono"; font-size: 19px; color: term.ink; }
+            if root.answer != "": Rectangle { height: min(ta.preferred-height, 220px); clip: true;
+                ta := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.answer + (root.blink ? " █" : ""); font-family: "DejaVu Sans Mono";
+                    font-size: root.answer.character-count > 120 ? 17px : 21px; font-weight: 700; color: #d6ffe2; wrap: word-wrap; overflow: elide; } }
+            if root.detail != "": Text { text: "ERR: " + root.detail; font-family: "DejaVu Sans Mono"; font-size: 16px; color: term.ink; wrap: word-wrap; }
+        }
+        if root.left >= 0: Text { x: 22px; y: parent.height - 38px; text: "TIMEOUT [" + term.tbar + "] " + ceil(root.left * 5) + " s"; font-family: "DejaVu Sans Mono";
+            font-size: 15px; color: term.ink.with-alpha(0.8); }
+        Image { x: 0; y: 0; width: 480px; height: 480px; source: root.scan; }
+    }
+
+    // ------------------------------------------------------------------ 2 comic
+    if root.look == 2: Rectangle {
+        background: #ffd43b;
+        Image { x: 0; y: 0; width: 480px; height: 480px; source: root.dots; }
+        // the caption box on top: the state, playful
+        Rectangle { x: 18px; y: 16px; width: min(cap.preferred-width + 28px, parent.width - 36px); height: 38px; background: #fff7d6; border-width: 3px; border-color: #111111;
+            cap := Text { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; text: root.line.to-uppercase(); font-size: 16px; font-weight: 800; color: #111111;
+                vertical-alignment: center; overflow: elide; } }
+        // the person's words: a bubble with its tail to the bottom left
+        if root.heard != "" || root.listening || root.state == 6: Rectangle { x: 22px; y: 78px; width: parent.width - 120px; height: min(hb.preferred-height, 84px) + 30px;
+            Rectangle { background: #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
+            hb := Text { x: 18px; y: 15px; width: parent.width - 36px; height: parent.height - 30px; text: root.heard != "" ? root.heard.to-uppercase() : root.state == 6 ? "? ? ?" : (root.blink ? "• • •" : "• •");
+                font-size: 18px; font-weight: 800; color: #111111; wrap: word-wrap; overflow: elide; vertical-alignment: center; }
+            Path { x: 34px; y: parent.height - 3px; width: 36px; height: 30px; viewbox-width: 36; viewbox-height: 30; fill: #ffffff; stroke: #111111; stroke-width: 3px;
+                commands: "M 1.5 0 L 28 0 L 3 28.5 Z"; }
+            Rectangle { x: 38px; y: parent.height - 3px; width: 25px; height: 3px; background: #ffffff; }
+        }
+        // the panel's answer: a bubble from the bottom right (or a thought cloud while thinking)
+        if root.answer != "": Rectangle { x: 80px; y: parent.height - self.height - 54px; width: parent.width - 102px; height: min(ab.preferred-height, 200px) + 34px;
+            Rectangle { background: root.state == 4 ? #ff6b6b : #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
+            ab := Text { x: 18px; y: 17px; width: parent.width - 36px; height: parent.height - 34px; text: root.answer.to-uppercase(); font-weight: 800; color: #111111;
+                font-size: root.answer.character-count > 120 ? 16px : 20px; wrap: word-wrap; overflow: elide; vertical-alignment: center; }
+            Path { x: parent.width - 74px; y: parent.height - 3px; width: 36px; height: 34px; viewbox-width: 36; viewbox-height: 34; fill: root.state == 4 ? #ff6b6b : #ffffff;
+                stroke: #111111; stroke-width: 3px; commands: "M 6 0 L 34.5 0 L 33 32.5 Z"; }
+            Rectangle { x: parent.width - 66px; y: parent.height - 3px; width: 25px; height: 3px; background: root.state == 4 ? #ff6b6b : #ffffff; }
+        }
+        if root.state == 2: Rectangle { x: parent.width - 252px; y: 214px;
+            for c[i] in [{ x: 150, y: 128, r: 9 }, { x: 172, y: 104, r: 14 }]: Rectangle { x: c.x * 1px - c.r * 1px; y: c.y * 1px - c.r * 1px; width: c.r * 2px; height: self.width;
+                border-radius: self.width / 2; background: #ffffff; border-width: 3px; border-color: #111111; }
+            Rectangle { x: 20px; y: 0; width: 210px; height: 86px; background: #ffffff; border-width: 3px; border-color: #111111; border-radius: 43px;
+                Text { text: "HMM…"; font-size: 30px; font-weight: 800; color: #111111; } }
+        }
+        if root.state == 4: Text { x: parent.width - 190px; y: 196px; text: "BZZT!"; font-size: 54px; font-weight: 900; color: #e03131; }
+        if root.left >= 0: Rectangle { x: (parent.width - 180px) / 2; y: parent.height - 30px; width: 180px; height: 12px; background: #fff7d6; border-width: 3px; border-color: #111111;
+            Rectangle { x: 3px; y: 3px; width: (parent.width - 6px) * root.left; height: 6px; background: #111111; } }
+    }
+
+    // ------------------------------------------------------------------ 3 oscilloscope
+    if root.look == 3: scope := Rectangle {
+        background: #0b0f0d;
+        property <color> trace: root.state == 4 ? #ff6b5e : root.state == 2 ? #ffc94a : #4dffb0;
+        // the screen with its graticule
+        Rectangle { x: 40px; y: 52px; width: 400px; height: 160px; background: #06140e; border-radius: 6px; clip: true;
+            for i in 11: Rectangle { x: i * 40px; y: 0; width: 1px; height: parent.height; background: #1f5a40.with-alpha(i == 5 ? 0.9 : 0.5); }
+            for i in 5: Rectangle { x: 0; y: i * 40px; width: parent.width; height: 1px; background: #1f5a40.with-alpha(i == 2 ? 0.9 : 0.5); }
+            for w[i] in [{ s: 9px, a: 0.10 }, { s: 5px, a: 0.28 }, { s: 2.2px, a: 1.0 }]: Path { x: -w.s / 2; y: -w.s / 2; width: parent.width + w.s; height: parent.height + w.s;
+                viewbox-width: 400; viewbox-height: 160; commands: root.wave; stroke: scope.trace.with-alpha(w.a); stroke-width: w.s; }
+        }
+        Text { x: 44px; y: 26px; text: "CH1 MIC  " + (root.listening ? "50 mV/div" : root.state == 2 ? "SWEEP" : root.state == 3 ? "TTS OUT" : "NO SIGNAL"); font-family: "DejaVu Sans Mono";
+            font-size: 13px; color: scope.trace.with-alpha(0.8); }
+        Text { x: 300px; y: 26px; width: 140px; horizontal-alignment: right; text: root.assistant; font-family: "DejaVu Sans Mono"; font-size: 13px; color: #9fb5aa; overflow: elide; }
+        VerticalLayout { x: 40px; y: 230px; width: 400px; height: parent.height - 250px; spacing: 10px; alignment: start;
+            Text { text: root.line; font-family: "DejaVu Sans Mono"; font-size: 15px; color: scope.trace; overflow: elide; }
+            if root.heard != "": Text { text: "IN  › " + root.heard; font-family: "DejaVu Sans Mono"; font-size: 16px; color: #b7c9bf; wrap: word-wrap; }
+            if root.answer != "": Rectangle { height: min(oa.preferred-height, 150px); clip: true;
+                oa := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: "OUT › " + root.answer; font-family: "DejaVu Sans Mono"; font-weight: 700;
+                    font-size: root.answer.character-count > 120 ? 15px : 18px; color: #eafff4; wrap: word-wrap; overflow: elide; } }
+            if root.detail != "": Text { text: root.detail; font-family: "DejaVu Sans Mono"; font-size: 14px; color: #ff9a90; wrap: word-wrap; }
+        }
+        if root.left >= 0: Rectangle { x: 40px; y: parent.height - 26px; width: 400px; height: 4px; background: #1f5a40.with-alpha(0.6);
+            Rectangle { x: 0; y: 0; width: parent.width * root.left; height: 4px; background: scope.trace; } }
+    }
+}

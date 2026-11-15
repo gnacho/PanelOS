@@ -1,0 +1,1114 @@
+// Assistant mode panels (swipeable pages), the clock faces (screensaver
+// first, also usable as a panel) and the shared frame.
+
+import { Theme, Act } from "theme.slint";
+import { Icon, GlowText } from "widgets.slint";
+import { PhotoSky } from "photo_sky.slint";
+
+export struct Person {
+    initials: string,
+    home: bool,
+    tint: color,
+}
+
+export struct TimerInfo {
+    label: string,       // "Pasta", "" if unnamed
+    text: string,        // "4:59"
+    urgent: bool,        // last minute
+}
+
+// One running timer; the chip grows with its text.
+component TimerChip inherits Rectangle {
+    in property <TimerInfo> timer;
+    height: 26px;
+    border-radius: 13px;
+    background: root.timer.urgent ? Theme.danger.with-alpha(0.2) : Theme.warning.with-alpha(0.18);
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 10px;
+        spacing: 4px;
+        Icon {
+            text: "\u{F051B}";
+            font-size: 15px;
+            color: root.timer.urgent ? Theme.danger : Theme.warning;
+        }
+        if root.timer.label != "": Text {
+            text: root.timer.label;
+            font-size: Theme.font-caption;
+            color: Theme.muted;
+            vertical-alignment: center;
+        }
+        Text {
+            text: root.timer.text;
+            font-size: Theme.font-caption;
+            font-weight: Theme.weight-strong;
+            color: Theme.text;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// Running timers: the two nearest ones, then "+N".
+export component TimerChips inherits HorizontalLayout {
+    in property <[TimerInfo]> timers;
+    spacing: 6px;
+    if root.timers.length > 0: TimerChip { timer: root.timers[0]; }
+    if root.timers.length > 1: TimerChip { timer: root.timers[1]; }
+    if root.timers.length > 2: Rectangle {
+        height: 26px;
+        border-radius: 13px;
+        background: Theme.warning.with-alpha(0.18);
+        HorizontalLayout {
+            padding-left: 9px;
+            padding-right: 9px;
+            Text {
+                text: "+" + (root.timers.length - 2);
+                font-size: Theme.font-caption;
+                font-weight: Theme.weight-strong;
+                color: Theme.text;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+// Thin status line at the top of a panel. On the screensaver only the
+// timers and problems show.
+export component StatusBar inherits HorizontalLayout {
+    in property <string> hint;           // wake word hint
+    in property <bool> mic-muted;
+    in property <[TimerInfo]> timers;
+    in property <bool> problem;          // connection problem
+    in property <bool> quiet;            // screensaver: no hint, no microphone
+    in property <bool> on-color;         // drawn over a coloured panel background
+    property <color> soft: root.on-color ? #ffffffb3 : Theme.faint;
+    height: 32px;
+    spacing: 8px;
+    if !root.quiet || root.mic-muted: Icon {
+        text: root.mic-muted ? "\u{F036D}" : "\u{F036C}";
+        font-size: 16px;
+        color: root.mic-muted ? Theme.danger : root.soft;
+    }
+    Text {
+        horizontal-stretch: 1;
+        text: root.mic-muted ? "Microphone off" : root.quiet ? "" : root.hint;
+        font-size: Theme.font-caption;
+        color: root.mic-muted ? Theme.danger : root.soft;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    if root.problem: VerticalLayout {
+        alignment: center;
+        Icon { text: "\u{F092B}"; font-size: 18px; color: Theme.warning; }
+    }
+    VerticalLayout {
+        alignment: center;
+        TimerChips { timers: root.timers; }
+    }
+}
+
+// Page dots; they fade out a few seconds after the last swipe.
+export component PageDots inherits HorizontalLayout {
+    in property <int> count;
+    in property <int> current;
+    in property <float> shown: 1;
+    in property <bool> on-color;
+    spacing: 6px;
+    alignment: center;
+    opacity: root.shown;
+    for i in root.count: Rectangle {
+        width: i == root.current ? 18px : 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: i == root.current ? (root.on-color ? #ffffff : Theme.accent) : (root.on-color ? #ffffff80 : Theme.faint.with-alpha(0.6));
+    }
+}
+
+// Who is home: small round heads (initials), away ones faded.
+export component People inherits HorizontalLayout {
+    in property <[Person]> people;
+    spacing: 2px;
+    for p in root.people: Rectangle {
+        width: 26px;
+        height: 26px;
+        border-radius: 13px;
+        background: p.home ? p.tint : Theme.surface-raised;
+        Text {
+            text: p.initials;
+            font-size: 11px;
+            font-weight: Theme.weight-strong;
+            color: p.home ? #ffffff : Theme.faint;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export struct ClockData {
+    hh: string,          // "07"
+    mm: string,          // "42"
+    seconds: float,      // 0..60 (smooth)
+    date: string,        // "Sunday, 8 November"
+    weekday: string,     // "SUN"
+    day: string,         // "8"
+    weather-icon: string,
+    temperature: string, // "12°"
+    condition: string,
+    high-low: string,    // "H 15° · L 7°"
+    next: string,        // next event, "" if none
+    // Split-flap clock: current and previous digits, flip progress 0..1.
+    d1: string, d2: string, d3: string, d4: string,
+    o1: string, o2: string, o3: string, o4: string,
+    flip: float,
+}
+
+// Analog dial. shape 0 round, 1 square (fills the panel); numerals: 12/3/6/9
+// in big figures; minimal: no face, four marks. Inside the square faces:
+// a date window at 3 o'clock (or under the 12 with numerals) and, below the
+// centre, weather and the next event; whatever is switched off leaves no gap.
+export component AnalogDial inherits Rectangle {
+    in property <float> h;     // hours 0..12 (fractional)
+    in property <float> m;     // minutes 0..60 (fractional)
+    in property <float> s;     // seconds 0..60
+    in property <length> size: 280px;
+    in property <int> shape: 0;
+    in property <bool> numerals: false;
+    in property <bool> minimal: false;
+    in property <bool> show-seconds: true;
+    in property <string> weekday;      // "" = no date inside
+    in property <string> day;
+    in property <string> weather;      // "" = no weather inside
+    in property <string> weather-icon;
+    in property <string> next;         // "" = no event inside
+    in property <color> accent: Theme.accent;
+    in property <int> weight: 600;
+    // colours (defaults: the panel theme; the home page draws white on the weather picture)
+    in property <brush> face: Theme.surface;
+    in property <color> ink: Theme.text;
+    in property <color> mark: Theme.muted;
+    in property <color> fine: Theme.faint;
+    in property <brush> window-bg: Theme.background;
+    width: self.size;
+    height: self.size;
+    property <bool> date-window: root.weekday != "" && !root.numerals;
+    // Distance from the centre to the edge of the face in direction a (deg), viewbox units.
+    function edge(a: float) -> float {
+        root.shape == 0 ? 44 : 44 / max(abs(Math.sin(a * 1deg)), abs(Math.cos(a * 1deg)))
+    }
+    function seg(a: float, r0: float, r1: float) -> string {
+        "M " + (50 + r0 * Math.sin(a * 1deg)) + " " + (50 - r0 * Math.cos(a * 1deg))
+            + " L " + (50 + r1 * Math.sin(a * 1deg)) + " " + (50 - r1 * Math.cos(a * 1deg))
+    }
+    if !root.minimal: Rectangle {
+        border-radius: root.shape == 0 ? root.size / 2 : root.size * 0.08;
+        background: root.face;
+    }
+    for i in (root.minimal ? 0 : 60): Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        visible: Math.mod(i, 5) != 0;
+        stroke: root.fine;
+        stroke-width: 1px;
+        commands: root.seg(i * 6, root.edge(i * 6) - 1, root.edge(i * 6) - 3);
+    }
+    for i in 12: Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        visible: !(root.numerals && Math.mod(i, 3) == 0) && !(root.date-window && i == 3)
+            && !(root.minimal && Math.mod(i, 3) != 0);
+        stroke: i == 0 ? root.accent : root.mark;
+        stroke-width: root.minimal ? 4px : (Math.mod(i, 3) == 0 ? 3px : 2px);
+        commands: root.minimal ? root.seg(i * 30, 42, 37)
+            : root.seg(i * 30, root.edge(i * 30) - 1, root.edge(i * 30) - 7);
+    }
+    for i in (root.numerals ? 4 : 0): Text {
+        property <float> a: i * 90;
+        property <float> r: root.edge(self.a) - 10;
+        x: (50 + self.r * Math.sin(self.a * 1deg)) / 100 * root.size - self.width / 2;
+        y: (50 - self.r * Math.cos(self.a * 1deg)) / 100 * root.size - self.height / 2;
+        text: i == 0 ? "12" : i == 1 ? "3" : i == 2 ? "6" : "9";
+        font-size: root.size * 0.11;
+        font-weight: root.weight;
+        color: i == 0 ? root.accent : root.ink;
+    }
+    // Date: window at 3 o'clock, or a small label under the 12 with numerals.
+    if root.date-window: Rectangle {
+        x: root.size * 0.70;
+        y: root.size * 0.5 - 14px;
+        width: dw.preferred-width + 14px;
+        height: 28px;
+        border-radius: 6px;
+        background: root.window-bg;
+        dw := HorizontalLayout {
+            padding-left: 7px;
+            spacing: 4px;
+            Text { text: root.weekday; font-size: 13px; color: root.mark; vertical-alignment: center; }
+            Text { text: root.day; font-size: 13px; font-weight: Theme.weight-strong; color: root.accent; vertical-alignment: center; }
+        }
+    }
+    if root.numerals && root.weekday != "": HorizontalLayout {
+        y: root.size * 0.25;
+        width: root.size;
+        height: 20px;
+        alignment: center;
+        spacing: 4px;
+        Text { text: root.weekday; font-size: 14px; color: root.mark; }
+        Text { text: root.day; font-size: 14px; font-weight: Theme.weight-strong; color: root.accent; }
+    }
+    // Below the centre: weather, then the next event (no gap if one is off).
+    VerticalLayout {
+        y: root.size * 0.64;
+        width: root.size;
+        height: root.size * 0.18;
+        alignment: start;
+        spacing: 4px;
+        if root.weather != "": HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            Icon { text: root.weather-icon; font-size: 20px; color: root.mark; }
+            Text { text: root.weather; font-size: 16px; color: root.mark; vertical-alignment: center; }
+        }
+        if root.next != "": HorizontalLayout {
+            alignment: center;
+            spacing: 6px;
+            Icon { text: "\u{F00ED}"; font-size: 16px; color: root.accent; }
+            Text { text: root.next; font-size: 14px; color: root.mark; vertical-alignment: center; }
+        }
+    }
+    // Hands
+    Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        stroke: root.ink;
+        stroke-width: root.size * 0.022;
+        commands: root.seg(root.h * 30, -4, 24);
+    }
+    Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        stroke: root.ink;
+        stroke-width: root.size * 0.014;
+        commands: root.seg(root.m * 6, -5, root.shape == 0 ? 36 : 38);
+    }
+    if root.show-seconds: Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        stroke: root.accent;
+        stroke-width: 2px;
+        commands: root.seg(root.s * 6, -8, root.shape == 0 ? 40 : 42);
+    }
+    Rectangle {
+        width: 12px; height: 12px; border-radius: 6px;
+        background: root.show-seconds ? root.accent : root.ink;
+    }
+}
+
+// Date and weather on one line; the separator only when both show, so the
+// one left alone is centred.
+component InfoLine inherits HorizontalLayout {
+    in property <ClockData> data;
+    in property <bool> show-date;
+    in property <bool> show-weather;
+    in property <bool> condition;        // add the condition text after the temperature
+    in property <length> size: 18px;
+    in property <color> color: Theme.muted;
+    alignment: center;
+    spacing: 10px;
+    if root.show-date: Text { text: root.data.date; font-size: root.size; color: root.color; vertical-alignment: center; }
+    if root.show-date && root.show-weather: Text { text: "·"; font-size: root.size; color: Theme.faint; vertical-alignment: center; }
+    if root.show-weather: Icon { text: root.data.weather-icon; font-size: root.size * 1.2; color: root.color; }
+    if root.show-weather: Text {
+        text: root.data.temperature + (root.condition ? "  " + root.data.condition : "");
+        font-size: root.size; color: root.color; vertical-alignment: center;
+    }
+}
+
+component NextLine inherits HorizontalLayout {
+    in property <ClockData> data;
+    in property <color> accent;
+    in property <length> size: 15px;
+    alignment: center;
+    spacing: 8px;
+    Icon { text: "\u{F00ED}"; font-size: root.size * 1.15; color: root.accent; }
+    Text { text: root.data.next; font-size: root.size; color: Theme.muted; vertical-alignment: center; }
+}
+
+// One split-flap card, drawn from digit images so a flap can be foreshortened
+// like a rigid plate (the software renderer scales images, not text). When
+// the digit changes, the old top half rotates down to the hinge (getting
+// shorter and darker), then the new bottom half falls open below it.
+export component FlapCard inherits Rectangle {
+    in property <string> old-digit;
+    in property <string> new-digit;
+    in property <float> flip: 1;         // 0..1; 1 = settled on new-digit
+    in property <int> weight: 600;
+    in property <color> card: #1d1d21;
+    in property <color> ink: #f4f4f5;
+    // Digit images (white on transparent, 188 x 300), per weight.
+    property <[image]> w300: [@image-url("digits/300/0.png"), @image-url("digits/300/1.png"), @image-url("digits/300/2.png"), @image-url("digits/300/3.png"), @image-url("digits/300/4.png"), @image-url("digits/300/5.png"), @image-url("digits/300/6.png"), @image-url("digits/300/7.png"), @image-url("digits/300/8.png"), @image-url("digits/300/9.png")];
+    property <[image]> w600: [@image-url("digits/600/0.png"), @image-url("digits/600/1.png"), @image-url("digits/600/2.png"), @image-url("digits/600/3.png"), @image-url("digits/600/4.png"), @image-url("digits/600/5.png"), @image-url("digits/600/6.png"), @image-url("digits/600/7.png"), @image-url("digits/600/8.png"), @image-url("digits/600/9.png")];
+    property <[image]> w700: [@image-url("digits/700/0.png"), @image-url("digits/700/1.png"), @image-url("digits/700/2.png"), @image-url("digits/700/3.png"), @image-url("digits/700/4.png"), @image-url("digits/700/5.png"), @image-url("digits/700/6.png"), @image-url("digits/700/7.png"), @image-url("digits/700/8.png"), @image-url("digits/700/9.png")];
+    property <[image]> w800: [@image-url("digits/800/0.png"), @image-url("digits/800/1.png"), @image-url("digits/800/2.png"), @image-url("digits/800/3.png"), @image-url("digits/800/4.png"), @image-url("digits/800/5.png"), @image-url("digits/800/6.png"), @image-url("digits/800/7.png"), @image-url("digits/800/8.png"), @image-url("digits/800/9.png")];
+    function idx(d: string) -> int {
+        d == "1" ? 1 : d == "2" ? 2 : d == "3" ? 3 : d == "4" ? 4 : d == "5" ? 5
+            : d == "6" ? 6 : d == "7" ? 7 : d == "8" ? 8 : d == "9" ? 9 : 0
+    }
+    function glyph(d: string) -> image {
+        root.weight <= 450 ? root.w300[root.idx(d)] : root.weight <= 650 ? root.w600[root.idx(d)]
+            : root.weight <= 750 ? root.w700[root.idx(d)] : root.w800[root.idx(d)]
+    }
+    property <length> half: self.height / 2;
+    property <bool> moving: root.flip < 1 && root.old-digit != root.new-digit;
+    property <float> p1: min(1, root.flip * 2);         // top flap rotating down
+    property <float> p2: max(0, root.flip * 2 - 1);     // bottom flap falling open
+    property <length> h1: root.half * Math.cos(root.p1 * 90deg);
+    property <length> h2: root.half * Math.sin(root.p2 * 90deg);
+    border-radius: 10px;
+    background: root.card;
+    clip: true;
+    // Fixed halves: new top (revealed behind the falling flap), old bottom (until covered).
+    Image {
+        y: 0; width: root.width; height: root.half;
+        source: root.glyph(root.new-digit);
+        source-clip-y: 0; source-clip-height: 150;
+        image-fit: fill; colorize: root.ink;
+    }
+    Image {
+        y: root.half; width: root.width; height: root.half;
+        source: root.glyph(root.moving ? root.old-digit : root.new-digit);
+        source-clip-y: 150; source-clip-height: 150;
+        image-fit: fill; colorize: root.ink;
+    }
+    // The falling flap's shadow on the lower half.
+    if root.moving && root.p1 < 1: Rectangle {
+        y: root.half; height: root.half;
+        background: #000000.with-alpha(0.3 * root.p1);
+    }
+    // Top flap: a rigid plate turning down around the hinge.
+    if root.moving && root.p1 < 1: Rectangle {
+        y: root.half - root.h1; height: root.h1;
+        background: root.card.mix(#000000, 1 - 0.55 * root.p1);
+        Image {
+            width: root.width; height: root.h1;
+            source: root.glyph(root.old-digit);
+            source-clip-y: 0; source-clip-height: 150;
+            image-fit: fill; colorize: root.ink.mix(#000000, 1 - 0.55 * root.p1);
+        }
+        // Light catching the edge of the plate
+        Rectangle { y: 0; height: 1px; background: #ffffff.with-alpha(0.12 * (1 - root.p1)); }
+    }
+    // Bottom flap: the new lower half falling open from the hinge.
+    if root.moving && root.p2 > 0: Rectangle {
+        y: root.half; height: root.h2;
+        background: root.card.mix(#000000, 0.6 + 0.4 * root.p2);
+        Image {
+            width: root.width; height: root.h2;
+            source: root.glyph(root.new-digit);
+            source-clip-y: 150; source-clip-height: 150;
+            image-fit: fill; colorize: root.ink.mix(#000000, 0.6 + 0.4 * root.p2);
+        }
+        Rectangle { y: parent.height - 1px; height: 1px; background: #000000.with-alpha(0.4 * (1 - root.p2)); }
+    }
+    // Hinge
+    Rectangle { y: root.half - 1px; height: 2px; background: #000000.with-alpha(0.55); }
+}
+
+// Split-flap ("railway station") clock: four cards, accent colon dots.
+export component FlipClock inherits HorizontalLayout {
+    in property <ClockData> data;
+    in property <int> weight: 600;
+    in property <color> accent;
+    in property <float> colon: 1;
+    in property <length> card-width: 94px;
+    in property <length> card-height: 150px;
+    property <color> card: Theme.dark ? #1d1d21 : #2b2b31;
+    spacing: 8px;
+    alignment: center;
+    FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
+        old-digit: root.data.o1; new-digit: root.data.d1; flip: root.data.flip; }
+    FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
+        old-digit: root.data.o2; new-digit: root.data.d2; flip: root.data.flip; }
+    VerticalLayout {
+        alignment: center;
+        spacing: root.card-height * 0.22;
+        opacity: root.colon;
+        Rectangle { width: 12px; height: 12px; border-radius: 6px; background: root.accent; }
+        Rectangle { width: 12px; height: 12px; border-radius: 6px; background: root.accent; }
+    }
+    FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
+        old-digit: root.data.o3; new-digit: root.data.d3; flip: root.data.flip; }
+    FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
+        old-digit: root.data.o4; new-digit: root.data.d4; flip: root.data.flip; }
+}
+
+// Clock face. style: 0 big clock + details, 1 huge digits, 2 round analog,
+// 3 square analog (date window), 4 minimal analog, 5 square analog with
+// numerals, 6 wandering, 7 split-flap. Every element except the time can be switched off;
+// what is left is centred in the space they all shared.
+export component ClockFace inherits Rectangle {
+    in property <ClockData> data;
+    in property <int> style: 0;
+    in property <color> accent: Theme.accent;
+    in property <int> weight: 600;
+    in property <bool> show-date: true;
+    in property <bool> show-weather: true;
+    in property <bool> show-next: true;
+    in property <bool> show-seconds: true;   // second hand / seconds line / breathing colon
+    // 0..60, moving smoothly (the app's clock, interpolated by the UI)
+    in property <float> seconds: root.data.seconds;
+    // Style 6 wanders like the classic bouncing screensaver: straight lines
+    // at 45 degrees, bouncing off the edges; only the speed can be set.
+    in property <float> wander-speed: 20;    // pixels per second
+    property <bool> has-next: root.show-next && root.data.next != "";
+    property <bool> clock-only: !root.show-date && !root.show-weather && !root.has-next;
+    property <float> colon: root.show-seconds ? 0.75 + 0.25 * Math.cos(root.seconds * 360deg) : 1;
+    property <float> hours: Math.mod(root.data.hh.to-float(), 12) + root.data.mm.to-float() / 60;
+    property <float> minutes: root.data.mm.to-float() + root.seconds / 60;
+    // Content area between the top line and the bottom row (heads, dots).
+    property <length> top: 40px;
+    property <length> bottom: 44px;
+    background: style == 6 && Theme.dark ? #000000 : Theme.background;
+
+    // 0: big clock with date, weather and next event under it (left), all
+    //    vertically centred; the clock alone is centred both ways.
+    if root.style == 0: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        padding-left: 28px;
+        padding-right: 24px;
+        alignment: center;
+        spacing: 2px;
+        HorizontalLayout {
+            alignment: root.clock-only ? center : start;
+            Text { text: root.data.hh; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+            Text { text: ":"; font-size: 128px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
+            Text { text: root.data.mm; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+        }
+        if root.show-date: Text { text: root.data.date; font-size: 22px; color: Theme.muted; }
+        if root.show-weather: HorizontalLayout {
+            padding-top: 20px;
+            spacing: 14px;
+            alignment: start;
+            Icon { text: root.data.weather-icon; font-size: 52px; color: Theme.text; }
+            VerticalLayout {
+                alignment: center;
+                Text { text: root.data.temperature; font-size: 36px; font-weight: root.weight; color: Theme.text; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text { text: root.data.condition; font-size: Theme.font-body; color: Theme.text; }
+                Text { text: root.data.high-low; font-size: Theme.font-label; color: Theme.muted; }
+            }
+        }
+        if root.has-next: HorizontalLayout {
+            padding-top: 16px;
+            spacing: 8px;
+            alignment: start;
+            Icon { text: "\u{F00ED}"; font-size: 18px; color: root.accent; }
+            Text { text: root.data.next; font-size: Theme.font-label; color: Theme.muted; vertical-alignment: center; }
+        }
+    }
+
+    // 1: huge digits; seconds line, date · weather, next event (all optional)
+    if root.style == 1: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Text { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+            Text { text: ":"; font-size: 176px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
+            Text { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+        }
+        if root.show-seconds: HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 380px;
+                height: 3px;
+                border-radius: 1.5px;
+                background: Theme.surface-raised;
+                Rectangle {
+                    x: 0;
+                    width: parent.width * root.seconds / 60;
+                    background: root.accent;
+                    border-radius: 1.5px;
+                }
+            }
+        }
+        if root.show-date || root.show-weather: InfoLine {
+            padding-top: 18px;
+            data: root.data; show-date: root.show-date; show-weather: root.show-weather; size: 20px;
+        }
+        if root.has-next: NextLine { padding-top: 10px; data: root.data; accent: root.accent; }
+    }
+
+    // 2: round analog; date · weather and next event under it
+    if root.style == 2: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        alignment: center;
+        spacing: 12px;
+        HorizontalLayout {
+            alignment: center;
+            AnalogDial {
+                size: root.clock-only ? 340px : 290px;
+                show-seconds: root.show-seconds;
+                h: root.hours; m: root.minutes; s: root.seconds;
+                accent: root.accent; weight: root.weight;
+            }
+        }
+        if root.show-date || root.show-weather: InfoLine { data: root.data; show-date: root.show-date; show-weather: root.show-weather; }
+        if root.has-next: NextLine { data: root.data; accent: root.accent; }
+    }
+
+    // 3: square analog filling the panel; date window, weather, next event inside
+    if root.style == 3: AnalogDial {
+        x: 16px; y: 16px;
+        size: root.width - 32px;
+        shape: 1;
+        show-seconds: root.show-seconds;
+        weekday: root.show-date ? root.data.weekday : ""; day: root.data.day;
+        weather: root.show-weather ? root.data.temperature + "  " + root.data.condition : "";
+        weather-icon: root.data.weather-icon;
+        next: root.has-next ? root.data.next : "";
+        h: root.hours; m: root.minutes; s: root.seconds;
+        accent: root.accent; weight: root.weight;
+    }
+
+    // 4: minimal analog; big date, weather and next event under it
+    if root.style == 4: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        alignment: center;
+        spacing: 6px;
+        HorizontalLayout {
+            alignment: center;
+            AnalogDial {
+                size: root.clock-only ? 340px : 300px;
+                minimal: true;
+                show-seconds: root.show-seconds;
+                h: root.hours; m: root.minutes; s: root.seconds;
+                accent: root.accent; weight: root.weight;
+            }
+        }
+        if root.show-date: Text { text: root.data.date; font-size: 26px; font-weight: root.weight; color: Theme.text; horizontal-alignment: center; }
+        if root.show-weather: InfoLine { data: root.data; show-date: false; show-weather: true; condition: true; }
+        if root.has-next: NextLine { data: root.data; accent: root.accent; }
+    }
+
+    // 5: square analog with big numerals; date under the 12, weather and next inside
+    if root.style == 5: AnalogDial {
+        x: 16px; y: 16px;
+        size: root.width - 32px;
+        shape: 1;
+        numerals: true;
+        show-seconds: root.show-seconds;
+        weekday: root.show-date ? root.data.weekday : ""; day: root.data.day;
+        weather: root.show-weather ? root.data.temperature : "";
+        weather-icon: root.data.weather-icon;
+        next: root.has-next ? root.data.next : "";
+        h: root.hours; m: root.minutes; s: root.seconds;
+        accent: root.accent; weight: root.weight;
+    }
+
+    // 7: split-flap cards; date · weather and next event under them
+    if root.style == 7: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        alignment: center;
+        spacing: 16px;
+        FlipClock {
+            data: root.data; weight: root.weight; accent: root.accent; colon: root.colon;
+            card-height: root.clock-only ? 170px : 150px;
+        }
+        if root.show-date || root.show-weather: InfoLine { data: root.data; show-date: root.show-date; show-weather: root.show-weather; size: 19px; }
+        if root.has-next: NextLine { data: root.data; accent: root.accent; }
+    }
+
+    // 6: smaller clock bouncing slowly around the screen
+    property <length> wander-w: 260px;
+    property <length> wander-h: 150px;
+    property <float> wander-t: animation-tick() / 1ms / 1000;
+    // Triangle wave: position along one axis bouncing between 0 and range.
+    function bounce(dist: float, range: float) -> float {
+        range - abs(Math.mod(dist, 2 * range) - range)
+    }
+    if root.style == 6: VerticalLayout {
+        x: root.bounce(root.wander-speed * root.wander-t + 37, (root.width - root.wander-w) / 1px) * 1px;
+        y: root.bounce(root.wander-speed * root.wander-t + 113, (root.height - root.wander-h) / 1px) * 1px;
+        width: root.wander-w;
+        height: root.wander-h;
+        alignment: center;
+        HorizontalLayout {
+            alignment: center;
+            Text { text: root.data.hh; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+            Text { text: ":"; font-size: 84px; font-weight: root.weight; color: root.accent.with-alpha(0.85); opacity: root.colon; }
+            Text { text: root.data.mm; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+        }
+        if root.show-date || root.show-weather: InfoLine { data: root.data; show-date: root.show-date; show-weather: root.show-weather; size: 16px; color: Theme.faint; }
+        if root.has-next: NextLine { padding-top: 4px; data: root.data; accent: root.accent.with-alpha(0.8); size: 14px; }
+    }
+}
+
+export struct WeatherHour {
+    label: string,       // "08"
+    icon: string,
+    temp: float,         // 12.0
+    precip: int,         // %
+}
+
+export struct WeatherDay {
+    label: string,       // "Mon"
+    icon: string,
+    high: float,
+    low: float,
+    precip: int,
+}
+
+export struct WeatherData {
+    icon: string,
+    temperature: string, // "12°"
+    condition: string,
+    feels: string,       // "Feels like 10°"
+    wind: string,        // "12 km/h"
+    humidity: string,    // "68 %"
+    precip: string,      // "20 %"
+    high-low: string,    // "H 15° · L 7°"
+    sunrise: string,
+    sunset: string,
+    hours: [WeatherHour],
+    days: [WeatherDay],
+    mood: int,           // 0 sunny, 1 partly cloudy, 2 cloudy, 3 rain, 4 snow, 5 fog, 6 wind, 7 clear night, 8 thunder,
+                         // 9 exceptional, 10 cloudy night, 11 rainy night, 12 snowy night, 13 mist, 14 winter sunny, 15 winter fog
+    rain: int,           // 0 from the condition, 1 drizzle, 2 rain, 3 pouring (also over a sunny photo)
+    dusk: float,         // 0..1 sunset light, from the sun elevation
+    dawn: float,         // 0..1 sunrise light
+    sky-loop: float,     // mockup only: seamless sky loop length in s (panel: 0)
+    time-offset: float,  // mockup only: clock offset for long renders in batches
+    wind-kmh: float,     // wind speed, km/h (sky speed, rain slant)
+    gust-kmh: float,     // wind gust, km/h (gusts)
+    theme: int,          // 0 nature, 1 countryside, 2 city (photo); 3 countryside, 4 city, 5 neutral, 6 big city (drawn); 7 line
+    real-sun: bool,      // sun / moon follow the real sky (then the elevation also drives dusk, dawn and night)
+    sun-az: float,       // degrees (HA sun.sun azimuth)
+    sun-el: float,       // degrees (HA sun.sun elevation)
+    moon-az: float,      // degrees (computed by the app)
+    moon-el: float,
+    moon-phase: float,   // 0 new, 0.5 full
+    sun-veil: float,     // 0..1 how much the sun is behind a widget (the app computes it)
+    moon-veil: float,
+}
+
+// Animated sky for the mood variant (cheap shapes, driven by the clock).
+component Sky inherits Rectangle {
+    in property <int> mood;
+    property <float> t: animation-tick() / 1ms / 1000;
+    property <bool> night: root.mood == 7;
+    // Background per condition.
+    background: root.mood == 0 ? @linear-gradient(180deg, #2f7fd6 0%, #8cc6ff 100%)
+        : root.mood == 1 ? @linear-gradient(180deg, #3f6f9f 0%, #a7c6e2 100%)
+        : root.mood == 2 ? @linear-gradient(180deg, #4d5966 0%, #8c99a6 100%)
+        : root.mood == 3 ? @linear-gradient(180deg, #1f2c3a 0%, #46596c 100%)
+        : root.mood == 4 ? @linear-gradient(180deg, #7d90a6 0%, #dbe5ef 100%)
+        : root.mood == 5 ? @linear-gradient(180deg, #6f7780 0%, #b9c0c6 100%)
+        : root.mood == 6 ? @linear-gradient(180deg, #3b6a86 0%, #94b9cd 100%)
+        : root.mood == 7 ? @linear-gradient(180deg, #070d24 0%, #1b2a55 100%)
+        : @linear-gradient(180deg, #14161f 0%, #3a3f55 100%);
+    clip: true;
+
+    // Sun with slowly turning rays (sunny, partly cloudy)
+    if root.mood == 0 || root.mood == 1: Rectangle {
+        x: root.width - 150px; y: -60px; width: 240px; height: 240px;
+        Rectangle {
+            x: 60px; y: 60px; width: 120px; height: 120px; border-radius: 60px;
+            background: #ffe58a.with-alpha(0.18 + 0.06 * Math.sin(root.t * 90deg));
+        }
+        for i in 12: Path {
+            width: 240px; height: 240px; viewbox-width: 240; viewbox-height: 240;
+            stroke: #fff3b0.with-alpha(0.55);
+            stroke-width: 4px;
+            commands: "M " + (120 + 70 * Math.sin((i * 30 + root.t * 8) * 1deg)) + " " + (120 - 70 * Math.cos((i * 30 + root.t * 8) * 1deg))
+                + " L " + (120 + 100 * Math.sin((i * 30 + root.t * 8) * 1deg)) + " " + (120 - 100 * Math.cos((i * 30 + root.t * 8) * 1deg));
+        }
+        Rectangle {
+            x: 80px; y: 80px; width: 80px; height: 80px; border-radius: 40px;
+            background: #ffd84d;
+        }
+    }
+    // Moon and twinkling stars (clear night)
+    if root.night: Rectangle {
+        for i in 24: Rectangle {
+            x: Math.mod(i * 197 + 31, 470) * 1px;
+            y: Math.mod(i * 113 + 17, 260) * 1px;
+            width: Math.mod(i, 3) == 0 ? 3px : 2px;
+            height: self.width;
+            border-radius: 1.5px;
+            background: #ffffff;
+            opacity: 0.35 + 0.65 * abs(Math.sin((root.t * 0.8 + i * 0.37) * 180deg));
+        }
+        Rectangle {
+            x: root.width - 130px; y: 50px; width: 70px; height: 70px; border-radius: 35px;
+            background: #f4f1de;
+            Rectangle { x: 18px; y: -8px; width: 70px; height: 70px; border-radius: 35px; background: #101a3c; }
+        }
+    }
+    // Drifting clouds (partly cloudy, cloudy, rain, thunder, snow)
+    if root.mood == 1 || root.mood == 2 || root.mood == 3 || root.mood == 4 || root.mood == 8: Rectangle {
+        for i in 4: Rectangle {
+            property <float> speed: 6 + i * 4;
+            property <length> cw: (140 + Math.mod(i * 37, 60)) * 1px;
+            x: (Math.mod(root.t * self.speed + i * 170, 480 + 200) - 200) * 1px;
+            y: (20 + i * 46) * 1px;
+            width: self.cw; height: self.cw * 0.45;
+            opacity: root.mood == 1 ? 0.55 : 0.75;
+            Rectangle { x: 0; y: parent.height * 0.45; width: parent.width; height: parent.height * 0.55; border-radius: parent.height * 0.27;
+                background: root.mood == 3 || root.mood == 8 ? #5b6876 : #f2f5f8; }
+            Rectangle { x: parent.width * 0.18; y: parent.height * 0.12; width: parent.width * 0.38; height: parent.width * 0.38; border-radius: parent.width * 0.19;
+                background: root.mood == 3 || root.mood == 8 ? #5b6876 : #f2f5f8; }
+            Rectangle { x: parent.width * 0.45; y: 0; width: parent.width * 0.42; height: parent.width * 0.42; border-radius: parent.width * 0.21;
+                background: root.mood == 3 || root.mood == 8 ? #5b6876 : #f2f5f8; }
+        }
+    }
+    // Rain streaks (rain, thunder)
+    if root.mood == 3 || root.mood == 8: Rectangle {
+        for i in 40: Rectangle {
+            x: (Math.mod(i * 73 + root.t * 60, 520) - 20) * 1px;
+            y: (Math.mod(i * 137 + root.t * 420, 540) - 30) * 1px;
+            width: 2px; height: 16px; border-radius: 1px;
+            background: #cfe3ff.with-alpha(0.38);
+        }
+    }
+    // Lightning flash every ~4 s (thunder)
+    if root.mood == 8: Rectangle {
+        background: #ffffff.with-alpha(Math.mod(root.t, 4) < 0.12 ? 0.55 : (Math.mod(root.t, 4) < 0.24 ? 0.15 : 0));
+    }
+    // Snow (snow)
+    if root.mood == 4: Rectangle {
+        for i in 45: Rectangle {
+            x: (Math.mod(i * 97, 480) + 10 * Math.sin((root.t * 40 + i * 50) * 1deg)) * 1px;
+            y: (Math.mod(i * 151 + root.t * (30 + Math.mod(i, 5) * 8), 520) - 20) * 1px;
+            width: Math.mod(i, 3) == 0 ? 6px : 4px; height: self.width; border-radius: self.width / 2;
+            background: #ffffff.with-alpha(0.85);
+        }
+    }
+    // Fog bands drifting slowly
+    if root.mood == 5: Rectangle {
+        for i in 5: Rectangle {
+            x: (-80 + 60 * Math.sin((root.t * 10 + i * 70) * 1deg)) * 1px;
+            y: (70 + i * 78) * 1px;
+            width: root.width + 160px; height: 46px; border-radius: 23px;
+            background: #ffffff.with-alpha(0.16 + 0.05 * Math.sin((root.t * 20 + i * 40) * 1deg));
+        }
+    }
+    // Wind streaks racing across
+    if root.mood == 6: Rectangle {
+        for i in 12: Rectangle {
+            property <float> speed: 220 + Math.mod(i * 53, 160);
+            x: (Math.mod(root.t * self.speed + i * 97, 640) - 160) * 1px;
+            y: (40 + Math.mod(i * 71, 400)) * 1px;
+            width: (60 + Math.mod(i * 29, 90)) * 1px; height: 2px; border-radius: 1px;
+            background: #ffffff.with-alpha(0.35);
+        }
+    }
+}
+
+// Weather panel. variant: 0 full, 1 mood (animated sky), 2 compact, 3 chart.
+// appear: 0..1 entrance when the page comes into view.
+export component WeatherPanel inherits Rectangle {
+    in property <WeatherData> data;
+    in property <int> variant: 0;
+    in property <float> appear: 1;
+    in property <color> accent: Theme.accent;
+    in property <int> weight: 600;
+    in property <bool> show-details: true;   // wind, humidity, rain, sun times
+    in property <bool> show-hours: true;
+    in property <bool> show-days: true;
+    in property <bool> fx-bolts: true;       // visible lightning bolts in a thunderstorm
+    in property <bool> fx-flash: true;       // lightning flash
+    in property <bool> fx-drops: true;       // rain drops on the glass
+    in property <image> sky-frame;           // optional per-frame sky from the app
+    property <length> top: 40px;
+    property <length> bottom: 44px;
+    background: Theme.background;
+    function fade(k: float) -> float { max(0, min(1, root.appear * 4 - k)) }
+    // Temperature range of the days, for the bars.
+    property <float> lo: root.data.days.length > 0 ? min(root.data.days[0].low, root.data.days[1].low, root.data.days[2].low, root.data.days[3].low) : 0;
+    property <float> hi: root.data.days.length > 0 ? max(root.data.days[0].high, root.data.days[1].high, root.data.days[2].high, root.data.days[3].high) : 1;
+
+    // 0: full
+    if root.variant == 0: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        padding-left: 18px; padding-right: 18px;
+        alignment: center;
+        spacing: 10px;
+        HorizontalLayout {
+            spacing: 14px;
+            opacity: root.fade(0);
+            Icon { text: root.data.icon; font-size: 72px; color: Theme.text; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text { text: root.data.temperature; font-size: 60px; font-weight: root.weight; color: Theme.text; }
+                Text { text: root.data.condition; font-size: Theme.font-body; color: Theme.text; }
+            }
+            VerticalLayout {
+                alignment: center;
+                Text { text: root.data.high-low; font-size: Theme.font-label; color: Theme.muted; horizontal-alignment: right; }
+                Text { text: root.data.feels; font-size: Theme.font-label; color: Theme.muted; horizontal-alignment: right; }
+            }
+        }
+        if root.show-details: HorizontalLayout {
+            spacing: 8px;
+            alignment: center;
+            opacity: root.fade(0.6);
+            for c in [
+                { icon: "\u{F059D}", text: root.data.wind },
+                { icon: "\u{F058E}", text: root.data.humidity },
+                { icon: "\u{F054A}", text: root.data.precip },
+                { icon: "\u{F059C}", text: root.data.sunrise + " – " + root.data.sunset },
+            ]: Rectangle {
+                height: 30px;
+                border-radius: 15px;
+                background: Theme.surface;
+                HorizontalLayout {
+                    padding-left: 10px; padding-right: 12px; spacing: 5px;
+                    Icon { text: c.icon; font-size: 16px; color: Theme.muted; }
+                    Text { text: c.text; font-size: Theme.font-caption; color: Theme.text; vertical-alignment: center; }
+                }
+            }
+        }
+        if root.show-hours: Rectangle {
+            height: 84px;
+            border-radius: Theme.radius-small;
+            background: Theme.surface;
+            opacity: root.fade(1.2);
+            HorizontalLayout {
+                padding: 6px;
+                for h in root.data.hours: VerticalLayout {
+                    horizontal-stretch: 1;
+                    alignment: center;
+                    spacing: 1px;
+                    Text { text: h.label; font-size: Theme.font-caption; color: Theme.muted; horizontal-alignment: center; }
+                    Icon { text: h.icon; font-size: 24px; color: Theme.text; }
+                    Text { text: round(h.temp) + "°"; font-size: 15px; font-weight: Theme.weight-strong; color: Theme.text; horizontal-alignment: center; }
+                    Text { text: h.precip + "%"; font-size: 11px; color: #4aa8ff; horizontal-alignment: center; }
+                }
+            }
+        }
+        if root.show-days: VerticalLayout {
+            spacing: 2px;
+            opacity: root.fade(1.8);
+            for d in root.data.days: HorizontalLayout {
+                height: 28px;
+                spacing: 10px;
+                Text { width: 44px; text: d.label; font-size: Theme.font-label; color: Theme.text; vertical-alignment: center; }
+                Icon { width: 28px; text: d.icon; font-size: 20px; color: Theme.text; }
+                Text { width: 40px; text: d.precip > 0 ? d.precip + "%" : ""; font-size: 12px; color: #4aa8ff; vertical-alignment: center; }
+                Text { width: 34px; text: round(d.low) + "°"; font-size: Theme.font-label; color: Theme.muted; horizontal-alignment: right; vertical-alignment: center; }
+                // Range bar: where this day's low..high sits in the week's range.
+                Rectangle {
+                    horizontal-stretch: 1;
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            height: 6px; border-radius: 3px; background: Theme.surface-raised;
+                            Rectangle {
+                                x: parent.width * (d.low - root.lo) / max(1, root.hi - root.lo);
+                                width: parent.width * (d.high - d.low) / max(1, root.hi - root.lo);
+                                border-radius: 3px;
+                                background: @linear-gradient(90deg, #4aa8ff 0%, #ffb547 100%);
+                            }
+                        }
+                    }
+                }
+                Text { width: 34px; text: round(d.high) + "°"; font-size: Theme.font-label; color: Theme.text; vertical-alignment: center; }
+            }
+        }
+    }
+
+    // 1: mood — animated sky, big temperature
+    if root.variant == 1: wsky := PhotoSky {
+        mood: root.data.mood;
+        theme: root.data.theme;
+        rain: root.data.rain;
+        dusk: root.data.dusk;
+        dawn: root.data.dawn;
+        sky-loop: root.data.sky-loop;
+        time-offset: root.data.time-offset;
+        wind: root.data.wind-kmh;
+        gust: root.data.gust-kmh;
+        sky-frame: root.sky-frame;
+        real-sun: root.data.real-sun;
+        sun-az: root.data.sun-az;
+        sun-el: root.data.sun-el;
+        moon-az: root.data.moon-az;
+        moon-el: root.data.moon-el;
+        moon-phase: root.data.moon-phase;
+        sun-veil: root.data.sun-veil;
+        moon-veil: root.data.moon-veil;
+        bolts: root.fx-bolts;
+        flash: root.fx-flash;
+        drops: root.fx-drops;
+        VerticalLayout {
+            y: root.top;
+            height: root.height - root.top - root.bottom;
+            alignment: center;
+            spacing: 4px;
+            HorizontalLayout {
+                alignment: center;
+                spacing: 10px;
+                GlowText { icon: true; horizontal-alignment: center; k: wsky.glow-k; text: root.data.icon; font-size: 64px; color: #ffffff; }
+                GlowText { k: wsky.glow-k; text: root.data.temperature; font-size: 104px; font-weight: root.weight; color: #ffffff; }
+            }
+            GlowText { k: wsky.glow-k; text: root.data.condition; font-size: 24px; color: #ffffff; horizontal-alignment: center; }
+            GlowText { k: wsky.glow-k; text: root.data.high-low + "   ·   " + root.data.precip + " rain"; font-size: 16px; color: #ffffffcc; horizontal-alignment: center; }
+            if root.show-hours: HorizontalLayout {
+                padding-top: 22px;
+                alignment: center;
+                spacing: 6px;
+                for h in root.data.hours: Rectangle {
+                    width: 62px; height: 70px; border-radius: 14px;
+                    background: #ffffff1f;
+                    VerticalLayout {
+                        alignment: center;
+                        Text { text: h.label; font-size: 12px; color: #ffffffcc; horizontal-alignment: center; }
+                        Icon { text: h.icon; font-size: 20px; color: #ffffff; }
+                        Text { text: round(h.temp) + "°"; font-size: 14px; font-weight: Theme.weight-strong; color: #ffffff; horizontal-alignment: center; }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2: compact — big and simple
+    if root.variant == 2: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        alignment: center;
+        spacing: 0px;
+        opacity: root.fade(0);
+        HorizontalLayout { alignment: center; Icon { text: root.data.icon; font-size: 110px; color: Theme.text; } }
+        Text { text: root.data.temperature; font-size: 120px; font-weight: root.weight; color: Theme.text; horizontal-alignment: center; }
+        Text { text: root.data.condition; font-size: 24px; color: Theme.text; horizontal-alignment: center; }
+        HorizontalLayout {
+            padding-top: 6px;
+            alignment: center;
+            spacing: 14px;
+            Text { text: root.data.high-low; font-size: 18px; color: Theme.muted; }
+            HorizontalLayout { spacing: 4px; Icon { text: "\u{F054A}"; font-size: 18px; color: #4aa8ff; } Text { text: root.data.precip; font-size: 18px; color: Theme.muted; } }
+        }
+    }
+
+    // 3: chart — temperature curve for the next hours, rain bars under it
+    if root.variant == 3: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        padding-left: 18px; padding-right: 18px;
+        alignment: center;
+        spacing: 12px;
+        HorizontalLayout {
+            spacing: 12px;
+            Icon { text: root.data.icon; font-size: 56px; color: Theme.text; }
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 1;
+                Text { text: root.data.temperature + "  " + root.data.condition; font-size: 26px; font-weight: root.weight; color: Theme.text; }
+                Text { text: root.data.high-low + " · " + root.data.feels; font-size: Theme.font-label; color: Theme.muted; }
+            }
+        }
+        chart := Rectangle {
+            height: 250px;
+            border-radius: Theme.radius-small;
+            background: Theme.surface;
+            clip: true;
+            property <length> pw: self.width - 24px;
+            property <length> ph: 150px;
+            property <float> tmin: min(root.data.hours[0].temp, root.data.hours[1].temp, root.data.hours[2].temp, root.data.hours[3].temp, root.data.hours[4].temp, root.data.hours[5].temp) - 1;
+            property <float> tmax: max(root.data.hours[0].temp, root.data.hours[1].temp, root.data.hours[2].temp, root.data.hours[3].temp, root.data.hours[4].temp, root.data.hours[5].temp) + 1;
+            // Point centres in pixels inside the plot.
+            function cx(i: int) -> float { (self.pw / 1px) * (i + 0.5) / 6 }
+            function cy(t: float) -> float { (self.ph / 1px - 12) * (1 - (t - self.tmin) / (self.tmax - self.tmin)) + 6 }
+            // Rain bars
+            for h[i] in root.data.hours: Rectangle {
+                x: 12px + chart.pw * (i + 0.5) / root.data.hours.length - 10px;
+                y: 200px - self.height;
+                width: 20px;
+                height: 40px * h.precip / 100 * min(1, root.appear * 1.5);
+                border-radius: 3px;
+                background: #4aa8ff.with-alpha(0.55);
+            }
+            // Curve, drawn in from the left as the page appears. Coordinates in
+            // pixels; the Path is enlarged by its stroke so Slint's stroke inset
+            // cancels out and the line meets the dots exactly.
+            Rectangle {
+                x: 12px; y: 30px; width: chart.pw * min(1, root.appear * 1.2); height: chart.ph + 20px; clip: true;
+                Path {
+                    x: -1.5px; y: -1.5px; width: chart.pw + 3px; height: chart.ph + 3px;
+                    viewbox-width: chart.pw / 1px; viewbox-height: chart.ph / 1px;
+                    stroke: root.accent;
+                    stroke-width: 3px;
+                    commands: "M " + chart.cx(0) + " " + chart.cy(root.data.hours[0].temp)
+                        + " L " + chart.cx(1) + " " + chart.cy(root.data.hours[1].temp)
+                        + " L " + chart.cx(2) + " " + chart.cy(root.data.hours[2].temp)
+                        + " L " + chart.cx(3) + " " + chart.cy(root.data.hours[3].temp)
+                        + " L " + chart.cx(4) + " " + chart.cy(root.data.hours[4].temp)
+                        + " L " + chart.cx(5) + " " + chart.cy(root.data.hours[5].temp);
+                }
+                for h[i] in root.data.hours: Rectangle {
+                    x: chart.cx(i) * 1px - 5px;
+                    y: chart.cy(h.temp) * 1px - 5px;
+                    width: 10px; height: 10px; border-radius: 5px;
+                    background: root.accent;
+                    Text {
+                        y: -22px; x: -10px; width: 30px;
+                        text: round(h.temp) + "°"; font-size: 13px; color: Theme.text; horizontal-alignment: center;
+                    }
+                }
+            }
+            // Hour labels
+            for h[i] in root.data.hours: Text {
+                x: 12px + chart.pw * (i + 0.5) / root.data.hours.length - 20px;
+                y: 210px;
+                width: 40px;
+                text: h.label; font-size: 12px; color: Theme.muted; horizontal-alignment: center;
+            }
+        }
+    }
+}
+
+// One assistant page (or the screensaver) with the shared frame around it.
+export component AssistantPage inherits Rectangle {
+    in property <string> hint;
+    in property <bool> mic-muted;
+    in property <[TimerInfo]> timers;
+    in property <bool> problem;
+    in property <int> page-count;
+    in property <int> page;
+    in property <float> dots-shown: 1;
+    in property <[Person]> people;
+    in property <bool> show-people: true;
+    in property <bool> screensaver;      // quiet bar, no page dots
+    in property <bool> on-color;         // panel draws its own coloured background
+    background: Theme.background;
+    @children
+    StatusBar {
+        x: 16px;
+        y: 10px;
+        width: root.width - 32px;
+        hint: root.hint;
+        mic-muted: root.mic-muted;
+        timers: root.timers;
+        problem: root.problem;
+        quiet: root.screensaver;
+        on-color: root.on-color;
+    }
+    if root.show-people && root.people.length > 0: People {
+        x: 16px;
+        y: root.height - 40px;
+        people: root.people;
+    }
+    if !root.screensaver: PageDots {
+        y: root.height - 22px;
+        width: root.width;
+        height: 6px;
+        count: root.page-count;
+        current: root.page;
+        shown: root.dots-shown;
+        on-color: root.on-color;
+    }
+}

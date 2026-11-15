@@ -26,6 +26,7 @@ const ICON = {
 
 const SECTIONS = [
   { id: "panel", title: "Panel", icon: "panel" },
+  { id: "pages", title: "Pages", icon: "dashboard" },
   { id: "display", title: "Display", icon: "display" },
   { id: "dashboard", title: "Dashboard", icon: "dashboard" },
   { id: "assistant", title: "Assistant", icon: "assistant" },
@@ -43,6 +44,16 @@ const INFO = {
   device: "Restart app restarts the panel's software (a few seconds); Reboot restarts the whole panel. Both need a second tap.",
   preview: "The panel's screen as it is now, every few seconds while this page is open. Tap it to wake the screen.",
 };
+
+// The pages the panel can show, in the words of the page list.
+const PAGE_NAMES = {
+  home: "Home", weather: "Weather", clock: "Clock", music: "Music", timers: "Timers", thermostat: "Thermostat",
+  quick: "Quick controls", camera: "Cameras", calendar: "Calendar", todo: "To-do", info: "Notifications",
+};
+const LOOKS = JSON.parse(atob("eyJ3ZWF0aGVyIjpbIkNhcmRzIiwiTGl2aW5nIHBob3RvIl0sIm11c2ljIjpbIlBsYWluIiwiRnVsbCBjb3ZlciIsIlR1cm50YWJsZSIsIkNhc3NldHRlIiwiSGFsZiBjYXNzZXR0ZSJdLCJ0aW1lcnMiOlsiRnVsbCBDaXJjbGUiLCJEb25lIHRvIGEgVHVybiIsIlNhbmRzIG9mIFRpbWUiLCJJbiB0aGUgRmFzdCBMYW5lIiwiRmxpcCBTaWRlIl0sInRoZXJtb3N0YXQiOlsiQ29tZm9ydCBab25lIiwiUHVzaCBNeSBCdXR0b25zIiwiT2xkIEZsYW1lIiwiSW4gdGhlIEZhc3QgTGFuZSJdLCJxdWljayI6WyJUaWxlcyIsIk1peGluZyBkZXNrIiwiRmxpZ2h0IGRlY2siXSwiY2FsZW5kYXIiOlsiUGxhaW4gU2FpbGluZyIsIk5vdyBCb2FyZGluZyIsIlNlaXplIHRoZSBEYXkiLCJIYW5nIGluIFRoZXJlIl0sInRvZG8iOlsiQ2xlYW4gU2xhdGUiLCJQYXBlciBUcmFpbCIsIlJvb3QgQWNjZXNzIiwiTGFiZWwgTWUgSW1wcmVzc2VkIiwiTm90ZSB0byBTZWxmIl0sImluZm8iOlsiSGVhZHMgVXAiLCJGcmlkZ2UgTWFnbmV0IiwiQmVlcCBCZWVwIiwiQnJlYWtpbmcgTmV3cyJdfQ=="));
+
+// Home backgrounds (photo / drawn / line / synthwave), the synthwave scenes, the voice feedback looks.
+const NAMES = JSON.parse(atob("eyJiZyI6WyJQaG90byBcdTAwYjcgbmF0dXJlIiwiUGhvdG8gXHUwMGI3IGNvdW50cnlzaWRlIiwiUGhvdG8gXHUwMGI3IGNpdHkiLCJEcmF3biBcdTAwYjcgY291bnRyeXNpZGUiLCJEcmF3biBcdTAwYjcgY2l0eSIsIkRyYXduIFx1MDBiNyBuZXV0cmFsIiwiRHJhd24gXHUwMGI3IGJpZyBjaXR5IiwiTGluZSIsIkluIHRoZSBGYXN0IExhbmUiXSwic2NlbmUiOlsiUmlkZSBpbnRvIHRoZSBTdW5zZXQiLCJDb25jcmV0ZSBKdW5nbGUiLCJMaWZlJ3MgYSBCZWFjaCIsIlN0YXJyeS1FeWVkIl0sInZvaWNlIjpbIlBsYWluIiwiVGVybWluYWwiLCJDb21pYyIsIk9zY2lsbG9zY29wZSJdfQ=="));
 
 // Readable names of integrations, for entities with the same name.
 const PLATFORMS = {
@@ -176,6 +187,12 @@ input[type=range]:disabled { opacity: 0.4; cursor: default; }
 .chip button:hover { color: var(--signal); }
 .add { position: relative; display: inline-flex; }
 .add .sel { min-width: 0; max-width: 260px; }
+.pages { display: flex; flex-direction: column; gap: 10px; }
+.page-item { border: 1px solid var(--line); border-radius: 14px; padding: 4px 14px 6px; }
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+.page-name { font-family: "Space Grotesk", sans-serif; font-weight: 500; font-size: 16px; }
+.page-head .btn svg { width: 16px; height: 16px; fill: currentColor; vertical-align: middle; }
+.page-head .btn:disabled { opacity: 0.35; cursor: default; }
 .res-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
 .res-head .sum { color: var(--muted); font-size: 14px; }
 .btn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 16px; cursor: pointer; font-size: 14px; white-space: nowrap; }
@@ -658,7 +675,90 @@ class PanelOSPage extends HTMLElement {
       this._row("Media player", this._select("Media player", () => [none, ...this._entities(["media_player"])], () => settings().media_player_entity, (v) => this._options({ media_player_entity: v }))),
       this._row("Quick tiles", chips, true),
       this._row("Full-screen conversation", this._switch("Full-screen conversation", () => settings().show_conversation, (v) => this._options({ show_conversation: v }))),
+      this._row("Voice feedback", this._select("Voice feedback", () => NAMES.voice.map((n, i) => ({ value: String(i), label: n })), () => String(settings().voice_look ?? 0), (v) => this._options({ voice_look: Number(v) }))),
     ]);
+  }
+
+  // The page list: what the panel swipes through, in this order; each page's
+  // look and the entities it shows.
+  _pages() {
+    const settings = () => this._current?.settings || {};
+    const kinds = () => this._data?.page_kinds || {};
+    const pages = () => settings().pages || [];
+    const list = el("div", { class: "pages" });
+    const save = (next) => this._options({ pages: next });
+    const add = this._select(
+      "Add a page",
+      () => [{ value: "", label: "Add a page…" }, ...Object.keys(kinds()).map((k) => ({ value: k, label: PAGE_NAMES[k] || k }))],
+      () => "",
+      (v) => v && save([...pages(), { kind: v }])
+    );
+    let built = "";
+    this._controls.push(() => {
+      const now = pages();
+      const key = JSON.stringify([now, Object.keys(this._hass?.states || {}).length]);
+      if (key === built) return;
+      built = key;
+      list.replaceChildren(
+        ...now.map((page, i) => {
+          const kind = kinds()[page.kind] || { looks: 1, domains: [], most: 0 };
+          const change = (patch) => save(now.map((p, j) => (j === i ? { ...p, ...patch } : p)));
+          const move = (d) => {
+            const next = [...now];
+            [next[i], next[i + d]] = [next[i + d], next[i]];
+            save(next);
+          };
+          const head = el(
+            "div",
+            { class: "page-head" },
+            el("span", { class: "page-name" }, `${i + 1}. ${PAGE_NAMES[page.kind] || page.kind}`),
+            el(
+              "span",
+              { class: "chips" },
+              el("button", { class: "btn", "aria-label": "Earlier", disabled: i === 0, onclick: () => move(-1) }, "↑"),
+              el("button", { class: "btn", "aria-label": "Later", disabled: i === now.length - 1, onclick: () => move(1) }, "↓"),
+              el("button", { class: "btn", "aria-label": `Remove ${PAGE_NAMES[page.kind] || page.kind}`, disabled: now.length === 1, onclick: () => save(now.filter((_, j) => j !== i)) }, svg(ICON.close))
+            )
+          );
+          const rows = [head];
+          if (kind.looks > 1) {
+            const names = LOOKS[page.kind] || [];
+            const looks = Array.from({ length: kind.looks }, (_, v) => ({ value: String(v), label: names[v] || `Look ${v + 1}` }));
+            const look = el("select", { "aria-label": "Look", onchange: (e) => change({ variant: Number(e.target.value) }) },
+              ...looks.map((c) => el("option", { value: c.value }, c.label)));
+            look.value = String(page.variant || 0);
+            rows.push(el("div", { class: "row" }, el("div", { class: "label" }, "Look"), el("div", { class: "control" }, el("div", { class: "sel" }, look, svg(ICON.chevron)))));
+          }
+          // the home page's background (and the synthwave scene)
+          if (page.kind === "home") {
+            const opts = page.options || {};
+            const pick = (label, list, key, fallback) => {
+              const sel = el("select", { "aria-label": label, onchange: (e) => change({ options: { ...opts, [key]: Number(e.target.value) } }) },
+                ...list.map((name, v) => el("option", { value: String(v) }, name)));
+              sel.value = String(opts[key] ?? fallback);
+              return el("div", { class: "row" }, el("div", { class: "label" }, label), el("div", { class: "control" }, el("div", { class: "sel" }, sel, svg(ICON.chevron))));
+            };
+            rows.push(pick("Background", NAMES.bg, "theme", 0));
+            if ((opts.theme ?? 0) === 8) rows.push(pick("Scene", NAMES.scene, "scene", 0));
+          }
+          if (kind.most > 0) {
+            const ents = page.entities || [];
+            const chips = el("div", { class: "chips" },
+              ...ents.map((id) => el("span", { class: "chip" }, el("span", { title: id }, this._name(id)),
+                el("button", { "aria-label": `Remove ${this._name(id)}`, onclick: () => change({ entities: ents.filter((e) => e !== id) }) }, svg(ICON.close)))));
+            if (ents.length < kind.most) {
+              const choices = this._entities(kind.domains).filter((c) => !ents.includes(c.value));
+              const pick = el("select", { "aria-label": "Add", onchange: (e) => e.target.value && change({ entities: [...ents, e.target.value] }) },
+                el("option", { value: "" }, kind.most === 1 ? "Choose…" : "Add…"), ...choices.map((c) => el("option", { value: c.value }, c.label)));
+              chips.append(el("span", { class: "add" }, el("div", { class: "sel" }, pick, svg(ICON.chevron))));
+            }
+            rows.push(el("div", { class: "row stack" }, el("div", { class: "label" }, kind.most === 1 ? "Shows" : "Shows these"), el("div", { class: "control" }, chips)));
+          }
+          return el("div", { class: "page-item" }, ...rows);
+        })
+      );
+    });
+    return this._card("pages", "Pages", [list, this._row("Add", add)]);
   }
 
   _sensors() {
@@ -799,7 +899,7 @@ class PanelOSPage extends HTMLElement {
     const tabs = el("div", { class: "tabs" },
       this._data.panels.length > 1 ? this._data.panels.map((p) => el("button", { class: p.entry_id === this._selected ? "on" : "", onclick: () => this._pick(p.entry_id) }, p.device?.name || p.title)) : SECTIONS.map((s) => el("button", { "data-section": s.id, onclick: () => this._go(s.id) }, s.title)));
     const top = el("div", { class: "top" }, el("div", { class: "top-row" }, menu, el("i", { role: "img", "aria-label": "PanelOS" })), tabs);
-    const content = el("div", { class: "content" }, this._hero(), this._display(), this._dashboardMode(), this._assistantMode(), this._sensors(), this._device());
+    const content = el("div", { class: "content" }, this._hero(), this._pages(), this._display(), this._dashboardMode(), this._assistantMode(), this._sensors(), this._device());
     const preview = this._preview();
     const main = el("main", {}, top, this.getAttribute("size") === "narrow" ? preview : null, content);
     const shell = el("div", { class: "shell" }, nav, main, this.getAttribute("size") === "narrow" ? null : preview);

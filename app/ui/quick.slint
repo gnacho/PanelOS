@@ -1,0 +1,248 @@
+// Quick controls: the entities picked in the integration. Tap = toggle; long press = details in the tiles look
+// (the desk and the deck have none: the fader / the lever is the control). Looks: 0 tiles (grid 0 = 2 × 4 cards,
+// grid 1 = 4 × 4 with icon-only and wide cards mixed, set in the integration), 1 mixing desk, 2 flight deck.
+// Texts the app fills in: title (playful), mood (playful line: all off / some on / all on), placard (flight deck, may
+// name the panel's room), state words (plain; playful only for an unavailable entity).
+import { Theme, Act } from "theme.slint";
+import { Icon } from "widgets.slint";
+
+export struct QuickTile {
+    name: string,
+    label: string,      // short label from the integration (desk tape, deck plate); empty: the name
+    icon: string,
+    kind: int,          // 0 light, 1 switch / media, 2 cover, 3 climate, 4 vacuum
+    on: bool,
+    dim: bool,          // has a level (brightness, position, set temperature)
+    value: float,       // that level 0 … 1
+    state: string,      // "On · 90 %", "Closed", "Heat · 20 °C"
+    short: string,      // the level as shown on sliders and readouts ("90 %", "0 %", "20 °C")
+    gone: bool,         // unavailable
+    tint: color,
+    led: color,         // flight deck lamp: the light's own colour for colour lights, else green
+    col: int,           // 4 × 4 grid: cell and width (1 = icon only, 2 = card)
+    row: int,
+    w: int,
+    tape: image,        // mixing desk: the embossed label (drawn by the app: tilt, worn edges)
+    has-tape: bool,
+}
+
+export struct QuickGroup { row: int, start: int, count: int, name: string }   // flight deck: a painted bracket over cells
+
+component LevelBar inherits Rectangle {
+    in property <float> value;
+    in property <color> tint;
+    height: 4px;
+    border-radius: 2px;
+    background: Theme.text.with-alpha(0.10);
+    Rectangle { x: 0; y: 0; width: max(4px, parent.width * root.value); height: parent.height; border-radius: 2px; background: root.tint; }
+}
+
+export component QuickPage inherits Rectangle {
+    in property <int> look;
+    in property <int> grid;
+    in property <[QuickTile]> tiles;
+    in property <string> title;
+    in property <string> mood;
+    in property <string> placard;
+    in property <[QuickGroup]> groups;
+    in property <bool> sheet;
+    in property <QuickTile> sheet-tile;
+    in property <int> sheet-index;              // which tile the sheet shows (for its taps)
+    in property <float> sheet-temp: -1;          // colour temperature 0 (warm) … 1 (cool); below 0: none
+    in property <string> sheet-temp-text;
+    in property <[color]> sheet-colours;
+    in property <[string]> sheet-effects;
+    in property <image> mixer-panel;
+    in property <image> fader;
+    in property <image> deck-panel;
+    in property <image> toggle-up;
+    in property <image> toggle-down;
+    in property <image> lamp-off;
+    in property <image> lamp-glow;
+    in property <image> lamp-spec;
+    in property <image> lamp-amber;
+    in property <image> screw;
+
+    // ------------------------------------------------------------------ 0 tiles
+    if root.look == 0: Rectangle {
+        Text { x: 20px; y: 46px; width: 300px; height: 30px; text: root.title; font-size: 20px; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; }
+        Rectangle { x: parent.width - 108px; y: 46px; width: 88px; height: 30px; border-radius: 15px;
+            background: alloff.pressed ? Theme.text.with-alpha(0.16) : Theme.text.with-alpha(0.08);
+            Text { text: "All off"; font-size: 14px; font-weight: 600; color: Theme.text; }
+            alloff := TouchArea { clicked => { Act.act("quick.alloff", ""); } } }
+        for t[i] in root.tiles: tile := Rectangle {
+            property <bool> wide: root.grid == 0 || t.w >= 2;
+            x: root.grid == 0 ? 20px + mod(i, 2) * 226px : 20px + t.col * 113px;
+            y: root.grid == 0 ? 86px + floor(i / 2) * 88px : 86px + t.row * 88px;
+            width: self.wide ? 214px : 101px; height: 80px; border-radius: 16px;
+            background: t.gone ? Theme.text.with-alpha(0.04) : t.on ? t.tint.with-alpha(Theme.dark ? 0.26 : 0.20) : Theme.text.with-alpha(0.07);
+            opacity: tile-touch.pressed ? 0.8 : 1;
+            property <bool> held;
+            tile-touch := TouchArea {
+                pointer-event(ev) => { if ev.kind == PointerEventKind.down { tile.held = false; } }
+                clicked => { if !tile.held { Act.act("quick.toggle", i); } }
+            }
+            Timer { interval: 500ms; running: tile-touch.pressed && !tile.held; triggered => { tile.held = true; Act.act("quick.details", i); } }
+            Rectangle { x: tile.wide ? 12px : (parent.width - self.width) / 2; y: tile.wide ? (parent.height - 44px) / 2 : 7px;
+                width: tile.wide ? 44px : 36px; height: self.width; border-radius: self.width / 2;
+                background: t.gone ? Theme.text.with-alpha(0.08) : t.on ? t.tint : Theme.text.with-alpha(0.10);
+                Icon { text: t.icon; font-size: tile.wide ? 24px : 20px; color: t.on ? #ffffff : Theme.text.with-alpha(t.gone ? 0.35 : 0.75); } }
+            if tile.wide: Text { x: 66px; y: 17px; width: parent.width - 76px; text: t.name; font-size: 15px; font-weight: 600; color: Theme.text.with-alpha(t.gone ? 0.45 : 1); overflow: elide; }
+            if tile.wide: Text { x: 66px; y: 40px; width: parent.width - 76px; text: t.state; font-size: 13px; color: t.on ? Theme.text.with-alpha(0.85) : Theme.muted; overflow: elide; }
+            // icon-only cells: the short name and the state under the icon
+            if !tile.wide: Text { x: 6px; y: 45px; width: parent.width - 12px; text: t.label != "" ? t.label : t.name; font-size: 12px; font-weight: 600;
+                color: Theme.text.with-alpha(t.gone ? 0.45 : 1); horizontal-alignment: center; overflow: elide; }
+            if !tile.wide: Text { x: 6px; y: 59px; width: parent.width - 12px; text: t.gone ? t.state : t.dim && t.on ? t.short : t.on ? "On" : t.state;
+                font-size: 11px; color: t.on ? Theme.text.with-alpha(0.85) : Theme.muted; horizontal-alignment: center; overflow: elide; }
+            // the level, inside the card (never past its rounded corners)
+            if t.dim && t.on && !t.gone: LevelBar { x: tile.wide ? 66px : 16px; y: parent.height - (tile.wide ? 14px : 6px); width: parent.width - (tile.wide ? 80px : 32px);
+                value: t.value; tint: t.tint; }
+        }
+        if root.mood != "": Text { x: 20px; y: 438px; width: parent.width - 40px; height: 18px; text: root.mood; font-size: 13px; color: Theme.muted;
+            horizontal-alignment: center; overflow: elide; }
+        // details on a long press: a sheet sized to what the entity can do
+        if root.sheet: sheet := Rectangle { background: #00000066;
+            TouchArea { clicked => { Act.act("quick.close", ""); } }
+            property <bool> cover: root.sheet-tile.kind == 2;
+            property <length> h: 84px + 88px + (root.sheet-temp >= 0 ? 56px : 0px) + (root.sheet-colours.length > 0 ? 54px : 0px)
+                + (root.sheet-effects.length > 0 ? 50px : 0px) + (self.cover ? 56px : 0px) + 8px;
+            Rectangle { x: 0; y: parent.height - parent.h; width: parent.width; height: parent.h + 24px; border-radius: 24px; background: Theme.sheet;
+                TouchArea { }
+                Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: Theme.text.with-alpha(0.2); }
+                Rectangle { x: 20px; y: 26px; width: 44px; height: 44px; border-radius: 22px; background: root.sheet-tile.on ? root.sheet-tile.tint : Theme.text.with-alpha(0.1);
+                    Icon { text: root.sheet-tile.icon; font-size: 24px; color: root.sheet-tile.on ? #ffffff : Theme.text; } }
+                Text { x: 76px; y: 26px; width: parent.width - 170px; text: root.sheet-tile.name; font-size: 18px; font-weight: 700; color: Theme.text; overflow: elide; }
+                Text { x: 76px; y: 50px; width: parent.width - 170px; text: root.sheet-tile.state; font-size: 14px; color: Theme.muted; overflow: elide; }
+                if root.sheet-tile.kind != 2: Rectangle { x: parent.width - 80px; y: 34px; width: 56px; height: 30px; border-radius: 15px;
+                    background: root.sheet-tile.on ? root.sheet-tile.tint : Theme.text.with-alpha(0.2);
+                    TouchArea { x: -10px; y: -10px; width: parent.width + 20px; height: parent.height + 20px; clicked => { Act.act("quick.toggle", root.sheet-index); } }
+                    Rectangle { x: root.sheet-tile.on ? 28px : 2px; y: 2px; width: 26px; height: 26px; border-radius: 13px; background: #ffffff; } }
+                // the level slider: brightness / position / set temperature, always with its unit
+                Rectangle { x: 20px; y: 88px; width: parent.width - 40px; height: 72px; border-radius: 22px; background: Theme.text.with-alpha(0.08);
+                    property <float> drag-v;
+                    property <float> shown: lvl.pressed ? self.drag-v : root.sheet-tile.value;
+                    Rectangle { x: 0; y: 0; width: max(44px, parent.width * parent.shown); height: parent.height; border-radius: 22px; background: root.sheet-tile.tint; }
+                    lvl := TouchArea {
+                        pointer-event(ev) => {
+                            if ev.kind == PointerEventKind.down { parent.drag-v = max(0, min(1, self.mouse-x / self.width)); }
+                            else if ev.kind == PointerEventKind.up { Act.act("quick.level", root.sheet-index + ":" + parent.drag-v); }
+                        }
+                        moved => { parent.drag-v = max(0, min(1, self.mouse-x / self.width)); }
+                    }
+                    Text { x: parent.width - 116px; y: 0; width: 100px; height: parent.height; text: root.sheet-tile.short; font-size: 26px; font-weight: 700;
+                        color: Theme.text; horizontal-alignment: right; vertical-alignment: center; } }
+                // colour temperature: a warm-to-cool pill (cut into thin steps: gradients ignore rounded ends here)
+                if root.sheet-temp >= 0: temp-pill := Rectangle { x: 20px; y: 180px; width: parent.width - 120px; height: 28px;
+                    property <float> drag-t;
+                    property <float> shown-t: tp.pressed ? self.drag-t : root.sheet-temp;
+                    Rectangle { x: 0; y: 0; width: 28px; height: 28px; border-radius: 14px; background: #ff9f43; }
+                    Rectangle { x: parent.width - 28px; y: 0; width: 28px; height: 28px; border-radius: 14px; background: #dbe9ff; }
+                    for k in 40: Rectangle { x: 14px + k * (parent.width - 28px) / 40; y: 0; width: (parent.width - 28px) / 40 + 1px; height: 28px;
+                        background: #ff9f43.mix(#dbe9ff, 1 - k / 39); }
+                    tp := TouchArea { y: -10px; height: parent.height + 20px;
+                        pointer-event(ev) => {
+                            if ev.kind == PointerEventKind.down { temp-pill.drag-t = max(0, min(1, (self.mouse-x - 14px) / (self.width - 28px))); }
+                            else if ev.kind == PointerEventKind.up { Act.act("quick.temp", root.sheet-index + ":" + temp-pill.drag-t); }
+                        }
+                        moved => { temp-pill.drag-t = max(0, min(1, (self.mouse-x - 14px) / (self.width - 28px))); }
+                    }
+                    Rectangle { x: 14px + (parent.width - 28px) * temp-pill.shown-t - 17px; y: -3px; width: 34px; height: 34px; border-radius: 17px;
+                        background: #ff9f43.mix(#dbe9ff, 1 - temp-pill.shown-t); border-width: 3px; border-color: #ffffff; drop-shadow-blur: 4px; drop-shadow-color: #00000055; }
+                }
+                if root.sheet-temp >= 0: Text { x: parent.width - 92px; y: 180px; width: 72px; height: 28px; text: root.sheet-temp-text; font-size: 15px; font-weight: 600;
+                    color: Theme.text; horizontal-alignment: right; vertical-alignment: center; }
+                // colours
+                if root.sheet-colours.length > 0: Rectangle { x: 20px; y: root.sheet-temp >= 0 ? 232px : 180px; width: parent.width - 40px; height: 38px;
+                    for c[k] in root.sheet-colours: Rectangle { x: k * 50px; y: 0; width: 38px; height: 38px; border-radius: 19px; background: c;
+                        border-width: k == 0 ? 3px : 0px; border-color: Theme.text;
+                        TouchArea { clicked => { Act.act("quick.colour", root.sheet-index + ":" + k); } } } }
+                // effects the light offers (names from HA)
+                if root.sheet-effects.length > 0: HorizontalLayout { x: 20px; y: (root.sheet-temp >= 0 ? 56px : 0px) + (root.sheet-colours.length > 0 ? 54px : 0px) + 178px;
+                    width: parent.width - 40px; height: 36px; spacing: 8px; alignment: start;
+                    for e in root.sheet-effects: Rectangle { width: et.preferred-width + 28px; border-radius: 18px; background: Theme.text.with-alpha(0.08);
+                        et := Text { text: e; font-size: 14px; font-weight: 600; color: Theme.text; }
+                        TouchArea { clicked => { Act.act("quick.effect", root.sheet-index + ":" + e); } } } }
+                if root.sheet-tile.kind == 2: HorizontalLayout { x: 20px; y: 178px; width: parent.width - 40px; height: 44px; spacing: 10px;
+                    for ic[n] in ["\u{F005D}", "\u{F04DB}", "\u{F0045}"]: Rectangle { border-radius: 22px;
+                        background: cv.pressed ? Theme.text.with-alpha(0.16) : Theme.text.with-alpha(0.08);
+                        Icon { text: ic; font-size: 24px; color: Theme.text; }
+                        cv := TouchArea { clicked => { Act.act("quick.cover", root.sheet-index + ":" + n); } } } }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------ 1 mixing desk
+    if root.look == 1: desk := Rectangle {
+        Image { x: 0; y: 0; width: 480px; height: 480px; source: root.mixer-panel; }
+        Text { x: 20px; y: 46px; width: 300px; height: 28px; text: root.title; font-size: 18px; font-weight: 700; color: #e9ecef; vertical-alignment: center; overflow: elide; }
+        Text { x: parent.width - 160px; y: 46px; width: 140px; height: 28px; text: root.mood; font-size: 12px; color: #adb5bd; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+        for t[i] in root.tiles: ch := Rectangle {
+            x: 16px + i * 56px; y: 80px; width: 52px; height: 372px;
+            property <color> lit: t.gone ? #495057 : t.tint;
+            property <bool> two: !t.dim && !t.gone;              // a plain switch: the fader has two places only
+            Rectangle { x: 6px; y: 4px; width: 40px; height: 26px; border-radius: 4px; background: t.on ? ch.lit : #2b2f33; border-width: 1px; border-color: #0b0c0d;
+                drop-shadow-blur: t.on ? 10px : 0px; drop-shadow-color: ch.lit.with-alpha(0.8);
+                TouchArea { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; clicked => { Act.act("quick.toggle", i); } }
+                Text { text: t.gone ? "--" : t.on ? "ON" : "OFF"; font-size: 11px; font-weight: 800; color: t.on ? #111111 : #868e96; } }
+            for k in 10: Rectangle { x: 20px; y: 40px + (9 - k) * 9px; width: 12px; height: 6px; border-radius: 1px;
+                background: (t.on && (t.dim ? t.value * 10 > k : true)) ? (k >= 8 ? #ff6b6b : k >= 6 ? #ffd43b : #69db7c) : #23272b; }
+            Rectangle { x: 24px; y: 140px; width: 4px; height: 170px; border-radius: 2px; background: #050607; }
+            for k in 11: Rectangle { visible: !ch.two || k == 0 || k == 10;
+                x: k == 0 || k == 10 || k == 5 ? 12px : 16px; y: 140px + k * 17px; width: k == 0 || k == 10 || k == 5 ? 6px : 4px; height: 1px; background: #6c757d; }
+            property <float> drag-f;
+            property <float> level: fd.pressed ? self.drag-f : ch.two ? (t.on ? 1 : 0) : t.value;
+            fd := TouchArea { x: 0; y: 126px; width: parent.width; height: 198px; enabled: !t.gone;
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down { ch.drag-f = max(0, min(1, 1 - (self.mouse-y - 14px) / 170px)); }
+                    else if ev.kind == PointerEventKind.up {
+                        if ch.two { if (ch.drag-f > 0.5) != t.on { Act.act("quick.toggle", i); } }
+                        else { Act.act("quick.level", i + ":" + ch.drag-f); }
+                    }
+                }
+                moved => { ch.drag-f = max(0, min(1, 1 - (self.mouse-y - 14px) / 170px)); }
+            }
+            if !t.gone && (t.dim || ch.two): Image { x: 4px; y: 140px + (1 - ch.level) * 170px - 13px; width: 44px; height: 30px; source: root.fader; }
+            Text { x: 0; y: 318px; width: parent.width; text: t.short; font-family: "DejaVu Sans Mono"; font-size: 12px; color: t.on ? #e9ecef : #868e96; horizontal-alignment: center; }
+            if t.has-tape: Image { x: -4px; y: 334px; width: 60px; height: 34px; source: t.tape; }
+        }
+    }
+
+    // ------------------------------------------------------------------ 2 flight deck
+    // the panel bitmap (deckgen.py) has the plates, fasteners, title plate and wear at the 4 x 2 switch places
+    if root.look == 2: deck := Rectangle {
+        Image { x: 0; y: 0; width: 480px; height: 480px; source: root.deck-panel; }
+        // the title, engraved into the brushed plate
+        Text { x: 52px; y: 53px; width: 286px; height: 26px; text: root.title.to-uppercase(); font-size: 13px; font-weight: 800; color: #ffffff59;
+            vertical-alignment: center; overflow: elide; letter-spacing: 1px; }
+        Text { x: 52px; y: 52px; width: 286px; height: 26px; text: root.title.to-uppercase(); font-size: 13px; font-weight: 800; color: #25282b;
+            vertical-alignment: center; overflow: elide; letter-spacing: 1px; }
+        // painted group brackets
+        for g in root.groups: Rectangle {
+            x: max(36px, 26px + g.start * 112px); y: 95px + g.row * 168px; width: min(444px, 20px + (g.start + g.count) * 112px - 14px) - self.x; height: 10px;
+            gt := Text { x: (parent.width - self.preferred-width) / 2; y: -6px; text: g.name; font-size: 10px; font-weight: 800; color: #eceff1d9; letter-spacing: 1px; }
+            Rectangle { x: 0; y: 0; width: gt.x - 6px; height: 1.5px; background: #eceff1c0; }
+            Rectangle { x: gt.x + gt.preferred-width + 6px; y: 0; width: parent.width - self.x; height: 1.5px; background: #eceff1c0; }
+            Rectangle { x: 0; y: 0; width: 1.5px; height: 7px; background: #eceff1c0; }
+            Rectangle { x: parent.width - 1.5px; y: 0; width: 1.5px; height: 7px; background: #eceff1c0; }
+        }
+        for t[i] in root.tiles: Rectangle {
+            x: 20px + mod(i, 4) * 112px; y: 104px + floor(i / 4) * 168px; width: 104px; height: 156px;
+            // the lamp: lens + a glow in the light's own colour (green for everything else), amber when unavailable
+            Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: t.gone ? root.lamp-amber : root.lamp-off; }
+            if t.on && !t.gone: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-glow; colorize: t.led; }
+            if t.on && !t.gone: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-spec; }
+            // painted legends at both ends of the lever's travel
+            Text { x: 0; y: 36px; width: parent.width; text: "ON"; font-size: 9px; font-weight: 800; color: #eceff1d0; horizontal-alignment: center; letter-spacing: 1px; }
+            Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: t.on ? root.toggle-up : root.toggle-down; opacity: t.gone ? 0.45 : 1;
+                TouchArea { x: -16px; y: -8px; width: parent.width + 32px; height: parent.height + 16px; enabled: !t.gone; clicked => { Act.act("quick.toggle", i); } } }
+            Text { x: 0; y: 121px; width: parent.width; text: "OFF"; font-size: 9px; font-weight: 800; color: #eceff1d0; horizontal-alignment: center; letter-spacing: 1px; }
+            Rectangle { x: 8px; y: 134px; width: parent.width - 16px; height: 20px; background: #16181a; border-radius: 2px; border-width: 1px; border-color: #00000080;
+                Text { x: 4px; width: parent.width - 8px; text: (t.label != "" ? t.label : t.name).to-uppercase(); font-size: 10px; font-weight: 800; color: #f8f9fa;
+                    horizontal-alignment: center; vertical-alignment: center; overflow: elide; } }
+            if t.dim && !t.gone && (t.on || t.kind != 0): Text { x: 0; y: 84px; width: 33px; text: t.short; font-family: "DejaVu Sans Mono"; font-size: 10px;
+                color: #8ce99a; horizontal-alignment: right; }
+        }
+        Text { x: 40px; y: 438px; width: 400px; height: 16px; text: root.placard; font-size: 11px; font-weight: 800; color: #ffd43b; horizontal-alignment: center;
+            vertical-alignment: center; overflow: elide; letter-spacing: 1px; }
+    }
+}

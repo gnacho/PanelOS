@@ -1,0 +1,820 @@
+// Thermostat panel: one climate device at a time, in one of four looks (chosen in the settings sheet):
+//   0 the dial: target on a 270° arc with a scale, the room's temperature as a dot on the track
+//   1 a remote control: the yellowish LCD of an air-conditioner remote (segment digits, triangle
+//     arrows next to them), rubber buttons under it
+//   2 a wall thermostat: a knob on a printed scale, a needle thermometer in its middle, slide switches
+//   3 neon over the synthwave scene ("In the Fast Lane" background, drawn by main.slint under the page)
+// Every look shows the same thing in its middle: a glow in the colour of what the device does, strong
+// and breathing while it works (heating, cooling, drying, fan), faint while it is only switched on and
+// waiting, none when off; so from across the room it is clear whether something is merely set or busy.
+// The device chip (top right) opens the rooms; the extra options (fan, swing, preset) open a sheet.
+// The app gives every text and decides what the device can do.
+import { Icon, GlowText } from "widgets.slint";
+import { Theme, Act } from "theme.slint";
+
+export struct ClimateDev {
+    name: string,           // "Living room AC"
+    icon: string,           // air-conditioner / radiator glyph
+    mode: int,              // index into modes
+    modes: [int],           // 0 off, 1 heat, 2 cool, 3 auto (heat_cool), 4 dry, 5 fan only
+    action: int,            // what it does right now, same codes: 0 nothing (off / idle), 1 heating, 2 cooling, 4 drying, 5 fan
+    label: string,          // "Cooling to", "Heat · Idle", "Off" …
+    target: float,
+    show-target: bool,      // false: off / dry / fan only → the room's temperature is the big number
+    current: float,
+    humidity: float,        // < 0: unknown
+    tmin: float,
+    tmax: float,
+    step: float,            // 1 or 0.5 (shows one decimal)
+    fan: string,            // "" = the device has no such option
+    swing: string,
+    preset: string,         // "" = none / not supported; "Eco", "Boost", "Away"
+    has-preset: bool,
+    fans: [string],
+    swings: [string],
+    presets: [string],
+    fan-level: int,         // 1 … 5 when the fan mode is a speed, else 0
+    fan-i: int,             // the current one in fans / swings / presets (-1: none)
+    swing-i: int,
+    preset-i: int,
+    fan-caps: [string],     // short capitals for the remote and the wall looks: AUTO, QUIET, 1 … / OFF, VERT … / OFF, ECO …
+    swing-caps: [string],
+    preset-caps: [string],
+}
+
+export struct ClimateRoom {
+    name: string,
+    temp: string,           // "21.3°"
+    hum: string,            // "65 %" or ""
+    outside: bool,
+    dev: [string],          // device lines: "AC off", "Heat 20° · idle"
+    dev-icon: [string],
+    dev-tint: [color],
+    sel: int,               // -1, or which of this room's devices is on the dial now
+}
+
+global TK {
+    // colours per mode / action: off, heat, cool, auto, dry, fan (neon: the synthwave look)
+    out property <[color]> tints: [#8a8a92, #ff7a33, #3d9bff, #a76bff, #22c9a0, #9aa7c4];
+    out property <[color]> neons: [#9a8cff, #ff6a3d, #22d8ff, #c27bff, #2bffc6, #aab8ff];
+    out property <[string]> glyphs: ["\u{F0425}", "\u{F0238}", "\u{F0717}", "\u{F1B17}", "\u{F058E}", "\u{F0210}"];
+    out property <[string]> caps: ["OFF", "HEAT", "COOL", "AUTO", "DRY", "FAN"];
+    // the remote's mode icons (sun for heat, as remotes print it)
+    out property <[string]> lcd-glyphs: ["\u{F0425}", "\u{F0599}", "\u{F0717}", "\u{F1B17}", "\u{F058C}", "\u{F0210}"];
+    public pure function num(v: float, step: float) -> string {
+        step < 1 ? (Math.round(v * 10) / 10 == Math.round(v) ? Math.round(v) + ".0" : "" + Math.round(v * 10) / 10) : "" + Math.round(v)
+    }
+}
+
+component ArcPath inherits Path {
+    // an arc of radius r around (cx, cy) from a0 to a1 degrees (0 = right, clockwise), stroke inside a box
+    // one stroke larger than the 480 frame so it lands exactly where computed
+    in property <float> cx;
+    in property <float> cy;
+    in property <float> r;
+    in property <float> a0;
+    in property <float> a1;
+    in property <length> sw;
+    x: -self.sw / 2; y: -self.sw / 2; width: 480px + self.sw; height: 480px + self.sw;
+    viewbox-width: 480; viewbox-height: 480;
+    stroke-width: self.sw;
+    fill: transparent;
+    commands: "M " + (self.cx + self.r * Math.cos(self.a0 * 1deg)) + " " + (self.cy + self.r * Math.sin(self.a0 * 1deg))
+        + " A " + self.r + " " + self.r + " 0 " + (self.a1 - self.a0 > 180 ? "1" : "0") + " 1 "
+        + (self.cx + self.r * Math.cos(self.a1 * 1deg)) + " " + (self.cy + self.r * Math.sin(self.a1 * 1deg));
+}
+
+component Tick inherits Path {
+    // a radial line from r1 to r2 at angle a around (cx, cy); same box rule as ArcPath
+    in property <float> cx;
+    in property <float> cy;
+    in property <float> a;
+    in property <float> r1;
+    in property <float> r2;
+    in property <length> sw: 2px;
+    x: -self.sw / 2; y: -self.sw / 2; width: 480px + self.sw; height: 480px + self.sw;
+    viewbox-width: 480; viewbox-height: 480;
+    stroke-width: self.sw;
+    fill: transparent;
+    commands: "M " + (self.cx + self.r1 * Math.cos(self.a * 1deg)) + " " + (self.cy + self.r1 * Math.sin(self.a * 1deg))
+        + " L " + (self.cx + self.r2 * Math.cos(self.a * 1deg)) + " " + (self.cy + self.r2 * Math.sin(self.a * 1deg));
+}
+
+component Disc inherits Rectangle {
+    in property <float> cx;
+    in property <float> cy;
+    in property <float> r;
+    x: (self.cx - self.r) * 1px; y: (self.cy - self.r) * 1px; width: self.r * 2px; height: self.r * 2px; border-radius: self.r * 1px;
+}
+
+// a soft round glow of radius r around (cx, cy): a radial gradient in a square box twice as wide (the
+// software renderer's radial gradient reaches 100 % at the box's corners, so it must fade out by 50 %)
+component Glow inherits Rectangle {
+    in property <float> cx;
+    in property <float> cy;
+    in property <float> r;
+    in property <color> tint;
+    in property <float> k;
+    x: (self.cx - 2 * self.r) * 1px; y: (self.cy - 2 * self.r) * 1px; width: self.r * 4px; height: self.r * 4px;
+    background: @radial-gradient(circle, root.tint.with-alpha(root.k) 0%, root.tint.with-alpha(0) 50%);
+}
+
+// one segment-display digit (viewbox 60 x 100, slanted); unlit segments stay faintly visible as on a real LCD
+component Seg7 inherits Rectangle {
+    in property <int> v;            // 0 … 9; 10 "-", 11 blank, 12 "F"
+    in property <color> ink;
+    in property <color> ghost;
+    in property <int> mask: 127;    // the segments this cell has (6: a half digit "1", segments b and c)
+    property <int> bits: [63, 6, 91, 79, 102, 109, 125, 7, 127, 111, 64, 0, 113][max(0, min(12, root.v))];
+    for s[i] in ["M 19.8 8.0 L 25.2 3.0 L 46.4 3.0 L 51.0 8.0 L 45.6 13.0 L 24.4 13.0 Z", "M 52.2 9.4 L 56.8 14.4 L 54.5 43.6 L 49.1 48.6 L 44.5 43.6 L 46.8 14.4 Z", "M 48.9 51.4 L 53.5 56.4 L 51.2 85.6 L 45.8 90.6 L 41.2 85.6 L 43.5 56.4 Z", "M 13.0 92.0 L 18.4 87.0 L 39.6 87.0 L 44.2 92.0 L 38.8 97.0 L 17.6 97.0 Z", "M 14.9 51.4 L 19.5 56.4 L 17.2 85.6 L 11.8 90.6 L 7.2 85.6 L 9.5 56.4 Z", "M 18.2 9.4 L 22.8 14.4 L 20.5 43.6 L 15.1 48.6 L 10.5 43.6 L 12.8 14.4 Z", "M 16.4 50.0 L 21.8 45.0 L 43.0 45.0 L 47.6 50.0 L 42.2 55.0 L 21.0 55.0 Z"]: Path {
+        visible: Math.mod(Math.floor(root.mask / Math.pow(2, i)), 2) == 1;
+        x: 0; y: 0; width: root.width; height: root.height;
+        viewbox-width: 60; viewbox-height: 100;
+        fill: Math.mod(Math.floor(root.bits / Math.pow(2, i)), 2) == 1 ? root.ink : root.ghost;
+        commands: s;
+    }
+}
+
+component Pill inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> on;
+    in property <color> tint;
+    in property <color> ink: #ffffff;
+    height: 32px;
+    width: lbl.preferred-width + 50px;
+    border-radius: 16px;
+    background: root.on ? root.tint.with-alpha(0.22) : root.ink.with-alpha(0.08);
+    border-width: 1px; border-color: root.on ? root.tint.with-alpha(0.6) : root.ink.with-alpha(0.14);
+    Icon { x: 12px; y: 0; width: 20px; height: parent.height; text: root.icon; font-size: 17px; color: root.on ? root.tint.mix(root.ink, 0.5) : root.ink.with-alpha(0.7); }
+    lbl := Text { x: 37px; y: 0; width: self.preferred-width; height: parent.height; text: root.text; font-size: 14px; font-weight: 600;
+        color: root.on ? root.ink : root.ink.with-alpha(0.8); vertical-alignment: center; }
+}
+
+component SheetChip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    in property <bool> check;
+    in property <color> accent;
+    height: 32px;
+    width: lbl.preferred-width + 26px + (root.check && root.on ? 20px : 0px);
+    border-radius: 16px;
+    background: root.on ? (root.check ? #ffffff2e : #F5F3EE) : transparent;
+    border-width: root.on ? 0px : 1px; border-color: #ffffff40;
+    if root.check && root.on: Icon { x: 12px; width: 16px; height: parent.height; text: "\u{F012C}"; font-size: 15px; color: #ffffff; }
+    lbl := Text { x: root.check && root.on ? 33px : 13px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
+        color: root.on && !root.check ? #101114 : #ffffff; vertical-alignment: center; }
+}
+
+// what every look needs from the device
+component ThermoBase inherits Rectangle {
+    in property <ClimateDev> d;
+    in property <float> pulse: 1;      // 0 … 1: the breathing of the glow while the device works (the app animates it)
+    in property <bool> fahrenheit;     // HA's temperature unit (unit_system.temperature); climate values arrive in it
+    out property <int> m: root.d.modes.length > 0 ? root.d.modes[root.d.mode] : 0;
+    out property <bool> active: root.m != 0;
+    out property <bool> busy: root.active && root.d.action > 0;
+    out property <color> tint: TK.tints[root.m];
+    out property <int> gm: root.busy ? root.d.action : root.m;          // the glow's colour: what it does (auto: heating or cooling)
+    out property <float> gk: root.busy ? 0.75 + 0.25 * root.pulse : root.active ? 0.28 : 0;
+    out property <bool> show-t: root.active && root.d.show-target;
+    out property <float> span: max(1, root.d.tmax - root.d.tmin);
+    out property <float> ft: max(0, min(1, (root.d.target - root.d.tmin) / root.span));
+    out property <float> fc: max(0, min(1, (root.d.current - root.d.tmin) / root.span));
+    out property <int> nt: Math.round(root.span) + 1;                     // scale ticks, one per degree
+    out property <int> t0: Math.round(root.d.tmin);
+}
+
+// ==================================================================== 0: the dial
+component ThermoClassic inherits ThermoBase {
+    property <color> ink: Theme.dark ? #ffffff : #18181b;
+    property <float> cx: 240;
+    property <float> cy: 196;
+    property <float> r: 112;
+    property <float> at: 135 + 270 * root.ft;
+    property <float> ac: 135 + 270 * root.fc;
+    property <color> gc: TK.tints[root.gm];
+
+    // the glow in the middle (two soft discs: a wide halo and a brighter core)
+    if root.gk > 0: Glow { cx: root.cx; cy: root.cy; r: 200; tint: root.gc; k: 0.30 * root.gk; }
+    if root.gk > 0: Glow { cx: root.cx; cy: root.cy; r: 104; tint: root.gc; k: 0.34 * root.gk; }
+    // the face inside the ring
+    Disc { cx: root.cx; cy: root.cy; r: 95; background: root.ink.with-alpha(0.03); border-width: 1px; border-color: root.ink.with-alpha(0.07); }
+    // the scale: a tick per degree outside the track, longer ones on every fifth; lit up to the target
+    for i in root.nt: Tick {
+        property <bool> major: Math.mod(root.t0 + i, 5) == 0;
+        property <bool> lit: root.show-t && i <= root.d.target - root.d.tmin + 0.01;
+        cx: root.cx; cy: root.cy; a: 135 + 270 * i / root.span;
+        r1: self.major ? 124 : 126; r2: self.major ? 135 : 131; sw: self.major ? 2px : 1.5px;
+        stroke: self.lit ? root.tint.with-alpha(self.major ? 1 : 0.75) : root.ink.with-alpha(self.major ? 0.4 : 0.18);
+    }
+    // the range ends under the arc
+    Text { x: (root.cx + 138 * Math.cos(135deg) - 30) * 1px; y: (root.cy + 138 * Math.sin(135deg) + 2) * 1px; width: 60px; height: 18px;
+        text: TK.num(root.d.tmin, root.d.step) + "°"; font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.45); horizontal-alignment: center; }
+    Text { x: (root.cx + 138 * Math.cos(45deg) - 30) * 1px; y: (root.cy + 138 * Math.sin(45deg) + 2) * 1px; width: 60px; height: 18px;
+        text: TK.num(root.d.tmax, root.d.step) + "°"; font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.45); horizontal-alignment: center; }
+    // track, value arc with a soft glow under it
+    ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: 405; sw: 12px; stroke: root.ink.with-alpha(Theme.dark ? 0.1 : 0.08); }
+    if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 24px; stroke: root.tint.with-alpha(0.16); }
+    if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 12px; stroke: root.tint; }
+    // the room's temperature: a dot on the track
+    Disc { cx: root.cx + root.r * Math.cos(root.ac * 1deg); cy: root.cy + root.r * Math.sin(root.ac * 1deg); r: 5.5;
+        background: Theme.dark ? #ffffff : #18181b; border-width: 2px; border-color: Theme.dark ? #00000059 : #ffffffa6; }
+    // the target knob with a small shadow
+    if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg) + 2; r: 17; background: #00000040; }
+    if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg); r: 15;
+        background: #ffffff; border-width: 4px; border-color: root.tint; }
+    // centre: what it does, the number, the room
+    Text { x: 0; y: 112px; width: root.width; height: 22px; text: root.d.label; font-size: 16px; font-weight: 600;
+        color: root.active ? root.tint.mix(root.ink, 0.6) : root.ink.with-alpha(0.65); horizontal-alignment: center; vertical-alignment: center; }
+    HorizontalLayout {
+        x: 0; y: 144px; width: root.width; height: 72px; alignment: center; spacing: 0px;
+        Text { text: root.show-t ? TK.num(root.d.target, root.d.step) : TK.num(root.d.current, 0.5);
+            font-size: 67px; font-weight: 300; color: root.ink; vertical-alignment: center; }
+        Text { text: "°"; font-size: 34px; font-weight: 300; color: root.ink.with-alpha(0.8); vertical-alignment: top; }
+    }
+    HorizontalLayout {
+        x: 0; y: 228px; width: root.width; height: 22px; alignment: center; spacing: 4px;
+        if root.show-t: Icon { width: 18px; text: "\u{F050F}"; font-size: 16px; color: root.ink.with-alpha(0.55); }
+        Text { text: root.show-t ? TK.num(root.d.current, 0.5) + "°" : "Inside"; font-size: 15px; color: root.ink.with-alpha(0.65); vertical-alignment: center; }
+        if root.d.humidity >= 0: Rectangle { width: 10px; }
+        if root.d.humidity >= 0: Icon { width: 18px; text: "\u{F058E}"; font-size: 16px; color: root.ink.with-alpha(0.55); }
+        if root.d.humidity >= 0: Text { text: Math.round(root.d.humidity) + " %"; font-size: 15px; color: root.ink.with-alpha(0.65); vertical-alignment: center; }
+    }
+    // − / + in the gap at the bottom of the dial, clear of the knob at either end
+    if root.show-t: Rectangle {
+        x: (root.cx - 44 - 24) * 1px; y: 280px; width: 48px; height: 48px; border-radius: 24px; background: root.ink.with-alpha(minus.pressed ? 0.2 : 0.1);
+        Icon { width: parent.width; height: parent.height; text: "\u{F0374}"; font-size: 26px; color: root.ink; }
+        minus := TouchArea { clicked => { Act.act("thermo.minus", ""); } }
+    }
+    if root.show-t: Rectangle {
+        x: (root.cx + 44 - 24) * 1px; y: 280px; width: 48px; height: 48px; border-radius: 24px; background: root.ink.with-alpha(plus.pressed ? 0.2 : 0.1);
+        Icon { width: parent.width; height: parent.height; text: "\u{F0415}"; font-size: 26px; color: root.ink; }
+        plus := TouchArea { clicked => { Act.act("thermo.plus", ""); } }
+    }
+    // modes (only those the device has); the chosen one glows while the device works
+    HorizontalLayout {
+        x: 0; y: 348px; width: root.width; height: 48px; alignment: center; spacing: 12px;
+        for k[i] in root.d.modes: Rectangle {
+            width: 48px; height: 48px;
+            TouchArea { clicked => { Act.act("thermo.mode", i); } }
+            if i == root.d.mode && root.busy: Disc { cx: 24; cy: 24; r: 33; background: TK.tints[k].with-alpha(0.12 + 0.1 * root.pulse); }
+            Rectangle {
+                border-radius: 24px;
+                background: i == root.d.mode ? TK.tints[k] : root.ink.with-alpha(0.07);
+                border-width: i == root.d.mode ? 0px : 1px; border-color: root.ink.with-alpha(0.14);
+                Icon { width: parent.width; height: parent.height; text: TK.glyphs[k]; font-size: 23px; color: i == root.d.mode ? #ffffff : root.ink.with-alpha(0.7); }
+            }
+        }
+    }
+    // options as pills (tap: the sheet)
+    TouchArea { x: 0; y: 404px; width: root.width; height: 48px; clicked => { Act.act("thermo.sheet", ""); } }
+    HorizontalLayout {
+        x: 0; y: 412px; width: root.width; height: 32px; alignment: center; spacing: 8px;
+        if root.d.fan != "": Pill { icon: "\u{F0210}"; text: root.d.fan; tint: root.tint; ink: root.ink; }
+        if root.d.swing != "": Pill { icon: "\u{F1C91}"; text: root.d.swing; tint: root.tint; ink: root.ink; }
+        if root.d.has-preset: Pill { icon: root.d.preset == "Boost" ? "\u{F14DE}" : root.d.preset == "Away" ? "\u{F001D}" : "\u{F032A}";
+            text: root.d.preset != "" ? root.d.preset : "Eco"; on: root.d.preset != ""; tint: root.tint; ink: root.ink; }
+    }
+}
+
+// ==================================================================== 1: the remote control
+// a rubber key in its hole in the housing (bitmaps from keygen.py, drawn 1:1); while touched it sinks (the -down image, label 2 px lower)
+component RubberKey inherits Rectangle {
+    in property <string> text;
+    in property <bool> dk;
+    in property <bool> down;
+    width: 84px; height: 64px;
+    Image { x: 0; y: 0; width: 84px; height: 64px;
+        source: root.dk ? (root.down ? @image-url("thermo/key-dark-down.png") : @image-url("thermo/key-dark.png"))
+                        : (root.down ? @image-url("thermo/key-light-down.png") : @image-url("thermo/key-light.png")); }
+    Text { x: 0; y: root.down ? 10px : 8px; width: 84px; height: 48px; text: root.text; font-size: 12px; font-weight: 800; letter-spacing: 1.4px;
+        color: root.dk ? #ebebe8e6 : #45464ce6; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+component PowerKey inherits Rectangle {
+    in property <bool> dk;
+    in property <bool> down;
+    width: 64px; height: 64px;
+    Image { x: 0; y: 0; width: 64px; height: 64px;
+        source: root.dk ? (root.down ? @image-url("thermo/power-dark-down.png") : @image-url("thermo/power-dark.png"))
+                        : (root.down ? @image-url("thermo/power-light-down.png") : @image-url("thermo/power-light.png")); }
+    Icon { x: 0; y: root.down ? 2px : 0; width: 64px; height: 64px; text: "\u{F0425}"; font-size: 27px; color: #ffffffeb; }
+}
+
+component ThermoRemote inherits ThermoBase {
+    in property <int> clock-h;
+    in property <int> clock-m;
+    property <bool> dk: Theme.dark;
+    property <color> bezel: root.dk ? #131417 : #c4c3be;
+    // the LCD: backlight on while the device is on, off (duller) when it is off
+    property <color> lcd-top: root.active ? (root.dk ? #d6d292 : #dedb9b) : (root.dk ? #8f8d70 : #b5b398);
+    property <color> lcd-bot: root.active ? (root.dk ? #c5c07e : #cfca87) : (root.dk ? #827f64 : #a8a68b);
+    property <color> seg: #24251b;
+    property <color> ghost: #24251b14;
+    in property <int> key-down: -1;    // the key being touched: 0 power, 1 MODE, 2 FAN, 3 SWING, 4 preset
+    property <float> t10: Math.round(root.d.target * 10);
+    property <float> c10: Math.round(root.d.current * 10);
+    property <bool> half: root.d.step < 1;
+    // a MODE key only when there is something to step through (the app lists off last)
+    property <bool> mode-key: root.d.modes.length - (root.d.modes.length > 0 && root.d.modes[root.d.modes.length - 1] == 0 ? 1 : 0) > 1;
+
+    // the plastic body
+    Rectangle { background: @linear-gradient(180deg, root.dk ? #2d2e33 : #f4f3ef 0%, root.dk ? #1d1e22 : #dddcd7 100%); }
+    // the bezel and the LCD window (the LCD is square with a gradient; the bezel colour rounds its corners)
+    Rectangle { x: 14px; y: 46px; width: 452px; height: 286px; border-radius: 18px; background: root.bezel; }
+    lcd := Rectangle {
+        x: 22px; y: 54px; width: 436px; height: 270px; clip: true;
+        background: @linear-gradient(180deg, root.lcd-top 0%, root.lcd-bot 100%);
+        // the glow in the middle: the backlight behind the digits takes the colour of what the device does
+        if root.gk > 0: Glow { cx: 196; cy: 126; r: 210; tint: TK.tints[root.gm].mix(#ffffff, 0.7); k: 0.55 * root.gk; }
+        if root.gk > 0: Glow { cx: 196; cy: 126; r: 120; tint: TK.tints[root.gm].mix(#ffffff, 0.8); k: 0.45 * root.gk; }
+        Rectangle { x: 0; y: 0; width: parent.width; height: 3px; background: #0000002e; }     // the bezel's shadow on the glass
+
+        // modes: icon + name, the current one dark, the others faint; OFF lights when the device is off (display only: MODE / power keys)
+        HorizontalLayout {
+            x: 12px; y: 8px; height: 46px; alignment: start; spacing: 2px;
+            for k in root.d.modes: Rectangle {
+                width: 52px;
+                Icon { x: 0; y: 0; width: parent.width; height: 26px; text: TK.lcd-glyphs[k]; font-size: 23px; color: k == root.m ? root.seg : root.ghost; }
+                Text { x: 0; y: 28px; width: parent.width; height: 14px; text: TK.caps[k]; font-size: 11px; font-weight: 800; letter-spacing: 1px;
+                    color: k == root.m ? root.seg : root.ghost; horizontal-alignment: center; vertical-alignment: center; }
+            }
+        }
+        // the clock, top right
+        Seg7 { x: 342px; y: 14px; width: 16px; height: 27px; v: Math.floor(root.clock-h / 10); ink: root.seg; ghost: root.ghost; }
+        Seg7 { x: 360px; y: 14px; width: 16px; height: 27px; v: Math.mod(root.clock-h, 10); ink: root.seg; ghost: root.ghost; }
+        Rectangle { x: 380px; y: 20px; width: 3px; height: 3px; background: root.seg; }
+        Rectangle { x: 379px; y: 32px; width: 3px; height: 3px; background: root.seg; }
+        Seg7 { x: 386px; y: 14px; width: 16px; height: 27px; v: Math.floor(root.clock-m / 10); ink: root.seg; ghost: root.ghost; }
+        Seg7 { x: 404px; y: 14px; width: 16px; height: 27px; v: Math.mod(root.clock-m, 10); ink: root.seg; ghost: root.ghost; }
+
+        // fan speed (bars) and swing, left (display only)
+        if root.d.fan != "": Rectangle {
+            x: 16px; y: 64px; width: 110px; height: 70px;
+            Text { x: 0; y: 0; height: 13px; text: "FAN"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: root.seg; }
+            for b in 5: Rectangle {
+                x: b * 15px; y: (48 - 10 - b * 6) * 1px; width: 11px; height: (10 + b * 6) * 1px;
+                background: root.d.fan-level > b ? root.seg : root.ghost;
+            }
+            Text { x: 0; y: 52px; width: 104px; height: 14px; text: root.d.fan-level > 0 ? "" : root.d.fan-caps[root.d.fan-i];
+                font-size: 12px; font-weight: 800; letter-spacing: 1px; color: root.seg; overflow: elide; }
+        }
+        if root.d.swing != "": Rectangle {
+            x: 16px; y: 146px; width: 110px; height: 40px;
+            Icon { x: -2px; y: 0; width: 26px; height: 26px; text: "\u{F1C91}"; font-size: 23px; color: root.d.swing-i > 0 ? root.seg : root.ghost; }
+            Text { x: 28px; y: 0; width: 80px; height: 26px; text: root.d.swing-caps[root.d.swing-i]; font-size: 12px; font-weight: 800; letter-spacing: 1px;
+                color: root.seg; vertical-alignment: center; overflow: elide; }
+            Text { x: 0; y: 27px; height: 13px; text: "SWING"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: root.seg; }
+        }
+
+        // the big digits: fixed cells, as on an LCD made for both units: a half digit "1" (100 and up), two digits, a point and
+        // a small digit (half steps), °C over °F (the unit in use lit); -- when the mode has no target, all faint when off
+        Text { x: 150px; y: 56px; height: 13px; text: "SET"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: root.show-t ? root.seg : root.ghost; }
+        Seg7 { x: 80px; y: 72px; width: 64px; height: 107px; mask: 6; v: root.show-t && root.t10 >= 1000 ? 1 : 11; ink: root.seg; ghost: root.ghost; }
+        Seg7 { x: 150px; y: 72px; width: 64px; height: 107px; ink: root.seg; ghost: root.ghost;
+            v: root.show-t ? (root.t10 >= 100 ? Math.mod(Math.floor(root.t10 / 100), 10) : 11) : root.active ? 10 : 11; }
+        Seg7 { x: 220px; y: 72px; width: 64px; height: 107px; ink: root.seg; ghost: root.ghost;
+            v: root.show-t ? Math.mod(Math.floor(root.t10 / 10), 10) : root.active ? 10 : 11; }
+        Rectangle { x: 286px; y: 168px; width: 7px; height: 7px; background: root.show-t && root.half ? root.seg : root.ghost; }
+        Seg7 { x: 296px; y: 133px; width: 27px; height: 45px; v: root.show-t && root.half ? Math.mod(root.t10, 10) : 11; ink: root.seg; ghost: root.ghost; }
+        Text { x: 292px; y: 66px; height: 22px; text: "°C"; font-size: 18px; font-weight: 800; color: root.show-t && !root.fahrenheit ? root.seg : root.ghost; }
+        Text { x: 292px; y: 90px; height: 22px; text: "°F"; font-size: 18px; font-weight: 800; color: root.show-t && root.fahrenheit ? root.seg : root.ghost; }
+        // ▲ / ▼ next to the digits: the only touch areas on the LCD, they set the target
+        Path { x: 352px; y: 70px; width: 56px; height: 48px; viewbox-width: 56; viewbox-height: 48; commands: "M 28 4 L 53 44 L 3 44 Z";
+            fill: root.show-t ? root.seg : root.ghost; }
+        Path { x: 352px; y: 132px; width: 56px; height: 48px; viewbox-width: 56; viewbox-height: 48; commands: "M 3 4 L 53 4 L 28 44 Z";
+            fill: root.show-t ? root.seg : root.ghost; }
+
+        // bottom: the room, its humidity, the presets (display only)
+        Text { x: 16px; y: 198px; height: 13px; text: "ROOM"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: root.seg; }
+        Seg7 { x: 5px; y: 216px; width: 23px; height: 38px; mask: 6; v: root.c10 >= 1000 ? 1 : 11; ink: root.seg; ghost: root.ghost; }
+        Seg7 { x: 30px; y: 216px; width: 23px; height: 38px; v: root.c10 >= 100 ? Math.mod(Math.floor(root.c10 / 100), 10) : 11; ink: root.seg; ghost: root.ghost; }
+        Seg7 { x: 55px; y: 216px; width: 23px; height: 38px; v: Math.mod(Math.floor(root.c10 / 10), 10); ink: root.seg; ghost: root.ghost; }
+        Rectangle { x: 78px; y: 249px; width: 4px; height: 4px; background: root.seg; }
+        Seg7 { x: 84px; y: 216px; width: 23px; height: 38px; v: Math.mod(root.c10, 10); ink: root.seg; ghost: root.ghost; }
+        Text { x: 110px; y: 214px; height: 16px; text: "°C"; font-size: 13px; font-weight: 800; color: root.fahrenheit ? root.ghost : root.seg; }
+        Text { x: 110px; y: 232px; height: 16px; text: "°F"; font-size: 13px; font-weight: 800; color: root.fahrenheit ? root.seg : root.ghost; }
+        if root.d.humidity >= 0: Icon { x: 146px; y: 222px; width: 22px; height: 28px; text: "\u{F058C}"; font-size: 20px; color: root.seg; }
+        if root.d.humidity >= 0: Seg7 { x: 170px; y: 216px; width: 23px; height: 38px; v: Math.round(root.d.humidity) >= 10 ? Math.mod(Math.floor(Math.round(root.d.humidity) / 10), 10) : 11; ink: root.seg; ghost: root.ghost; }
+        if root.d.humidity >= 0: Seg7 { x: 195px; y: 216px; width: 23px; height: 38px; v: Math.mod(Math.round(root.d.humidity), 10); ink: root.seg; ghost: root.ghost; }
+        if root.d.humidity >= 0: Text { x: 221px; y: 216px; height: 16px; text: "%"; font-size: 13px; font-weight: 800; color: root.seg; }
+        HorizontalLayout {
+            x: 250px; y: 222px; width: 170px; height: 28px; alignment: end; spacing: 12px;
+            for p[i] in root.d.preset-caps: Text {
+                visible: i > 0;
+                width: i > 0 ? self.preferred-width : 0px;
+                text: p; font-size: 14px; font-weight: 800; letter-spacing: 1px; vertical-alignment: center;
+                color: i == root.d.preset-i ? root.seg : root.ghost;
+            }
+        }
+    }
+    // the bezel colour rounds the LCD's corners
+    for c[i] in [{ x: 22, y: 54, p: "M 0 0 L 10 0 A 10 10 0 0 0 0 10 Z" }, { x: 448, y: 54, p: "M 10 0 L 10 10 A 10 10 0 0 0 0 0 Z" },
+                 { x: 22, y: 314, p: "M 0 10 L 0 0 A 10 10 0 0 0 10 10 Z" }, { x: 448, y: 314, p: "M 10 10 L 0 10 A 10 10 0 0 0 10 0 Z" }]: Path {
+        x: c.x * 1px; y: c.y * 1px; width: 10px; height: 10px; viewbox-width: 10; viewbox-height: 10; commands: c.p; fill: root.bezel;
+    }
+
+    // rubber keys as on a real remote: each press steps to the next setting and the LCD shows it at once;
+    // the app sends the setting to the device when the presses stop (about 1 s), not every step.
+    // Power: off / back on. MODE: the device's modes except off (only with two or more). FAN / SWING: the device's own steps.
+    // The preset key is named after the one preset when the device has just one (ECO: on / off), else PRESET (steps through them).
+    HorizontalLayout {
+        x: 0; y: 352px; width: root.width; height: 64px; alignment: center; spacing: 10px;
+        PowerKey { dk: root.dk; down: root.key-down == 0; }
+        if root.mode-key: RubberKey { text: "MODE"; dk: root.dk; down: root.key-down == 1; }
+        if root.d.fan != "": RubberKey { text: "FAN"; dk: root.dk; down: root.key-down == 2; }
+        if root.d.swing != "": RubberKey { text: "SWING"; dk: root.dk; down: root.key-down == 3; }
+        if root.d.has-preset: RubberKey { text: root.d.preset-caps.length == 2 ? root.d.preset-caps[1] : "PRESET"; dk: root.dk; down: root.key-down == 4; }
+    }
+}
+
+// ==================================================================== 2: the wall thermostat
+component Slide inherits Rectangle {
+    // a slide switch: the stops along a slot, the lever on the current one; vertical (labels at the side) or horizontal (labels under)
+    in property <[string]> stops;
+    in property <[int]> codes;              // instead of stops: mode codes, labelled with the mode names
+    in property <int> cur;
+    in property <bool> vertical;
+    in property <bool> labels-left;         // vertical: labels left of the slot (else right)
+    in property <string> title;
+    in property <color> print;
+    in property <color> slot;
+    in property <color> lever;
+    in property <color> hot;                // the current stop's label
+    in property <length> step: 38px;
+    property <int> n: root.codes.length > 0 ? root.codes.length : root.stops.length;
+    property <length> run: (root.n - 1) * root.step;
+    // vertical: the slot is 14 px wide at sx
+    property <length> sx: root.labels-left ? root.width - 22px : 8px;
+    if root.vertical: Text { x: 0; y: 0; width: root.width; height: 14px; text: root.title; font-size: 10px; font-weight: 800; letter-spacing: 1.5px;
+        color: root.print.with-alpha(0.75); horizontal-alignment: root.labels-left ? right : left; }
+    if root.vertical: Rectangle { x: root.sx; y: 24px; width: 14px; height: root.run + 24px; border-radius: 7px; background: root.slot; }
+    for i in (root.vertical ? root.n : 0): Text {
+        x: root.labels-left ? 0 : root.sx + 22px; y: 24px + 12px + i * root.step - 8px; width: root.labels-left ? root.sx - 12px : root.width - root.sx - 22px; height: 16px;
+        text: root.codes.length > 0 ? TK.caps[root.codes[i]] : root.stops[i]; font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+        color: i == root.cur ? root.hot : root.print.with-alpha(0.5); horizontal-alignment: root.labels-left ? right : left; vertical-alignment: center;
+    }
+    if root.vertical && root.cur >= 0: Rectangle {
+        x: root.sx - 8px; y: 24px + 12px + root.cur * root.step - 11px; width: 30px; height: 22px;
+        Rectangle { y: 2px; border-radius: 5px; background: #00000055; }
+        Rectangle { border-radius: 5px; background: root.lever; border-width: 1px; border-color: #00000030;
+            for g in 3: Rectangle { x: 6px; y: (6 + g * 4) * 1px; width: parent.width - 12px; height: 1px; background: #00000030; } }
+    }
+    if !root.vertical: Text { x: 0; y: 0; width: root.width; height: 14px; text: root.title; font-size: 10px; font-weight: 800; letter-spacing: 1.5px;
+        color: root.print.with-alpha(0.75); horizontal-alignment: center; }
+    if !root.vertical: Rectangle { x: (root.width - root.run - 24px) / 2; y: 22px; width: root.run + 24px; height: 14px; border-radius: 7px; background: root.slot; }
+    for i in (root.vertical ? 0 : root.n): Text {
+        x: (root.width - root.run) / 2 + i * root.step - 24px; y: 42px; width: 48px; height: 14px;
+        text: root.codes.length > 0 ? TK.caps[root.codes[i]] : root.stops[i]; font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
+        color: i == root.cur ? root.hot : root.print.with-alpha(0.5); horizontal-alignment: center; vertical-alignment: center;
+    }
+    if !root.vertical && root.cur >= 0: Rectangle {
+        x: (root.width - root.run) / 2 + root.cur * root.step - 11px; y: 14px; width: 22px; height: 30px;
+        Rectangle { y: 2px; border-radius: 5px; background: #00000055; }
+        Rectangle { border-radius: 5px; background: root.lever; border-width: 1px; border-color: #00000030;
+            for g in 3: Rectangle { x: (6 + g * 4) * 1px; y: 6px; width: 1px; height: parent.height - 12px; background: #00000030; } }
+    }
+}
+
+component ThermoWall inherits ThermoBase {
+    property <bool> dk: Theme.dark;
+    property <color> print: root.dk ? #eadfca : #4a3f34;
+    property <color> knob-base: root.dk ? #241f1b : #d3c9b4;
+    property <color> knob-face: root.dk ? #3a322c : #f1ece0;
+    property <color> knob-hi: root.dk ? #4a4038 : #fbf8f1;
+    property <color> knurl: root.dk ? #15120f : #b9ad96;
+    property <color> pointer: root.dk ? #ff6a3d : #d2432a;
+    property <color> cap-rim: root.dk ? #5c5147 : #bdb39f;
+    property <color> cap-face: root.dk ? #13100e : #2a2521;
+    property <color> cap-print: #e9dec9;
+    property <color> slot: root.dk ? #0f0d0b : #3a322b;
+    property <color> lever: root.dk ? #d8ceba : #f7f3ea;
+    property <float> cx: 240;
+    property <float> cy: 204;
+    property <float> at: 135 + 270 * root.ft;
+    // the needle thermometer in the middle: 10 … 30 °C (or, on the °F model, 50 … 90 °F) over 120° around a pivot under the centre
+    property <float> px: 240;
+    property <float> py: 222;
+    property <float> g0: root.fahrenheit ? 50 : 10;
+    property <float> gs: root.fahrenheit ? 40 : 20;
+    property <float> an: 210 + 120 * max(0, min(1, (root.d.current - root.g0) / root.gs));
+    property <color> hot: TK.tints[root.m].mix(root.print, root.dk ? 0.75 : 0.6);
+
+    // the plate
+    Rectangle { background: @linear-gradient(180deg, root.dk ? #342c27 : #f4efe3 0%, root.dk ? #221c19 : #e1d9c6 100%); }
+    Rectangle { x: 8px; y: 8px; width: root.width - 16px; height: root.height - 16px; border-radius: 22px; border-width: 1.5px;
+        border-color: root.dk ? #ffffff10 : #00000014; }
+    // the printed scale: a cold-to-warm band, a tick per degree, numbers on every fifth
+    for i in 24: ArcPath { cx: root.cx; cy: root.cy; r: 139; a0: 135 + 270 * i / 24; a1: 135 + 270 * (i + 1) / 24 + 0.4; sw: 4px;
+        stroke: #3f7fd6.mix(#e0503a, 1 - (i + 0.5) / 24).with-alpha(root.dk ? 0.9 : 0.8); }
+    for i in root.nt: Tick {
+        property <bool> major: Math.mod(root.t0 + i, 5) == 0;
+        cx: root.cx; cy: root.cy; a: 135 + 270 * i / root.span;
+        r1: self.major ? 116 : 121; r2: 132; sw: self.major ? 2px : 1.2px;
+        stroke: root.print.with-alpha(self.major ? 0.85 : 0.45);
+    }
+    for i in root.nt: Text {
+        property <float> a: 135 + 270 * i / root.span;
+        visible: Math.mod(root.t0 + i, 5) == 0;
+        x: (root.cx + 152 * Math.cos(self.a * 1deg) - 16) * 1px; y: (root.cy + 152 * Math.sin(self.a * 1deg) - 9) * 1px; width: 32px; height: 18px;
+        text: root.t0 + i; font-size: 15px; font-weight: 600; color: root.print; horizontal-alignment: center; vertical-alignment: center;
+    }
+    // the knob: shadow, knurled rim, a domed face, the pointer (it turns: drawn at the target's angle)
+    Disc { cx: root.cx; cy: root.cy + 5; r: 108; background: root.dk ? #00000099 : #00000038; }
+    Disc { cx: root.cx; cy: root.cy; r: 107; background: root.knob-base; }
+    Path { x: (root.cx - 120 - 1.1) * 1px; y: (root.cy - 120 - 1.1) * 1px; width: 242.2px; height: 242.2px; viewbox-width: 240; viewbox-height: 240;
+        stroke: root.knurl; stroke-width: 2.2px; fill: transparent;
+        commands: "M 217.00 120.00 L 227.00 120.00 M 216.63 128.45 L 226.59 129.33 M 215.53 136.84 L 225.37 138.58 M 213.69 145.11 L 223.35 147.69 M 211.15 153.18 L 220.55 156.60 M 207.91 160.99 L 216.97 165.22 M 204.00 168.50 L 212.66 173.50 M 199.46 175.64 L 207.65 181.37 M 194.31 182.35 L 201.97 188.78 M 188.59 188.59 L 195.66 195.66 M 182.35 194.31 L 188.78 201.97 M 175.64 199.46 L 181.37 207.65 M 168.50 204.00 L 173.50 212.66 M 160.99 207.91 L 165.22 216.97 M 153.18 211.15 L 156.60 220.55 M 145.11 213.69 L 147.69 223.35 M 136.84 215.53 L 138.58 225.37 M 128.45 216.63 L 129.33 226.59 M 120.00 217.00 L 120.00 227.00 M 111.55 216.63 L 110.67 226.59 M 103.16 215.53 L 101.42 225.37 M 94.89 213.69 L 92.31 223.35 M 86.82 211.15 L 83.40 220.55 M 79.01 207.91 L 74.78 216.97 M 71.50 204.00 L 66.50 212.66 M 64.36 199.46 L 58.63 207.65 M 57.65 194.31 L 51.22 201.97 M 51.41 188.59 L 44.34 195.66 M 45.69 182.35 L 38.03 188.78 M 40.54 175.64 L 32.35 181.37 M 36.00 168.50 L 27.34 173.50 M 32.09 160.99 L 23.03 165.22 M 28.85 153.18 L 19.45 156.60 M 26.31 145.11 L 16.65 147.69 M 24.47 136.84 L 14.63 138.58 M 23.37 128.45 L 13.41 129.33 M 23.00 120.00 L 13.00 120.00 M 23.37 111.55 L 13.41 110.67 M 24.47 103.16 L 14.63 101.42 M 26.31 94.89 L 16.65 92.31 M 28.85 86.82 L 19.45 83.40 M 32.09 79.01 L 23.03 74.78 M 36.00 71.50 L 27.34 66.50 M 40.54 64.36 L 32.35 58.63 M 45.69 57.65 L 38.03 51.22 M 51.41 51.41 L 44.34 44.34 M 57.65 45.69 L 51.22 38.03 M 64.36 40.54 L 58.63 32.35 M 71.50 36.00 L 66.50 27.34 M 79.01 32.09 L 74.78 23.03 M 86.82 28.85 L 83.40 19.45 M 94.89 26.31 L 92.31 16.65 M 103.16 24.47 L 101.42 14.63 M 111.55 23.37 L 110.67 13.41 M 120.00 23.00 L 120.00 13.00 M 128.45 23.37 L 129.33 13.41 M 136.84 24.47 L 138.58 14.63 M 145.11 26.31 L 147.69 16.65 M 153.18 28.85 L 156.60 19.45 M 160.99 32.09 L 165.22 23.03 M 168.50 36.00 L 173.50 27.34 M 175.64 40.54 L 181.37 32.35 M 182.35 45.69 L 188.78 38.03 M 188.59 51.41 L 195.66 44.34 M 194.31 57.65 L 201.97 51.22 M 199.46 64.36 L 207.65 58.63 M 204.00 71.50 L 212.66 66.50 M 207.91 79.01 L 216.97 74.78 M 211.15 86.82 L 220.55 83.40 M 213.69 94.89 L 223.35 92.31 M 215.53 103.16 L 225.37 101.42 M 216.63 111.55 L 226.59 110.67"; }
+    Disc { cx: root.cx; cy: root.cy; r: 95; background: root.knob-face; }
+    Disc { cx: root.cx; cy: root.cy - 3; r: 89; background: root.knob-hi.with-alpha(0.7); }
+    Disc { cx: root.cx; cy: root.cy + 1; r: 84; background: root.knob-face; }
+    if root.show-t: Path {
+        x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: root.pointer;
+        commands: "M " + (root.cx + 94 * Math.cos(root.at * 1deg)) + " " + (root.cy + 94 * Math.sin(root.at * 1deg))
+            + " L " + (root.cx + 72 * Math.cos((root.at - 5.5) * 1deg)) + " " + (root.cy + 72 * Math.sin((root.at - 5.5) * 1deg))
+            + " L " + (root.cx + 72 * Math.cos((root.at + 5.5) * 1deg)) + " " + (root.cy + 72 * Math.sin((root.at + 5.5) * 1deg)) + " Z";
+    }
+    if !root.show-t: Tick { cx: root.cx; cy: root.cy; a: root.at; r1: 74; r2: 92; sw: 3px; stroke: root.print.with-alpha(0.35); }
+    // the fixed cap with the needle thermometer; the glow lights its window from behind
+    Disc { cx: root.cx; cy: root.cy; r: 65; background: root.cap-rim; }
+    Disc { cx: root.cx; cy: root.cy; r: 60; background: root.cap-face; }
+    if root.gk > 0: Glow { cx: root.cx; cy: root.cy + 4; r: 58; tint: TK.tints[root.gm]; k: 0.85 * root.gk; }
+    for i in 21: Tick {
+        cx: root.px; cy: root.py; a: 210 + 6 * i;
+        r1: Math.mod(i, 5) == 0 ? 37 : 41; r2: 46; sw: Math.mod(i, 5) == 0 ? 1.6px : 1px;
+        stroke: root.cap-print.with-alpha(Math.mod(i, 5) == 0 ? 0.9 : 0.55);
+    }
+    for v[i] in (root.fahrenheit ? [50, 70, 90] : [10, 20, 30]): Text {
+        x: (root.px + 29 * Math.cos((210 + 60 * i) * 1deg) - 12) * 1px; y: (root.py + 29 * Math.sin((210 + 60 * i) * 1deg) - 7) * 1px; width: 24px; height: 14px;
+        text: v; font-size: 9px; font-weight: 700; color: root.cap-print.with-alpha(0.8); horizontal-alignment: center; vertical-alignment: center;
+    }
+    Text { x: (root.px - 20) * 1px; y: (root.py + 10) * 1px; width: 40px; height: 12px; text: root.fahrenheit ? "°F" : "°C"; font-size: 9px; font-weight: 700;
+        color: root.cap-print.with-alpha(0.6); horizontal-alignment: center; }
+    Tick { cx: root.px; cy: root.py; a: root.an; r1: -7; r2: 45; sw: 2px; stroke: #ff6a3d; }
+    Disc { cx: root.px; cy: root.py; r: 4.5; background: #ff6a3d; }
+    Disc { cx: root.px; cy: root.py; r: 1.8; background: root.cap-face; }
+    // the setting in a small drum counter in the gap at the bottom of the scale
+    Rectangle {
+        x: 196px; y: 322px; width: 88px; height: 34px; border-radius: 6px; background: #1b1714; border-width: 2px; border-color: root.cap-rim;
+        Rectangle { x: 4px; y: 2px; width: parent.width - 8px; height: 7px; background: #00000070; }
+        Rectangle { x: 4px; y: parent.height - 9px; width: parent.width - 8px; height: 7px; background: #00000070; }
+        Text { text: root.show-t ? TK.num(root.d.target, root.d.step) + "°" : root.active ? "– –" : "OFF"; font-size: 21px; font-weight: 600;
+            color: #efe6d2; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    // slide switches: the modes left, the fan right (or a humidity tube when the device has no fan),
+    // swing and preset under the dial
+    Slide {
+        x: 6px; y: (root.cy - 36 - (root.d.modes.length - 1) * 19) * 1px; width: 78px; height: 300px;
+        vertical: true; labels-left: true; title: "MODE"; codes: root.d.modes;
+        cur: root.d.mode; print: root.print; slot: root.slot; lever: root.lever; hot: root.hot;
+    }
+    if root.d.fans.length > 0: Slide {
+        x: 400px; y: (root.cy - 36 - (root.d.fan-caps.length - 1) * 16) * 1px; width: 72px; height: 300px;
+        vertical: true; labels-left: false; title: "FAN"; stops: root.d.fan-caps; cur: root.d.fan-i; step: 32px;
+        print: root.print; slot: root.slot; lever: root.lever; hot: root.hot;
+    }
+    if root.d.fans.length == 0 && root.d.humidity >= 0: Rectangle {
+        // a humidity tube: 0 … 100 % from the bottom up
+        x: 404px; y: (root.cy - 104) * 1px; width: 66px; height: 220px;
+        Text { x: 0; y: 0; width: parent.width; height: 14px; text: "HUMIDITY"; font-size: 10px; font-weight: 800; letter-spacing: 1px; color: root.print.with-alpha(0.75); }
+        Rectangle { x: 4px; y: 24px; width: 14px; height: 180px; border-radius: 7px; background: root.slot; }
+        Rectangle { x: 7px; y: (24 + 3 + 174 * (1 - root.d.humidity / 100)) * 1px; width: 8px; height: (174 * root.d.humidity / 100) * 1px; border-radius: 4px; background: #4fa3e0; }
+        for v[i] in [100, 75, 50, 25, 0]: Text { x: 24px; y: (24 + 3 + 174 * i / 4 - 7) * 1px; width: 40px; height: 14px; text: v + " %";
+            font-size: 10px; font-weight: 700; color: root.print.with-alpha(0.55); vertical-alignment: center; }
+    }
+    HorizontalLayout {
+        x: 0; y: 372px; width: root.width; height: 60px; alignment: center; spacing: 28px;
+        if root.d.swings.length > 0: Slide { width: (root.d.swing-caps.length - 1) * 46px + 56px; vertical: false; title: "SWING"; stops: root.d.swing-caps;
+            cur: root.d.swing-i; step: 46px; print: root.print; slot: root.slot; lever: root.lever; hot: root.hot; }
+        if root.d.presets.length > 0: Slide { width: (root.d.preset-caps.length - 1) * 46px + 56px; vertical: false; title: "PRESET"; stops: root.d.preset-caps;
+            cur: root.d.preset-i; step: 46px; print: root.print; slot: root.slot; lever: root.lever; hot: root.hot; }
+    }
+}
+
+// ==================================================================== 3: neon over the synthwave scene
+component ThermoNeon inherits ThermoBase {
+    in property <color> grid;                      // the scene's colour (follows its day / night view)
+    property <float> cx: 240;
+    property <float> cy: 196;
+    property <float> r: 112;
+    property <float> at: 135 + 270 * root.ft;
+    property <float> ac: 135 + 270 * root.fc;
+    property <color> tube: TK.neons[root.m];
+    property <color> gn: TK.neons[root.gm];
+    property <float> first5: Math.ceil(root.d.tmin / 5) * 5;
+    property <int> n5: Math.floor((root.d.tmax - root.first5) / 5) + 1;
+
+    if root.gk > 0: Glow { cx: root.cx; cy: root.cy; r: 210; tint: root.gn; k: 0.32 * root.gk; }
+    if root.gk > 0: Glow { cx: root.cx; cy: root.cy; r: 100; tint: root.gn; k: 0.30 * root.gk; }
+    // the tube: unlit part faint, lit part (to the target) bright, each with its own glow
+    ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: 405; sw: 14px; stroke: root.grid.with-alpha(0.13); }
+    ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: 405; sw: 2.5px; stroke: root.grid.with-alpha(0.55); }
+    if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 26px; stroke: root.tube.with-alpha(0.14); }
+    if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 12px; stroke: root.tube.with-alpha(0.4); }
+    if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 4px; stroke: root.tube.mix(#ffffff, 0.45); }
+    // dots on every fifth degree
+    for i in root.n5: Disc {
+        property <float> a: 135 + 270 * (root.first5 + 5 * i - root.d.tmin) / root.span;
+        cx: root.cx + 132 * Math.cos(self.a * 1deg); cy: root.cy + 132 * Math.sin(self.a * 1deg); r: 2;
+        background: root.grid.mix(#ffffff, 0.5).with-alpha(0.8);
+    }
+    // the room's temperature, the target knob
+    Disc { cx: root.cx + root.r * Math.cos(root.ac * 1deg); cy: root.cy + root.r * Math.sin(root.ac * 1deg); r: 9; background: #ffffff40; }
+    Disc { cx: root.cx + root.r * Math.cos(root.ac * 1deg); cy: root.cy + root.r * Math.sin(root.ac * 1deg); r: 4.5; background: #ffffff; }
+    if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg); r: 21; background: root.tube.with-alpha(0.22); }
+    if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg); r: 14; background: root.tube.with-alpha(0.5); }
+    if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg); r: 9; background: #ffffff; }
+    // centre
+    GlowText { x: 0; y: 112px; width: root.width; height: 22px; text: root.d.label; font-size: 16px; font-weight: 600; horizontal-alignment: center;
+        color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; }
+    HorizontalLayout {
+        x: 0; y: 144px; width: root.width; height: 72px; alignment: center; spacing: 0px;
+        GlowText { text: root.show-t ? TK.num(root.d.target, root.d.step) : TK.num(root.d.current, 0.5); font-size: 67px; font-weight: 300;
+            color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; }
+        VerticalLayout { alignment: start;
+            GlowText { text: "°"; font-size: 34px; font-weight: 300; color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; } }
+    }
+    GlowText { x: 0; y: 228px; width: root.width; height: 22px; horizontal-alignment: center; font-size: 15px; color: #ffffffd9; neon: true; glow: root.grid;
+        text: (root.show-t ? "Inside " + TK.num(root.d.current, 0.5) + "°" : "Inside") + (root.d.humidity >= 0 ? "  ·  " + Math.round(root.d.humidity) + " %" : ""); }
+    for b[i] in [{ x: 240 - 44 - 24, g: "\u{F0374}" }, { x: 240 + 44 - 24, g: "\u{F0415}" }]: Rectangle {
+        visible: root.show-t;
+        x: b.x * 1px; y: 280px; width: 48px; height: 48px;
+        Rectangle { x: -4px; y: -4px; width: 56px; height: 56px; border-radius: 28px; border-width: 4px; border-color: root.grid.with-alpha(0.22); }
+        Rectangle { border-radius: 24px; background: #0000004d; border-width: 2px; border-color: root.grid.mix(#ffffff, 0.35); }
+        GlowText { width: parent.width; height: parent.height; icon: true; text: b.g; font-size: 26px; color: #ffffff; neon: true; glow: root.grid; horizontal-alignment: center; }
+    }
+    HorizontalLayout {
+        x: 0; y: 348px; width: root.width; height: 48px; alignment: center; spacing: 12px;
+        for k[i] in root.d.modes: Rectangle {
+            width: 48px; height: 48px;
+            if i == root.d.mode: Disc { cx: 24; cy: 24; r: 32; background: TK.neons[k].with-alpha(root.busy ? 0.16 + 0.12 * root.pulse : 0.14); }
+            Rectangle { x: -3px; y: -3px; width: 54px; height: 54px; border-radius: 27px; border-width: 3px; border-color: TK.neons[k].with-alpha(i == root.d.mode ? 0.35 : 0.14); }
+            Rectangle { border-radius: 24px; background: i == root.d.mode ? TK.neons[k].with-alpha(0.32) : #00000059;
+                border-width: 2px; border-color: TK.neons[k].mix(#ffffff, i == root.d.mode ? 0.4 : 0.75).with-alpha(i == root.d.mode ? 1 : 0.7); }
+            GlowText { width: parent.width; height: parent.height; icon: true; text: TK.glyphs[k]; font-size: 23px; horizontal-alignment: center;
+                color: i == root.d.mode ? #ffffff : #ffffffbf; neon: i == root.d.mode; glow: TK.neons[k]; }
+        }
+    }
+    HorizontalLayout {
+        x: 0; y: 412px; width: root.width; height: 32px; alignment: center; spacing: 8px;
+        for p in [
+            { on: root.d.fan != "", g: "\u{F0210}", t: root.d.fan, lit: false },
+            { on: root.d.swing != "", g: "\u{F1C91}", t: root.d.swing, lit: false },
+            { on: root.d.has-preset, g: root.d.preset == "Boost" ? "\u{F14DE}" : root.d.preset == "Away" ? "\u{F001D}" : "\u{F032A}", t: root.d.preset != "" ? root.d.preset : "Eco", lit: root.d.preset != "" },
+        ]: Rectangle {
+            visible: p.on;
+            width: p.on ? pt.preferred-width + 50px : 0px; height: 32px; border-radius: 16px;
+            background: #00000066; border-width: 1.5px; border-color: (p.lit ? root.tube : root.grid).mix(#ffffff, 0.3).with-alpha(p.lit ? 1 : 0.75);
+            GlowText { x: 12px; y: 0; width: 20px; height: parent.height; icon: true; text: p.g; font-size: 17px; color: #ffffff; neon: p.lit; glow: root.tube; horizontal-alignment: center; }
+            pt := GlowText { x: 37px; y: 0; width: self.preferred-width; height: parent.height; text: p.t; font-size: 14px; font-weight: 600; color: #ffffff; neon: p.lit; glow: root.tube; }
+        }
+    }
+}
+
+// ==================================================================== the page
+export component ThermostatPage inherits Rectangle {
+    in property <[ClimateDev]> devices;
+    in property <int> sel;
+    in property <[ClimateRoom]> rooms;
+    in property <bool> picker;             // the rooms (device picker)
+    in property <bool> sheet;              // the device's options (fan / swing / preset)
+    in property <bool> settings;           // the page's settings: look (+ synthwave scene and cars)
+    in property <int> look;                // 0 dial, 1 remote control, 2 wall thermostat, 3 neon (synthwave)
+    in property <int> key-down: -1;        // remote look: the rubber key being touched
+    in property <bool> fahrenheit;         // HA's temperature unit is °F
+    in property <float> pulse: 1;
+    in property <int> clock-h;
+    in property <int> clock-m;
+    in property <color> grid: #ff2bd6;     // neon look: the scene's colour
+    in property <int> fl-scene;            // neon look: which synthwave scene
+    in property <bool> fl-cars: true;
+
+    property <ClimateDev> d: root.devices[root.sel];
+    property <int> m: root.d.modes.length > 0 ? root.d.modes[root.d.mode] : 0;
+    property <color> tint: TK.tints[root.m];
+    property <bool> light-face: !Theme.dark && root.look != 3;
+
+    if root.look == 0: ThermoClassic { d: root.d; pulse: root.pulse; fahrenheit: root.fahrenheit; }
+    if root.look == 1: ThermoRemote { d: root.d; pulse: root.pulse; fahrenheit: root.fahrenheit; clock-h: root.clock-h; clock-m: root.clock-m; key-down: root.key-down; }
+    if root.look == 2: ThermoWall { d: root.d; pulse: root.pulse; fahrenheit: root.fahrenheit; }
+    if root.look == 3: ThermoNeon { d: root.d; pulse: root.pulse; grid: root.grid; fahrenheit: root.fahrenheit; }
+
+    // ---------------------------------------------------------------- device chip (top right): the rooms
+    Rectangle {
+        property <color> ink: root.light-face ? (root.look == 2 ? #4a3f34 : #2a2a2e) : #ffffff;
+        x: root.width - 16px - self.width; y: 10px; height: 32px;
+        width: min(240px, dn.preferred-width + 66px);
+        border-radius: 16px;
+        background: root.look == 3 ? #00000066 : root.light-face ? #00000012 : #ffffff1f;
+        border-width: root.look == 3 ? 1px : 0px; border-color: root.grid.mix(#ffffff, 0.3).with-alpha(0.7);
+        Icon { x: 12px; y: 0; width: 20px; height: parent.height; text: root.d.icon; font-size: 18px; color: parent.ink.with-alpha(0.9); }
+        dn := Text { x: 36px; y: 0; width: parent.width - 62px; height: parent.height; text: root.d.name; font-size: 14px; font-weight: 600; color: parent.ink;
+            vertical-alignment: center; overflow: elide; }
+        Icon { x: parent.width - 26px; y: 0; width: 18px; height: parent.height; text: "\u{F0140}"; font-size: 18px; color: parent.ink.with-alpha(0.7); }
+        TouchArea { y: -6px; height: parent.height + 12px; clicked => { Act.act("thermo.picker", ""); } }
+    }
+
+    // ---------------------------------------------------------------- options sheet
+    if root.sheet: Rectangle { background: #00000080; TouchArea { clicked => { Act.act("thermo.sheet-close", ""); } } }
+    if root.sheet: sh := Rectangle {
+        TouchArea { }
+        property <length> r0: 72px;
+        property <int> nrows: (root.d.fans.length > 0 ? 1 : 0) + (root.d.swings.length > 0 ? 1 : 0) + (root.d.presets.length > 0 ? 1 : 0);
+        property <length> need: self.r0 + self.nrows * 54px - 22px + 26px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need;
+        border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1a1a1df7;
+        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
+        Text { x: 20px; y: 22px; height: 30px; text: root.d.name; font-size: 20px; font-weight: 600; color: #ffffff; vertical-alignment: center; }
+        Rectangle {
+            x: parent.width - 16px - 88px; y: 20px; width: 88px; height: 34px; border-radius: 17px; background: root.tint;
+            Text { text: "Done"; font-size: 15px; font-weight: 600; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { clicked => { Act.act("thermo.sheet-close", ""); } }
+        }
+        // one row per option, an icon in front instead of a written label
+        for row[ri] in [
+            { icon: "\u{F0210}", items: root.d.fans, cur: root.d.fan },
+            { icon: "\u{F1C91}", items: root.d.swings, cur: root.d.swing },
+            { icon: "\u{F032A}", items: root.d.presets, cur: root.d.preset == "" ? "None" : root.d.preset },
+        ]: Rectangle {
+            property <int> before: (ri > 0 && root.d.fans.length > 0 ? 1 : 0) + (ri > 1 && root.d.swings.length > 0 ? 1 : 0);
+            visible: row.items.length > 0;
+            x: 16px; y: sh.r0 + self.before * 54px; width: parent.width - 32px; height: 32px;
+            Icon { x: 0; y: 0; width: 28px; height: parent.height; text: row.icon; font-size: 20px; color: #ffffffb3; }
+            HorizontalLayout {
+                x: 38px; y: 0; height: 32px; alignment: start; spacing: 6px;
+                for it[ii] in row.items: SheetChip { text: it; on: it == row.cur; accent: root.tint;
+                    TouchArea { clicked => { Act.act(ri == 0 ? "thermo.fan" : ri == 1 ? "thermo.swing" : "thermo.preset", ii); } } }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- settings: the look (+ scene and cars for the neon one)
+    if root.settings: Rectangle { background: #00000080; }
+    if root.settings: st := Rectangle {
+        property <bool> neon: root.look == 3;
+        property <length> r0: 72px;
+        property <length> need: (self.neon ? self.r0 + 40px + 54px + 40px + 54px + 32px : self.r0 + 40px + 32px) + 24px;
+        x: 0; y: root.height - self.need; width: root.width; height: self.need;
+        border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1d1d21f7;
+        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
+        Text { x: 20px; y: 22px; text: "Thermostat"; font-size: 20px; font-weight: 600; color: #ffffff; }
+        Rectangle { x: parent.width - 16px - 88px - 46px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff1f;
+            Icon { text: "\u{F02FD}"; font-size: 21px; color: #ffffffe6; } }
+        Rectangle { x: parent.width - 16px - 88px; y: 19px; width: 88px; height: 34px; border-radius: 17px; background: Theme.text;
+            Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; } }
+        HorizontalLayout { x: 16px; y: st.r0; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: "Comfort Zone"; on: root.look == 0; accent: Theme.accent; }
+            SheetChip { text: "Push My Buttons"; on: root.look == 1; accent: Theme.accent; } }
+        HorizontalLayout { x: 16px; y: st.r0 + 40px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: "Old Flame"; on: root.look == 2; accent: Theme.accent; }
+            SheetChip { text: "In the Fast Lane"; on: root.look == 3; accent: Theme.accent; } }
+        if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 94px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: "Ride into the Sunset"; on: root.fl-scene == 0; accent: Theme.accent; }
+            SheetChip { text: "Concrete Jungle"; on: root.fl-scene == 1; accent: Theme.accent; } }
+        if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 134px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: "Life's a Beach"; on: root.fl-scene == 2; accent: Theme.accent; }
+            SheetChip { text: "Starry-Eyed"; on: root.fl-scene == 3; accent: Theme.accent; } }
+        if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 188px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: "Joyride"; on: root.fl-cars; check: true; accent: Theme.accent; } }
+    }
+
+    // ---------------------------------------------------------------- rooms (the device picker)
+    if root.picker: Rectangle { background: #00000099; TouchArea { clicked => { Act.act("thermo.picker-close", ""); } } }
+    if root.picker: pk := Rectangle {
+        TouchArea { }
+        x: 0; y: 40px; width: root.width; height: root.height - 40px;
+        border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1a1a1df7;
+        clip: true;
+        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
+        Text { x: 20px; y: 20px; height: 32px; text: "Rooms"; font-size: 20px; font-weight: 600; color: #ffffff; vertical-alignment: center; }
+        Rectangle {
+            x: parent.width - 52px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff14;
+            Icon { text: "\u{F0156}"; font-size: 20px; color: #ffffffcc; }
+            TouchArea { clicked => { Act.act("thermo.picker-close", ""); } }
+        }
+        for rm[i] in root.rooms: Rectangle {
+            property <int> cc: Math.mod(i, 2);
+            property <int> rr: Math.floor(i / 2);
+            x: 16px + self.cc * 228px; y: 64px + self.rr * 94px; width: 220px; height: 86px;
+            border-radius: 18px; background: rm.outside ? #ffffff0a : #ffffff12;
+            TouchArea { clicked => { Act.act("thermo.room", i); } }
+            border-width: rm.sel >= 0 ? 2px : 0px; border-color: #ffffffcc;
+            Text { x: 14px; y: 8px; width: parent.width - 28px; height: 18px; text: rm.name; font-size: 13px; font-weight: 600; color: #ffffffa6; overflow: elide; vertical-alignment: center; }
+            if rm.outside: Icon { x: parent.width - 34px; y: 6px; width: 22px; height: 22px; text: "\u{F0595}"; font-size: 17px; color: #ffffff80; }
+            HorizontalLayout {
+                x: 14px; y: 26px; height: 32px; alignment: start; spacing: 10px;
+                Text { text: rm.temp; font-size: 26px; font-weight: 400; color: #ffffff; vertical-alignment: center; }
+                if rm.hum != "": HorizontalLayout { spacing: 2px; alignment: start;
+                    Icon { width: 16px; text: "\u{F058E}"; font-size: 14px; color: #8fc9ff; }
+                    Text { text: rm.hum; font-size: 13px; color: #ffffffa6; vertical-alignment: center; } }
+            }
+            // its climate devices (one line each, two at most)
+            for dl[j] in rm.dev: HorizontalLayout {
+                x: 14px + j * 104px; y: 60px; height: 20px; width: rm.dev.length > 1 ? 100px : parent.width - 28px; spacing: 4px; alignment: start;
+                Icon { width: 18px; text: rm.dev-icon[j]; font-size: 15px; color: rm.dev-tint[j]; }
+                Text { text: dl; font-size: 12px; color: rm.sel == j ? #ffffff : #ffffffb3; vertical-alignment: center; overflow: elide; }
+            }
+        }
+    }
+}

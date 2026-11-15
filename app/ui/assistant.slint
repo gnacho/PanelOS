@@ -3,7 +3,7 @@
 // and the layers Home Assistant can open (weather, media, message).
 
 import { Theme } from "theme.slint";
-import { Icon, RoundButton, BigSlider } from "widgets.slint";
+import { Icon, RoundButton, BigSlider, MarkButton } from "widgets.slint";
 import { TileData, RowData, RowView } from "rows.slint";
 
 export struct ForecastItem {
@@ -189,7 +189,7 @@ export component AssistantHome inherits Rectangle {
                 }
                 VerticalLayout {
                     alignment: center;
-                    RoundButton { icon: "\u{F0493}"; size: 38px; tint: Theme.muted; clicked => { root.open-settings(); } }
+                    MarkButton { size: 38px; clicked => { root.open-settings(); } }
                 }
             }
 

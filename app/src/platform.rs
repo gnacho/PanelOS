@@ -274,9 +274,13 @@ impl PanelPlatform {
             }
             return;
         }
+        // The UI frame on screen is read from its buffer off the UI thread; only
+        // before the first frame is on screen is the next one read back.
         #[cfg(feature = "gpu")]
         for sink in sinks {
-            crate::gpu::read_back_next_frame(sink);
+            if let Err(sink) = self.window.read_screen(sink) {
+                crate::gpu::read_back_next_frame(sink);
+            }
         }
     }
 

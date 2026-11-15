@@ -48,6 +48,9 @@ pub enum Event {
     Command { key: String, value: Value },
     /// Weather forecast (hourly or daily) of the forecast entity.
     Forecast { hourly: bool, items: Vec<Value> },
+    /// Persistent notifications: "current" (all of them), "added",
+    /// "updated" or "removed", with the notifications by id.
+    Notes { kind: String, notes: Value },
 }
 
 /// The panel's name for the PanelOS integration (its ESPHome name).
@@ -239,6 +242,10 @@ fn session(
     next_id += 1;
     let mut panel_id = next_id;
     send_json(&mut ws, &json!({"id": panel_id, "type": "panelos/subscribe", "panel_id": PANEL_ID}))?;
+    // Home Assistant's notifications (the info page).
+    next_id += 1;
+    let notes_id = next_id;
+    send_json(&mut ws, &json!({"id": notes_id, "type": "persistent_notification/subscribe"}))?;
     // Retried every minute while the integration is missing, so installing
     // it needs no panel restart.
     let mut panel_retry_at: Option<Instant> = None;
@@ -270,11 +277,12 @@ fn session(
             match cmd {
                 Command::CallService { domain, service, entity_id, data } => {
                     next_id += 1;
-                    send_json(
-                        &mut ws,
-                        &json!({"id": next_id, "type": "call_service", "domain": domain, "service": service,
-                                "target": {"entity_id": entity_id}, "service_data": data}),
-                    )?;
+                    let mut msg = json!({"id": next_id, "type": "call_service", "domain": domain, "service": service, "service_data": data});
+                    // Services without a target (persistent_notification.dismiss …) get none.
+                    if !entity_id.is_empty() {
+                        msg["target"] = json!({ "entity_id": entity_id });
+                    }
+                    send_json(&mut ws, &msg)?;
                 }
                 Command::Reload => return Ok(()),
                 Command::ListDashboards => {
@@ -334,6 +342,13 @@ fn session(
                         panel_retry_at = Some(Instant::now() + Duration::from_secs(60));
                     }
                     Some("result") if msg["id"] == panel_id => report = Report { linked: true, ..Default::default() },
+                    Some("event") if msg["id"] == notes_id => {
+                        let ev = &msg["event"];
+                        emit(Event::Notes {
+                            kind: ev["type"].as_str().unwrap_or("").to_string(),
+                            notes: ev["notifications"].clone(),
+                        });
+                    }
                     Some("event") if forecast_ids.iter().any(|(id, _)| msg["id"] == *id) => {
                         let hourly = forecast_ids.iter().any(|(id, h)| msg["id"] == *id && *h);
                         let items = msg["event"]["forecast"].as_array().cloned().unwrap_or_default();

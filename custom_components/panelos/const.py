@@ -7,6 +7,8 @@ CONF_WEATHER = "weather_entity"
 CONF_MEDIA_PLAYER = "media_player_entity"
 CONF_TILES = "tile_entities"
 CONF_SHOW_CONVERSATION = "show_conversation"
+# The voice view's look: 0 plain, 1 terminal, 2 comic, 3 oscilloscope.
+CONF_VOICE_LOOK = "voice_look"
 
 # Dashboard mode: the Home Assistant dashboard in the panel's web view.
 CONF_DASHBOARD = "dashboard"
@@ -43,6 +45,26 @@ DEFAULT_PANEL_ID = "nspanel-pro"
 
 # Entities the assistant mode's quick tiles can show.
 TILE_DOMAINS = ("light", "switch", "cover", "fan", "input_boolean", "scene", "script", "sensor", "climate")
+
+# The panel's pages, in the order they are swiped: each a kind, its look
+# (variant), the entities it shows and its own switches.
+CONF_PAGES = "pages"
+MAX_PAGES = 12
+# kind: (number of looks, entity domains, how many entities)
+PAGE_KINDS = {
+    "home": (1, (), 0),
+    "weather": (2, ("weather",), 1),
+    "clock": (8, (), 0),
+    "music": (5, ("media_player",), 1),
+    "timers": (5, (), 0),
+    "thermostat": (4, ("climate",), 8),
+    "quick": (3, TILE_DOMAINS, 16),
+    "camera": (1, ("camera",), 8),
+    "calendar": (4, ("calendar",), 8),
+    "todo": (5, ("todo",), 8),
+    "info": (4, (), 0),
+}
+DEFAULT_PAGES = [{"kind": kind} for kind in ("home", "weather", "music", "timers")]
 
 SERVICE_SHOW_VIEW = "show_view"
 SERVICE_SHOW_MESSAGE = "show_message"

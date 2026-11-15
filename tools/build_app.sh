@@ -50,6 +50,11 @@ if [ "$GPU" = 1 ]; then
     # (wpa_cli, iw, ...) keep the image's libraries (no LD_LIBRARY_PATH).
     export RUSTFLAGS="${RUSTFLAGS:-} -L native=$WORK/gbm-link -C link-arg=-Wl,-rpath-link,$BRWEB/staging/usr/lib -C link-arg=-Wl,--disable-new-dtags,-rpath,/opt/panelos-web/usr/lib"
     FEATURES=(--features gpu)
+    # The UI's pictures and fonts are read at run time from the UI bundle by the
+    # absolute path they have there; the build sees them at the same path.
+    export PANELOS_UI_DIR=/opt/panelos-ui/share/ui
+    mkdir -p "$PANELOS_UI_DIR"
+    rsync -a --delete "$WORK/src/ui/" "$PANELOS_UI_DIR/"
 fi
 cargo build --release --target aarch64-unknown-linux-gnu "${FEATURES[@]}"
 # Keep the resolved dependency versions in the repository.

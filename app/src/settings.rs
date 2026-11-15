@@ -42,6 +42,10 @@ pub struct Settings {
     pub reporting: Reporting,
     /// Dashboard mode in the web view (PanelOS integration options).
     pub web: WebConfig,
+    /// The music page's player picked on the panel ("" = the integration's).
+    pub music_player: String,
+    /// The calendar page's view picked on the panel (agenda, day, week …).
+    pub calendar_view: i32,
 }
 
 /// What the web view shows in dashboard mode.
@@ -180,6 +184,8 @@ impl Default for Settings {
             assistant: AssistantConfig::default(),
             reporting: Reporting::default(),
             web: WebConfig::default(),
+            music_player: String::new(),
+            calendar_view: 0,
         }
     }
 }

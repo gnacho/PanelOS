@@ -52,6 +52,10 @@ pub enum FromApi {
 }
 
 /// voice thread → UI
+/// The microphone level while a run streams (0 … 1 for -60 … -20 dBFS, f32
+/// bits): the voice view's halo and trace read it.
+pub static MIC_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[derive(Debug, Clone)]
 pub enum VoiceUi {
     Listening,
@@ -1283,6 +1287,11 @@ pub fn spawn(
                             ui(VoiceUi::Idle);
                             continue;
                         }
+                    }
+                    {
+                        let rms = (chunk.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / chunk.len().max(1) as f64).sqrt();
+                        let db = 20.0 * (rms / 32768.0).max(1e-9).log10();
+                        MIC_LEVEL.store((((db + 60.0) / 40.0).clamp(0.0, 1.0) as f32).to_bits(), std::sync::atomic::Ordering::Relaxed);
                     }
                     if let Some((samples, pos)) = test_audio.as_mut() {
                         // Test audio, then silence.

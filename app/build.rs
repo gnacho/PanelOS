@@ -1,7 +1,25 @@
 use std::fmt::Write as _;
 
 fn main() {
-    slint_build::compile("ui/main.slint").expect("Slint UI compile failed");
+    // The pages' pictures and fonts are not embedded: they are read at run time
+    // from the UI bundle, by the absolute path they have in it. PANELOS_UI_DIR is
+    // that path, where tools/build_app.sh puts a copy of ui/ for the build.
+    match std::env::var("PANELOS_UI_DIR") {
+        Ok(dir) => {
+            let config = slint_build::CompilerConfiguration::new()
+                .embed_resources(slint_build::EmbedResourcesKind::AsAbsolutePath);
+            slint_build::compile_with_config(format!("{dir}/app.slint"), config).expect("Slint UI compile failed");
+            println!("cargo:rerun-if-changed={dir}");
+            // Pictures the app loads itself (page assets set as properties).
+            println!("cargo:rustc-env=PANELOS_UI_PICTURES={dir}");
+        }
+        Err(_) => {
+            slint_build::compile("ui/app.slint").expect("Slint UI compile failed");
+            let here = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_default();
+            println!("cargo:rustc-env=PANELOS_UI_PICTURES={here}/ui");
+        }
+    }
+    println!("cargo:rerun-if-env-changed=PANELOS_UI_DIR");
 
     // Material Design Icons name -> codepoint table (from ui/fonts/mdi-codepoints.txt).
     let table = std::fs::read_to_string("ui/fonts/mdi-codepoints.txt").expect("mdi-codepoints.txt");

@@ -1,17 +1,20 @@
-//! NSPanel Pro 86 panel app: draws a Home Assistant dashboard natively
-//! (Slint software renderer straight to DRM/KMS, touch from evdev).
-//! Login by QR code (OAuth), live states over the WebSocket API, details
-//! layers, settings, screensaver, automatic brightness and theme; assistant
-//! mode (home screen, full-screen conversation, layers opened from Home
-//! Assistant through the PanelOS integration).
+//! NSPanel Pro panel app: the assistant view's pages (living weather home,
+//! music, timers, ...) drawn natively, the Home Assistant dashboard in the web
+//! view as the second display mode, the voice satellite, and the panel's own
+//! device in Home Assistant.
 
+#![allow(clippy::too_many_arguments)]
+
+mod api_link;
 mod artwork;
-mod assistant;
 mod auth;
+mod cal;
+mod cam;
+// Camera pictures: JPEG decode, frames through Home Assistant's camera proxy.
+#[allow(dead_code)]
 mod camera;
 mod clock;
 mod config;
-mod dashboard;
 mod display;
 mod esphome;
 #[cfg(feature = "gpu")]
@@ -19,14 +22,22 @@ mod gpu;
 mod ha;
 mod hw;
 mod icons;
+mod info;
 mod loading_text;
-mod api_link;
 mod mdns;
+mod mus;
+mod pages;
+mod quick;
 mod pairing;
 mod panel_device;
 mod platform;
 mod roam;
 mod settings;
+mod shade;
+mod synth;
+mod texts;
+mod thermo;
+mod todo;
 mod touch;
 mod voice;
 mod web;
@@ -44,14 +55,12 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 #[cfg(not(feature = "gpu"))]
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use auth::Auth;
-use camera::CameraControl;
 use config::{AppConfig, PERSIST_DIR};
-use dashboard::RowSpec;
 use ha::{Command, EntityState, Event};
-use settings::{Settings, SCREENSAVER_CHOICES};
+use settings::Settings;
 
 slint::include_modules!();
 
@@ -68,23 +77,21 @@ extern "C" {
     fn tzset();
 }
 
-struct UiState {
+pub struct UiState {
     config: Option<AppConfig>,
     auth: Option<Arc<Auth>>,
     shared: Arc<ha::Shared>,
     commands: Option<Sender<Command>>,
     settings: Settings,
-    dash_config: Value,
-    views: Vec<String>,
-    view_index: usize,
-    rows: Vec<RowSpec>,
     states: HashMap<String, EntityState>,
-    model: Rc<VecModel<RowData>>,
-    camera_row: Option<usize>,
     pairing_started: bool,
-    more_info: Option<(String, Option<String>)>,
     dashboards: Vec<(String, String)>,
     connected: bool,
+    /// Connected at least once since the start (offline screen vs connecting screen).
+    ever_connected: bool,
+    /// Home Assistant away since (the offline screen comes after a grace period).
+    offline_since: Option<Instant>,
+    offline_text: String,
     screensaver: bool,
     backlight: hw::Backlight,
     light: hw::LightSensor,
@@ -100,7 +107,6 @@ struct UiState {
     dark: Option<bool>,
     /// Auto theme: the other look the light sensor asks for, and since when.
     theme_pending: Option<(bool, Instant)>,
-    started: Instant,
     device: Arc<std::sync::Mutex<esphome::DeviceState>>,
     device_notify: Sender<()>,
     last_reported_lux: Option<f64>,
@@ -111,7 +117,7 @@ struct UiState {
     /// Dashboard mode in the web view (None without the web bundle).
     web: Option<Arc<web::WebView>>,
     /// A swipe down from the top edge of the web view (start y): opens the
-    /// panel's settings instead of going to the page.
+    /// panel's quick settings instead of going to the page.
     web_swipe: Option<f32>,
     /// Touch test: on, the point to touch now, where and when the finger came down.
     touch_test: bool,
@@ -120,37 +126,56 @@ struct UiState {
     /// Pull to refresh: where the finger came down, and how far it pulled (0..1, None: not pulling).
     web_pull: Option<(f32, f32)>,
     web_pulled: Option<f32>,
-    timers: HashMap<String, TimerInfo>,
+    timers: HashMap<String, pages::Timer>,
+    /// Arrival counter of the timers (their order and colour).
+    timer_seq: u64,
+    /// Home Assistant timers removed on the panel: their later events are ignored.
+    dismissed_timers: std::collections::HashSet<String>,
+    /// Stopwatch: the lap times (newest first) and the time at the last lap.
+    laps: Vec<f32>,
+    lap_at: f32,
     ringing: Option<Instant>,
     /// Same as `ringing.is_some()`, for the voice thread.
     ringing_flag: Arc<std::sync::atomic::AtomicBool>,
     mic_muted: Arc<std::sync::atomic::AtomicBool>,
     wake_words: Arc<std::sync::Mutex<Vec<String>>>,
     player: Arc<voice::Player>,
-    assist_hide_at: Option<Instant>,
-    // Assistant mode
+    voice_hide_at: Option<Instant>,
+    /// The integration's configuration of this panel (pages, widgets, entities).
+    panel_config: Option<Value>,
     forecast_hourly: Vec<Value>,
     forecast_daily: Vec<Value>,
-    assistant_rows: Vec<RowSpec>,
-    assistant_model: Rc<VecModel<RowData>>,
     wake_phrase: String,
+    /// The status bar's wake hint: for which wake phrase, and its text.
+    wake_hint: (String, String),
+    /// Quick controls: the title picked for this run.
+    quick_title: String,
     art_url: Option<String>,
     art_tx: Option<Sender<Option<String>>>,
-    /// When the layer opened by a show request closes by itself.
+    art: Option<slint::Image>,
+    /// When a layer opened by a show request closes by itself.
     show_until: Option<Instant>,
-    /// Camera shown full screen by a show request (instead of the dashboard's).
-    camera_override: Option<String>,
-    assistant_reset: i32,
-    /// Forecast labels depend on the clock (next hours, "Today"; the clock
-    /// may still be wrong when the first forecast arrives before NTP).
-    assistant_refreshed: Instant,
-}
-
-struct TimerInfo {
-    name: String,
-    active: bool,
-    end: Instant,
-    left: u32,
+    /// Split-flap clock: the digits shown before the last change, and when it changed.
+    digits: [String; 4],
+    prev_digits: [String; 4],
+    flip_at: Option<Instant>,
+    /// Weather and forecast labels are refreshed once a minute (and on changes).
+    weather_refreshed: Instant,
+    /// Development: the system screens were set from the dev input; the
+    /// connection state does not change them meanwhile.
+    dev_screens: bool,
+    /// Do not disturb (quick shade).
+    dnd: bool,
+    /// Development: settings from the dev input, kept over Home Assistant's.
+    dev_config: Option<Value>,
+    /// A temporary page shown (its place in the pager).
+    temp_page: Option<usize>,
+    /// Screen off from the quick shade: dark until the next touch or approach.
+    screen_off: bool,
+    /// What the weather shown last looked like (see weather_key).
+    weather_key: String,
+    /// Development: weather values forced from the dev input.
+    dev_wx: Option<Value>,
 }
 
 thread_local! {
@@ -161,143 +186,746 @@ fn with_state<R>(f: impl FnOnce(&mut UiState) -> R) -> R {
     STATE.with(|s| f(s.borrow_mut().as_mut().expect("state")))
 }
 
-fn local_time_strings() -> (String, String, String) {
-    // Not set yet (no NTP and no Home Assistant so far): no 1970 on screen.
-    if !clock::valid() {
-        return ("--:--".into(), String::new(), String::new());
-    }
-    // SAFETY: time/localtime_r/strftime on local buffers.
-    unsafe {
-        let now = libc::time(std::ptr::null_mut());
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&now, &mut tm);
-        let fmt = |pattern: &str| {
-            let mut buf = [0u8; 64];
-            let pattern = std::ffi::CString::new(pattern).unwrap();
-            let n = libc::strftime(buf.as_mut_ptr().cast(), buf.len(), pattern.as_ptr(), &tm);
-            String::from_utf8_lossy(&buf[..n]).into_owned()
-        };
-        (fmt("%H:%M"), fmt("%A, %Y-%m-%d"), fmt("%A, %e %B").split_whitespace().collect::<Vec<_>>().join(" "))
-    }
+/// The panel's accent (the brand's Signal colour unless the integration sets one).
+fn accent(s: &UiState) -> slint::Color {
+    s.panel_config
+        .as_ref()
+        .and_then(|c| c.get("accent"))
+        .and_then(Value::as_str)
+        .and_then(pages::parse_color)
+        .unwrap_or_else(|| slint::Color::from_rgb_u8(0xFF, 0x4A, 0x1C))
 }
 
-fn update_clock(ui: &MainWindow) {
-    let (time, date, long_date) = local_time_strings();
-    ui.set_time(time.into());
-    ui.set_date(date.into());
-    ui.set_long_date(long_date.into());
-    let beep = STATE.with(|s| {
-        let mut guard = s.borrow_mut();
-        let Some(s) = guard.as_mut() else { return None };
-        // Timers: nearest one in the top bar.
-        let mut left: Vec<u32> = s
-            .timers
-            .values()
-            .map(|t| if t.active { t.end.saturating_duration_since(Instant::now()).as_secs() as u32 } else { t.left })
-            .collect();
-        left.sort();
-        let text = match left.first() {
-            Some(l) => {
-                let base = if *l >= 3600 {
-                    format!("{}:{:02}:{:02}", l / 3600, (l % 3600) / 60, l % 60)
-                } else {
-                    format!("{}:{:02}", l / 60, l % 60)
-                };
-                if left.len() > 1 { format!("{base} +{}", left.len() - 1) } else { base }
+fn config_str(s: &UiState, key: &str) -> String {
+    s.panel_config.as_ref().and_then(|c| c.get(key)).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+/// The entities a page of `kind` shows (the integration's page list).
+fn page_entities(s: &UiState, kind: &str) -> Vec<String> {
+    s.panel_config
+        .as_ref()
+        .and_then(|c| c.get("pages"))
+        .and_then(Value::as_array)
+        .and_then(|pages| pages.iter().find(|p| p.get("kind").and_then(Value::as_str) == Some(kind)))
+        .and_then(|p| p.get("entities"))
+        .and_then(Value::as_array)
+        .map(|list| list.iter().filter_map(Value::as_str).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+/// A switch of the first page of `kind` (the integration's page list).
+fn page_option(s: &UiState, kind: &str, key: &str) -> Option<Value> {
+    s.panel_config
+        .as_ref()?
+        .get("pages")?
+        .as_array()?
+        .iter()
+        .find(|p| p.get("kind").and_then(Value::as_str) == Some(kind))?
+        .get("options")?
+        .get(key)
+        .cloned()
+}
+
+fn weather_entity(s: &UiState) -> String {
+    if let Some(e) = page_entities(s, "weather").into_iter().next() {
+        return e;
+    }
+    let e = config_str(s, "weather_entity");
+    if e.is_empty() { s.settings.weather_entity.clone() } else { e }
+}
+
+fn media_entity(s: &UiState) -> String {
+    // The player picked on the panel (remembered), else the music page's, else the integration's.
+    if !s.settings.music_player.is_empty() {
+        return s.settings.music_player.clone();
+    }
+    page_entities(s, "music").into_iter().next().unwrap_or_else(|| config_str(s, "media_player_entity"))
+}
+
+/// Entities the panel follows besides the dashboard's.
+fn extra_entities(s: &UiState) -> Vec<String> {
+    let mut out = vec!["sun.sun".to_string(), "zone.home".to_string(), weather_entity(s), media_entity(s)];
+    out.extend(s.states.keys().filter(|k| k.starts_with("person.")).cloned());
+    if let Some(list) = s.panel_config.as_ref().and_then(|c| c.get("entities")).and_then(Value::as_array) {
+        out.extend(list.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+    // Every page's own entities (thermostats, tiles, cameras, calendars, lists).
+    if let Some(pages) = s.panel_config.as_ref().and_then(|c| c.get("pages")).and_then(Value::as_array) {
+        for p in pages {
+            if let Some(list) = p.get("entities").and_then(Value::as_array) {
+                out.extend(list.iter().filter_map(Value::as_str).map(str::to_string));
             }
-            None => String::new(),
-        };
-        ui.set_timer_text(text.into());
-        // Hide the conversation panel a few seconds after the end.
-        if s.assist_hide_at.is_some_and(|t| Instant::now() >= t) {
-            s.assist_hide_at = None;
-            ui.set_assist_state(0);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|e| !e.is_empty() && seen.insert(e.clone()));
+    out
+}
+
+// ---------------------------------------------------------------- clock and pages
+
+/// Whether a model already holds these rows. A new model makes every element of
+/// its `for` loop be created again (with its layers and text), so models are set
+/// only when their rows change.
+fn same_rows<T: Clone + PartialEq + 'static>(old: &ModelRc<T>, new: &[T]) -> bool {
+    old.row_count() == new.len() && new.iter().enumerate().all(|(i, n)| old.row_data(i).as_ref() == Some(n))
+}
+
+/// What the weather shows, to tell whether a new WeatherData changes anything
+/// (its hour and day lists are models, which compare by identity).
+fn weather_key(w: &WeatherData) -> String {
+    let hours: Vec<String> = w.hours.iter().map(|h| format!("{}{}{}{}", h.label, h.icon, h.temp, h.precip)).collect();
+    let days: Vec<String> = w.days.iter().map(|d| format!("{}{}{}{}{}", d.label, d.icon, d.high, d.low, d.precip)).collect();
+    format!(
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:.1}|{:.1}|{:.1}|{:.1}|{:.1}|{:.1}|{:.2}|{}|{}",
+        w.icon, w.temperature, w.condition, w.feels, w.wind, w.humidity, w.precip, w.high_low, w.sunrise, w.sunset,
+        w.mood, w.rain, w.theme, w.real_sun, w.wind_kmh.round(), w.gust_kmh.round(), w.sun_az, w.sun_el, w.moon_az, w.moon_el,
+        w.dusk, w.dawn, w.moon_phase, hours.join(","), days.join(",")
+    )
+}
+
+fn update_clock(ui: &AppWindow) {
+    let beep = STATE.with(|st| {
+        let mut guard = st.borrow_mut();
+        let s = guard.as_mut()?;
+        let weather = ui.get_weather();
+        let (mut data, digits) = pages::clock_data(&weather, &ui.get_home_event().title, &s.prev_digits, 1.0);
+        if digits != s.digits {
+            s.prev_digits = std::mem::replace(&mut s.digits, digits);
+            s.flip_at = Some(Instant::now());
+        }
+        // The struct changes once a minute (a change re-lays out every text bound
+        // to it); the seconds move in the UI from the animation clock, set here
+        // when the minute turns (and at the start).
+        data.seconds = 0.0;
+        if ui.get_clock() != data {
+            ui.set_clock(data);
+            let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+            ui.invoke_sync_seconds(wall.rem_euclid(60.0) as f32);
+        }
+        // Timer chips and the timers page only while there are timers (they count down).
+        if !s.timers.is_empty() || ui.get_timers().row_count() > 0 {
+            // Rows change in place each second (no element is built again).
+            if let Some(m) = pages::update_rows(&ui.get_timers(), pages::timer_chips(&s.timers)) {
+                ui.set_timers(m);
+            }
+            if let Some(m) = pages::update_rows(&ui.get_timers_list(), pages::timer_items(&s.timers, accent(s), ui.get_timers_colourful())) {
+                ui.set_timers_list(m);
+            }
+        }
+        // Timers the panel runs itself ring here when they reach zero.
+        let done: Vec<String> =
+            s.timers.iter().filter(|(_, t)| t.own && t.active && t.remaining() == 0).map(|(id, _)| id.clone()).collect();
+        for id in done {
+            if let Some(t) = s.timers.remove(&id) {
+                ring_timer(ui, s, t.name);
+                RANG.with(|r| r.set(true));
+            }
+        }
+        // The music position moves on while a player plays: its own properties;
+        // the rest of the widget's data only when it changed.
+        let music = pages::home_music(&s.states, &media_entity(s), s.art.as_ref(), accent(s));
+        if music.playing || ui.get_home_music_pos() != music.pos {
+            ui.set_music_pos(music.pos);
+            ui.set_home_music_pos(music.pos);
+        }
+        let mut same = ui.get_home_music();
+        same.pos = music.pos;
+        if same != music {
+            ui.set_home_music(music);
+        }
+        // The synthwave scenes in use: their view, colour and the next car.
+        synth::tick(ui, s);
+        // Voice view: closes a few seconds after the end.
+        if s.voice_hide_at.is_some_and(|t| Instant::now() >= t) {
+            s.voice_hide_at = None;
+            ui.set_voice_on(false);
         }
         // Ringing timer: beep until stopped, at most a minute.
         match s.ringing {
             Some(started) if started.elapsed() > Duration::from_secs(60) => {
                 s.ringing = None;
                 s.ringing_flag.store(false, Ordering::SeqCst);
-                ui.set_timer_ringing(false);
+                ui.set_timers_ringing(false);
                 None
             }
-            Some(_) => Some(s.player.clone()),
+            Some(started) => {
+                ui.set_timers_ring_over(started.elapsed().as_secs_f32());
+                Some(s.player.clone())
+            }
             None => None,
         }
     });
     if let Some(player) = beep {
         player.play(voice::Sound::Beep);
     }
-}
-
-fn handle_timer(ui: &MainWindow, kind: i32, id: String, name: String, left: u32, active: bool) {
-    let finished = with_state(|s| match kind {
-        // started, updated
-        0 | 1 => {
-            s.timers.insert(id, TimerInfo { name, active, end: Instant::now() + Duration::from_secs(left as u64), left });
-            false
-        }
-        // cancelled
-        2 => {
-            s.timers.remove(&id);
-            false
-        }
-        // finished
-        3 => {
-            let name = s.timers.remove(&id).map(|t| t.name).unwrap_or(name);
-            s.ringing = Some(Instant::now());
-            s.ringing_flag.store(true, Ordering::SeqCst);
-            ui.set_timer_name(name.into());
-            ui.set_timer_ringing(true);
-            true
-        }
-        _ => false,
-    });
-    if finished {
+    if RANG.with(|r| r.replace(false)) {
         wake(ui);
+        go_to_page(ui, "timers");
     }
 }
 
-fn handle_voice_ui(ui: &MainWindow, event: voice::VoiceUi) {
+thread_local! {
+    /// A timer the panel runs reached zero during this clock update.
+    static RANG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Weather, home widgets, music page and people from the current states.
+fn refresh_pages(ui: &AppWindow) {
+    let (art, music_entity) = with_state(|s| {
+        let theme = page_option(s, "home", "theme")
+            .and_then(|v| v.as_i64())
+            .or_else(|| s.panel_config.as_ref().and_then(|c| c.get("home_theme")).and_then(Value::as_i64))
+            .unwrap_or(0)
+            .clamp(0, 8) as i32;
+        let entity = weather_entity(s);
+        let weather = pages::weather_data(&pages::WeatherInput {
+            states: &s.states,
+            entity: &entity,
+            hourly: &s.forecast_hourly,
+            daily: &s.forecast_daily,
+            theme,
+        });
+        let mut weather = weather;
+        // Development: weather values forced from the dev input (measurements).
+        if let Some(o) = s.dev_wx.as_ref() {
+            let f = |k: &str| o.get(k).and_then(Value::as_f64);
+            if let Some(v) = f("mood") { weather.mood = v as i32; }
+            if let Some(v) = f("rain") { weather.rain = v as i32; }
+            if let Some(v) = f("wind") { weather.wind_kmh = v as f32; }
+            if let Some(v) = f("gust") { weather.gust_kmh = v as f32; }
+            if let Some(v) = f("theme") { weather.theme = v as i32; }
+            if let Some(v) = f("sun_el") { weather.sun_el = v as f32; }
+        }
+        let key = weather_key(&weather);
+        if key != s.weather_key {
+            s.weather_key = key;
+            ui.set_weather(weather);
+        }
+        let a = accent(s);
+        if ui.get_clock_accent() != a {
+            ui.set_clock_accent(a);
+        }
+        let items = pages::home_items(s.panel_config.as_ref(), a);
+        if !same_rows(&ui.get_home_items(), &items) {
+            ui.set_home_items(ModelRc::new(VecModel::from(items)));
+        }
+        let event = pages::home_event();
+        if ui.get_home_event() != event {
+            ui.set_home_event(event);
+        }
+        let t = pages::now();
+        if clock::valid() {
+            ui.set_home_weekday(pages::local_format(t, "%A").into());
+            ui.set_home_day_month(pages::local_format(t, "%e %B").trim().to_string().into());
+            ui.set_home_year(pages::local_format(t, "%Y").into());
+            ui.set_home_week(format!("Week {}", pages::local_format(t, "%V").trim_start_matches('0')).into());
+        }
+        let wanted: Vec<String> = s
+            .panel_config
+            .as_ref()
+            .and_then(|c| c.get("people"))
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default();
+        let people = pages::people(&s.states, &wanted);
+        if !same_rows(&ui.get_people(), &people) {
+            ui.set_people(ModelRc::new(VecModel::from(people)));
+        }
+        ui.set_show_people(s.panel_config.as_ref().and_then(|c| c.get("show_people")).and_then(Value::as_bool).unwrap_or(true));
+        // The wake hint: one of its lines, kept until the wake word changes.
+        let hint = if s.settings.mic_muted || s.wake_phrase.is_empty() {
+            String::new()
+        } else {
+            if s.wake_hint.0 != s.wake_phrase {
+                s.wake_hint = (s.wake_phrase.clone(), texts::fresh("voice.wake").replace("{wake}", &s.wake_phrase));
+            }
+            s.wake_hint.1.clone()
+        };
+        if ui.get_wake_hint().as_str() != hint {
+            ui.set_wake_hint(hint.into());
+        }
+        // Music page
+        let player = media_entity(s);
+        let music = pages::home_music(&s.states, &player, s.art.as_ref(), a);
+        ui.set_music_title(music.title.clone());
+        ui.set_music_artist(music.artist.clone());
+        ui.set_music_playing(music.playing);
+        ui.set_music_pos(music.pos);
+        ui.set_music_dur(music.dur);
+        ui.set_music_player(music.player.clone());
+        ui.set_music_has_art(music.has_art);
+        if let Some(art) = &s.art {
+            ui.set_music_art(art.clone());
+            ui.set_music_art_bg(art.clone());
+        }
+        ui.set_music_accent(a);
+        if let Some(p) = s.states.get(&player) {
+            ui.set_music_album(p.attrs.get("media_album_name").and_then(Value::as_str).unwrap_or("").into());
+            ui.set_music_volume(p.attrs.get("volume_level").and_then(Value::as_f64).unwrap_or(0.0) as f32);
+            ui.set_music_shuffle(p.attrs.get("shuffle").and_then(Value::as_bool).unwrap_or(false));
+            ui.set_music_repeat(match p.attrs.get("repeat").and_then(Value::as_str) {
+                Some("all") => 1,
+                Some("one") => 2,
+                _ => 0,
+            });
+        }
+        ui.set_home_music(music);
+        let url = s.states.get(&player).and_then(|p| {
+            matches!(p.state.as_str(), "playing" | "paused" | "buffering")
+                .then(|| p.attrs.get("entity_picture").and_then(Value::as_str).filter(|u| !u.is_empty()).map(str::to_string))
+                .flatten()
+        });
+        let art = if url != s.art_url {
+            s.art_url = url.clone();
+            s.art_tx.clone().map(|tx| (tx, url))
+        } else {
+            None
+        };
+        s.weather_refreshed = Instant::now();
+        (art, player)
+    });
+    let _ = music_entity;
+    // The looks of the pages that take theirs from the page list.
+    let pages = ui.get_pages();
+    let variant = |kind: &str| (0..pages.row_count()).filter_map(|i| pages.row_data(i)).find(|p| p.kind == kind).map(|p| p.variant);
+    if let Some(v) = variant("timers") {
+        if ui.get_timers_theme() != v {
+            ui.set_timers_theme(v);
+        }
+    }
+    if let Some(v) = variant("music") {
+        if ui.get_music_style() != v {
+            ui.set_music_style(v);
+        }
+    }
+    with_state(|s| {
+        quick::refresh(ui, s);
+        thermo::refresh(ui, s);
+        cam::refresh(ui, s);
+        cal::refresh(ui, s);
+        todo::refresh(ui, s);
+        info::refresh(ui, s);
+    });
+    if let Some((tx, url)) = art {
+        let _ = tx.send(url);
+    }
+}
+
+/// Keys of `top` replace those of `base` (a missing base becomes `top`).
+fn overlay(base: &mut Option<Value>, top: &Value) {
+    let b = base.get_or_insert_with(|| json!({}));
+    if let (Some(b), Some(t)) = (b.as_object_mut(), top.as_object()) {
+        for (k, v) in t {
+            b.insert(k.clone(), v.clone());
+        }
+    }
+}
+
+/// The page list and what the integration's configuration changes.
+fn apply_panel_config(ui: &AppWindow) {
+    let reload = with_state(|s| {
+        let slots = pages::page_slots(s.panel_config.as_ref());
+        let current = ui.get_page();
+        // A new model rebuilds every page: only when the list really changed.
+        let shown = ui.get_pages();
+        let same = shown.row_count() == slots.len() && slots.iter().enumerate().all(|(i, p)| shown.row_data(i).as_ref() == Some(p));
+        if !same && s.temp_page.is_none() {
+            ui.set_pages(ModelRc::new(VecModel::from(slots.clone())));
+        }
+        if current as usize >= slots.len() {
+            ui.set_page(0);
+        }
+        ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
+        let mut changed = false;
+        let extra = extra_entities(s);
+        {
+            let mut e = s.shared.extra_entities.lock().unwrap();
+            if *e != extra {
+                *e = extra;
+                changed = true;
+            }
+        }
+        {
+            let entity = weather_entity(s);
+            let mut f = s.shared.forecast_entity.lock().unwrap();
+            if *f != entity {
+                *f = entity;
+                s.forecast_hourly.clear();
+                s.forecast_daily.clear();
+                changed = true;
+            }
+        }
+        changed
+    });
+    refresh_pages(ui);
+    if reload {
+        send(Command::Reload);
+    }
+}
+
+/// Goes to the first page of `kind`; returns false if the panel has none.
+fn go_to_page(ui: &AppWindow, kind: &str) -> bool {
+    let pages = ui.get_pages();
+    match (0..pages.row_count()).find(|&i| pages.row_data(i).is_some_and(|p| p.kind == kind)) {
+        Some(i) => {
+            ui.set_page(i as i32);
+            true
+        }
+        None => false,
+    }
+}
+
+/// A page the panel's list lacks (a home widget's view): slides in next to
+/// the current one, without a dot; a swipe back to the right returns, and it
+/// is gone once left.
+fn open_temporary_page(ui: &AppWindow, kind: &str) {
+    if with_state(|s| s.temp_page.is_some()) {
+        return;
+    }
+    let pages = ui.get_pages();
+    let Some(vec) = pages.as_any().downcast_ref::<VecModel<PageSlot>>() else { return };
+    let at = (ui.get_page().max(0) as usize + 1).min(vec.row_count());
+    vec.insert(at, PageSlot { kind: kind.into(), variant: 0 });
+    with_state(|s| s.temp_page = Some(at));
+    ui.set_dots_hidden(true);
+    ui.set_page(at as i32);
+    refresh_pages(ui);
+}
+
+/// After a swipe: the temporary page goes once it is off screen (the pages
+/// after it move up by one, with no visible slide).
+fn leave_temporary_page(ui: &AppWindow, now: i32) {
+    let Some(t) = with_state(|s| s.temp_page) else { return };
+    if now as usize == t {
+        return;
+    }
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(320), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if with_state(|s| s.temp_page.take()) != Some(t) {
+            return;
+        }
+        let pages = ui.get_pages();
+        let Some(vec) = pages.as_any().downcast_ref::<VecModel<PageSlot>>() else { return };
+        if t < vec.row_count() {
+            ui.set_instant(true);
+            vec.remove(t);
+            let page = ui.get_page();
+            if page as usize > t {
+                ui.set_page(page - 1);
+            }
+            let weak = ui.as_weak();
+            slint::Timer::single_shot(Duration::from_millis(50), move || {
+                if let Some(ui) = weak.upgrade() {
+                    ui.set_instant(false);
+                }
+            });
+        }
+        ui.set_dots_hidden(false);
+    });
+}
+
+// ---------------------------------------------------------------- timers and voice
+
+fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, total: u32, active: bool) {
+    let finished = with_state(|s| {
+        if s.dismissed_timers.contains(&id) {
+            if kind >= 2 {
+                s.dismissed_timers.remove(&id);
+            }
+            return false;
+        }
+        match kind {
+            // started, updated (unless the panel runs it now)
+            0 | 1 => {
+                if s.timers.get(&id).is_some_and(|t| t.own) {
+                    return false;
+                }
+                let total = if total > 0 { total } else { s.timers.get(&id).map(|t| t.total).unwrap_or(left) };
+                let seq = match s.timers.get(&id) {
+                    Some(t) => t.seq,
+                    None => {
+                        s.timer_seq += 1;
+                        s.timer_seq
+                    }
+                };
+                s.timers.insert(
+                    id,
+                    pages::Timer { name, active, end: Instant::now() + Duration::from_secs(left as u64), left, total, seq, own: false },
+                );
+                false
+            }
+            // cancelled
+            2 => {
+                if !s.timers.get(&id).is_some_and(|t| t.own) {
+                    s.timers.remove(&id);
+                }
+                false
+            }
+            // finished (a timer the panel runs rings by its own clock)
+            3 => {
+                if s.timers.get(&id).is_some_and(|t| t.own) {
+                    return false;
+                }
+                let name = s.timers.remove(&id).map(|t| t.name).unwrap_or(name);
+                ring_timer(ui, s, name);
+                true
+            }
+            _ => false,
+        }
+    });
+    if finished {
+        wake(ui);
+        go_to_page(ui, "timers");
+    }
+    update_clock(ui);
+}
+
+/// A timer reached zero: the ringing screen and the beeps.
+fn ring_timer(ui: &AppWindow, s: &mut UiState, name: String) {
+    s.ringing = Some(Instant::now());
+    s.ringing_flag.store(true, Ordering::SeqCst);
+    ui.set_timers_ring_label(name.into());
+    ui.set_timers_ringing(true);
+}
+
+/// Taps on the timers page (`timers.*`, `watch.*`, `alarms.*`).
+fn timers_act(ui: &AppWindow, what: &str, value: &str) {
+    let n: i64 = value.parse().unwrap_or(0);
+    // The timer at the page's index `n`.
+    let id_at = |s: &UiState| pages::ordered_timers(&s.timers).get(n as usize).map(|(id, _)| (*id).clone());
+    match what {
+        "timers.mode" => ui.set_timers_mode(n as i32),
+        "timers.pick" => ui.set_timers_focus(n as i32),
+        "timers.quick" => ui.set_timers_quick(true),
+        "timers.quick-close" => ui.set_timers_quick(false),
+        "timers.start" => {
+            let secs = n.clamp(1, 24 * 3600) as u32;
+            with_state(|s| {
+                s.timer_seq += 1;
+                let seq = s.timer_seq;
+                s.timers.insert(
+                    format!("panel-{seq}"),
+                    pages::Timer {
+                        name: String::new(),
+                        active: true,
+                        end: Instant::now() + Duration::from_secs(secs as u64),
+                        left: secs,
+                        total: secs,
+                        seq,
+                        own: true,
+                    },
+                );
+            });
+            ui.set_timers_quick(false);
+            ui.set_timers_mode(1);
+        }
+        "timers.toggle" | "timers.add" | "timers.cancel" => with_state(|s| {
+            let Some(id) = id_at(s) else { return };
+            match what {
+                "timers.cancel" => {
+                    if let Some(t) = s.timers.remove(&id) {
+                        if !t.own || !id.starts_with("panel-") {
+                            s.dismissed_timers.insert(id);
+                        }
+                    }
+                }
+                _ => {
+                    let Some(t) = s.timers.get_mut(&id) else { return };
+                    t.own = true;
+                    if what == "timers.add" {
+                        if t.active {
+                            t.end += Duration::from_secs(60);
+                        } else {
+                            t.left += 60;
+                        }
+                        t.total += 60;
+                    } else if t.active {
+                        t.left = t.remaining();
+                        t.active = false;
+                    } else {
+                        t.end = Instant::now() + Duration::from_secs(t.left as u64);
+                        t.active = true;
+                    }
+                }
+            }
+        }),
+        "watch.toggle" => {
+            if ui.get_timers_watch_running() {
+                ui.invoke_watch_stop();
+            } else {
+                ui.invoke_watch_start();
+            }
+        }
+        "watch.lap" => {
+            let now = ui.get_timers_watch();
+            let laps = with_state(|s| {
+                s.laps.insert(0, now - s.lap_at);
+                s.lap_at = now;
+                s.laps.clone()
+            });
+            ui.set_timers_laps(ModelRc::new(VecModel::from(laps)));
+        }
+        "watch.reset" => {
+            ui.invoke_watch_stop();
+            ui.set_timers_watch_base(0.0);
+            with_state(|s| {
+                s.laps.clear();
+                s.lap_at = 0.0;
+            });
+            ui.set_timers_laps(ModelRc::new(VecModel::from(Vec::<f32>::new())));
+        }
+        _ => eprintln!("nspanel-app: act {what} {value} (not handled yet)"),
+    }
+    update_clock(ui);
+}
+
+fn stop_ringing(ui: &AppWindow) {
+    with_state(|s| {
+        s.ringing = None;
+        s.ringing_flag.store(false, Ordering::SeqCst);
+    });
+    ui.set_timers_ringing(false);
+}
+
+/// The voice view's status line for a state (listen, think, reply, more,
+/// again, fail), in the variant of the look: comic captions in capitals, the
+/// terminal and the oscilloscope in their mono wording.
+fn voice_line(ui: &AppWindow, state: &str) -> String {
+    let place = match ui.get_voice_look() {
+        1 | 3 => format!("voice.{state}.mono"),
+        2 => format!("voice.{state}.comic"),
+        _ => format!("voice.{state}"),
+    };
+    let line = texts::fresh(&place);
+    if line.is_empty() {
+        texts::fresh(&format!("voice.{state}"))
+    } else {
+        line
+    }
+}
+
+thread_local! {
+    /// Feeds the voice view's halo and trace while the microphone streams.
+    static METER: slint::Timer = slint::Timer::default();
+    static TRACE: RefCell<std::collections::VecDeque<f32>> = RefCell::new(std::collections::VecDeque::new());
+}
+
+/// The voice view's look (integration), its pictures and its state colours.
+fn voice_view(ui: &AppWindow, state: i32) {
+    let look = with_state(|s| s.panel_config.as_ref().and_then(|c| c.get("voice_look")).and_then(Value::as_i64).unwrap_or(0)) as i32;
+    ui.set_voice_look(look);
+    if look == 1 && ui.get_voice_scan().size().width == 0 {
+        ui.set_voice_scan(quick::picture("voice/scan.png"));
+    }
+    if look == 2 {
+        let dots = match state {
+            1 | 5 => "voice/dots-blue.png",
+            3 => "voice/dots-green.png",
+            4 => "voice/dots-red.png",
+            6 => "voice/dots-violet.png",
+            _ => "voice/dots.png",
+        };
+        ui.set_voice_dots(quick::picture(dots));
+    }
+}
+
+/// Starts or stops the microphone meter (level 30 times a second, smoothed;
+/// the oscilloscope trace from the last 2 s of it).
+fn voice_meter(ui: &AppWindow, on: bool) {
+    METER.with(|t| {
+        if !on {
+            t.stop();
+            ui.set_voice_level(0.0);
+            TRACE.with(|tr| tr.borrow_mut().clear());
+            return;
+        }
+        let weak = ui.as_weak();
+        t.start(slint::TimerMode::Repeated, Duration::from_millis(33), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let raw = f32::from_bits(voice::MIC_LEVEL.load(Ordering::Relaxed));
+            let level = ui.get_voice_level() * 0.6 + raw * 0.4;
+            ui.set_voice_level(level);
+            if ui.get_voice_look() == 3 {
+                // 60 points across a 400 × 160 box, the newest on the right.
+                let path = TRACE.with(|tr| {
+                    let mut tr = tr.borrow_mut();
+                    tr.push_back(raw);
+                    while tr.len() > 60 {
+                        tr.pop_front();
+                    }
+                    let mut p = String::new();
+                    for (i, v) in tr.iter().enumerate() {
+                        let x = 400.0 * i as f32 / 59.0;
+                        let swing = if i % 2 == 0 { 1.0 } else { -1.0 };
+                        let y = 80.0 - swing * v * 70.0;
+                        p.push_str(&format!("{}{x:.1} {y:.1} ", if i == 0 { "M " } else { "L " }));
+                    }
+                    p
+                });
+                ui.set_voice_wave(path.into());
+            }
+        });
+    });
+}
+
+fn handle_voice_ui(ui: &AppWindow, event: voice::VoiceUi) {
     use voice::VoiceUi;
-    let hide_after = |secs: u64| with_state(|s| s.assist_hide_at = Some(Instant::now() + Duration::from_secs(secs)));
+    let hide_after = |secs: u64| with_state(|s| s.voice_hide_at = Some(Instant::now() + Duration::from_secs(secs)));
+    let show = with_state(|s| s.panel_config.as_ref().and_then(|c| c.get("show_conversation")).and_then(Value::as_bool).unwrap_or(true));
     match event {
         VoiceUi::Listening => {
             wake(ui);
-            with_state(|s| s.assist_hide_at = None);
-            ui.set_assist_heard("".into());
-            ui.set_assist_answer("".into());
-            ui.set_assist_state(1);
+            with_state(|s| s.voice_hide_at = None);
+            ui.set_voice_heard("".into());
+            ui.set_voice_answer("".into());
+            ui.set_voice_detail("".into());
+            voice_view(ui, 1);
+            ui.set_voice_line(voice_line(ui, "listen").into());
+            ui.set_voice_state(1);
+            voice_meter(ui, true);
+            ui.set_voice_on(show);
         }
-        VoiceUi::Heard(text) => ui.set_assist_heard(text.into()),
-        VoiceUi::Thinking => ui.set_assist_state(2),
+        VoiceUi::Heard(text) => ui.set_voice_heard(text.into()),
+        VoiceUi::Thinking => {
+            voice_meter(ui, false);
+            voice_view(ui, 2);
+            ui.set_voice_line(voice_line(ui, "think").into());
+            ui.set_voice_state(2);
+        }
         VoiceUi::Answer(text) => {
-            ui.set_assist_answer(text.into());
-            ui.set_assist_state(3);
+            ui.set_voice_answer(text.into());
+            voice_meter(ui, false);
+            voice_view(ui, 3);
+            ui.set_voice_line(voice_line(ui, "reply").into());
+            ui.set_voice_state(3);
         }
         VoiceUi::Idle => {
-            if ui.get_assist_state() > 0 {
+            voice_meter(ui, false);
+            if ui.get_voice_on() {
                 hide_after(5);
             }
         }
         VoiceUi::Error(message) => {
-            ui.set_assist_answer(message.into());
-            ui.set_assist_state(4);
+            ui.set_voice_detail(message.into());
+            voice_meter(ui, false);
+            voice_view(ui, 4);
+            ui.set_voice_line(voice_line(ui, "fail").into());
+            ui.set_voice_state(4);
             hide_after(5);
         }
         VoiceUi::Stopped => {
-            with_state(|s| {
-                s.ringing = None;
-                s.ringing_flag.store(false, Ordering::SeqCst);
-            });
-            ui.set_timer_ringing(false);
-            if ui.get_assist_state() > 0 {
+            stop_ringing(ui);
+            if ui.get_voice_on() {
                 hide_after(1);
             }
         }
     }
     platform::note_activity();
 }
+
+// ---------------------------------------------------------------- start-up
 
 const SPLASH_PIDFILE: &str = "/var/run/nspanel-splash.pid";
 
@@ -309,7 +937,7 @@ const READY_TIMEOUT: Duration = Duration::from_secs(25);
 
 /// Holds the UI back until it has something current to show: the clock is
 /// set and the first full state list from Home Assistant is in (a short
-/// grace lets the assistant settings and forecasts follow). Pairing needed:
+/// grace lets the panel settings and forecasts follow). Pairing needed:
 /// at once, the QR code is the content. Meanwhile the boot splash keeps its
 /// light band running. Returns the events received so far, for the UI.
 fn wait_until_ready(events: &mpsc::Receiver<Event>) -> Vec<Event> {
@@ -323,7 +951,6 @@ fn wait_until_ready(events: &mpsc::Receiver<Event>) -> Vec<Event> {
             clock_at = Some(Instant::now());
         }
         let data = states_at.is_some_and(|t| t.elapsed() >= Duration::from_millis(300))
-            // A dashboard without entities never sends states.
             || connected_at.is_some_and(|t| t.elapsed() >= Duration::from_secs(2));
         if (data && clock::valid()) || started.elapsed() >= READY_TIMEOUT {
             break;
@@ -362,10 +989,7 @@ fn wait_until_ready(events: &mpsc::Receiver<Event>) -> Vec<Event> {
 }
 
 /// Asks the boot splash (nspanel-splash) to hand the display over and waits
-/// until it has: it first finishes its sequence and keeps the last picture
-/// for a moment (the UI must not cut the animation short), then waits
-/// for Wi-Fi (the panel is no use without the network), at most 30 s
-/// after its start. Its pid.
+/// until it has (at most 40 s). Its pid.
 fn splash_handoff() -> Option<i32> {
     let pid: i32 = std::fs::read_to_string(SPLASH_PIDFILE).ok()?.trim().parse().ok()?;
     // SAFETY: plain kill(2).
@@ -409,10 +1033,14 @@ fn is_home_assistant(url: &str) -> bool {
 /// on the network (mDNS) and takes an address on a keypad. Once Home Assistant
 /// answers at the address, it is saved to app.json and the app restarts (the
 /// supervisor starts it again), which then shows the pairing QR code.
-fn start_setup(ui: &MainWindow, browser: Arc<mdns::Browser>, reason: &str) {
+fn start_setup(ui: &AppWindow, browser: Arc<mdns::Browser>, reason: &str) {
     ui.set_setup(true);
     if !reason.contains("No such file") {
         ui.set_setup_message(format!("The saved settings could not be read ({reason}); set them again.").into());
+        ui.set_setup_message_kind(1);
+    }
+    if let Some(ip) = pairing::local_ip_towards("8.8.8.8:53") {
+        ui.set_net_ip(ip.to_string().into());
     }
     browser.active.store(true, Ordering::Relaxed);
     // Found instances, refreshed every second; the timer lives as long as the app.
@@ -425,7 +1053,6 @@ fn start_setup(ui: &MainWindow, browser: Arc<mdns::Browser>, reason: &str) {
             .lock()
             .unwrap()
             .iter()
-            .take(1)
             .map(|h| FoundHa { name: h.name.clone().into(), url: h.url.clone().into() })
             .collect();
         if ui.get_setup_found().row_count() != found.len() {
@@ -448,8 +1075,21 @@ fn start_setup(ui: &MainWindow, browser: Arc<mdns::Browser>, reason: &str) {
     let weak = ui.as_weak();
     ui.on_setup_pick(move |url| {
         let Some(ui) = weak.upgrade() else { return };
+        ui.set_setup_pick_open(false);
         ui.set_setup_address(url);
         ui.invoke_setup_connect();
+    });
+    let weak = ui.as_weak();
+    ui.on_setup_choose_many(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_setup_pick_open(true);
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_setup_pick_back(move || {
+        if let Some(ui) = weak.upgrade() {
+            ui.set_setup_pick_open(false);
+        }
     });
     let weak = ui.as_weak();
     ui.on_setup_connect(move || {
@@ -460,10 +1100,12 @@ fn start_setup(ui: &MainWindow, browser: Arc<mdns::Browser>, reason: &str) {
         let candidates = setup_candidates(&ui.get_setup_address());
         if candidates.is_empty() {
             ui.set_setup_message("Type the address first.".into());
+            ui.set_setup_message_kind(1);
             return;
         }
         ui.set_setup_busy(true);
         ui.set_setup_message("Looking for Home Assistant…".into());
+        ui.set_setup_message_kind(0);
         let weak = ui.as_weak();
         std::thread::spawn(move || {
             let found = candidates.iter().find(|u| is_home_assistant(u)).cloned();
@@ -479,13 +1121,20 @@ fn start_setup(ui: &MainWindow, browser: Arc<mdns::Browser>, reason: &str) {
                     (Some(url), Some(Ok(()))) => {
                         eprintln!("nspanel-app: setup: Home Assistant at {url} saved, restarting");
                         ui.set_setup_message(format!("Home Assistant found at {url}. Starting…").into());
+                        ui.set_setup_message_kind(2);
                         // The supervisor starts the app again, now with settings.
                         slint::Timer::single_shot(Duration::from_millis(800), || std::process::exit(0));
                     }
-                    (Some(_), Some(Err(e))) => ui.set_setup_message(format!("Could not save the settings: {e}").into()),
-                    _ => ui.set_setup_message(
-                        "Home Assistant did not answer at this address. Check the IP address and the port (:8123 or none).".into(),
-                    ),
+                    (Some(_), Some(Err(e))) => {
+                        ui.set_setup_message(format!("Could not save the settings: {e}").into());
+                        ui.set_setup_message_kind(1);
+                    }
+                    _ => {
+                        ui.set_setup_message(
+                            "Home Assistant did not answer at this address. Check the IP address and the port (:8123 or none).".into(),
+                        );
+                        ui.set_setup_message_kind(1);
+                    }
                 }
             });
         });
@@ -497,121 +1146,44 @@ fn wake_phrase(ids: &[String]) -> String {
     voice::available_wake_words().into_iter().find(|w| w.id == *id).map(|w| w.phrase).unwrap_or_default()
 }
 
-/// Assistant home screen contents and the media artwork.
-fn refresh_assistant(ui: &MainWindow) {
-    let (data, art) = with_state(|s| {
-        let c = assistant::effective(&s.settings);
-        let d = assistant::data(
-            &c,
-            &s.states,
-            &s.forecast_hourly,
-            &s.forecast_daily,
-            &s.wake_phrase,
-            s.settings.mic_muted,
-            s.connected,
-        );
-        let url = assistant::artwork_url(&c, &s.states);
-        let art = if url != s.art_url {
-            s.art_url = url.clone();
-            s.art_tx.clone().map(|tx| (tx, url))
-        } else {
-            None
-        };
-        (d, art)
-    });
-    ui.set_assistant(data);
-    if let Some((tx, url)) = art {
-        let _ = tx.send(url);
-    }
-}
-
-/// Applies the display mode and the assistant configuration (tiles,
-/// followed entities, forecasts); reconnects if Home Assistant has to send
-/// other entities.
-fn apply_assistant_config(ui: &MainWindow) {
-    let reload = with_state(|s| {
-        let c = assistant::effective(&s.settings);
-        s.assistant_rows = assistant::tile_rows(&c);
-        let data: Vec<RowData> = s.assistant_rows.iter().map(|r| dashboard::row_data(r, &s.states)).collect();
-        s.assistant_model.set_vec(data);
-        let assistant_mode = s.settings.display_mode == "assistant";
-        ui.set_display_mode(if assistant_mode { 1 } else { 0 });
-        ui.set_assist_full(assistant_mode && c.show_conversation);
-        let mut changed = false;
-        let extra = assistant::extra_entities(&s.settings);
-        {
-            let mut e = s.shared.extra_entities.lock().unwrap();
-            if *e != extra {
-                *e = extra;
-                changed = true;
-            }
-        }
-        {
-            let mut f = s.shared.forecast_entity.lock().unwrap();
-            if *f != c.weather_entity {
-                *f = c.weather_entity.clone();
-                s.forecast_hourly.clear();
-                s.forecast_daily.clear();
-                changed = true;
-            }
-        }
-        changed
-    });
-    refresh_assistant(ui);
-    if reload {
-        send(Command::Reload);
-    }
-}
-
 /// show_view / show_message from Home Assistant (PanelOS integration).
-fn handle_show(ui: &MainWindow, v: &Value) {
+fn handle_show(ui: &AppWindow, v: &Value) {
     let kind = v["type"].as_str().unwrap_or("view");
     let seconds = v["seconds"].as_u64().unwrap_or(30);
     eprintln!("nspanel-app: show request {v}");
     wake(ui);
-    ui.set_message_open(false);
-    ui.set_weather_open(false);
-    ui.set_media_open(false);
-    ui.set_more_info_open(false);
-    ui.set_settings_open(false);
+    ui.set_set_view(0);
     let chime = with_state(|s| {
-        s.more_info = None;
-        if s.camera_override.is_some() {
-            ui.set_camera_full(false);
-        }
-        match kind {
-            "message" => {
-                ui.set_message_title(v["title"].as_str().unwrap_or("").into());
-                ui.set_message_text(v["message"].as_str().unwrap_or("").into());
-                let icon = v["icon"].as_str().unwrap_or("").trim_start_matches("mdi:");
-                ui.set_message_icon(icons::glyph(icon).map(String::from).unwrap_or_default().into());
-                ui.set_message_open(true);
-            }
-            _ => match v["view"].as_str().unwrap_or("home") {
-                "dashboard" => {
-                    if s.settings.display_mode == "assistant" {
-                        ui.set_show_dashboard(true);
-                    }
-                }
-                "weather" => ui.set_weather_open(true),
-                "media" => ui.set_media_open(true),
-                "camera" => {
-                    if let Some(entity) = v["entity_id"].as_str().filter(|e| e.starts_with("camera.")) {
-                        s.camera_override = Some(entity.to_string());
-                        ui.set_camera_full(true);
-                    }
-                }
-                _ => {
-                    ui.set_show_dashboard(false);
-                    ui.set_camera_full(false);
-                    s.assistant_reset += 1;
-                    ui.set_assistant_reset(s.assistant_reset);
-                }
-            },
-        }
         s.show_until = (seconds > 0).then(|| Instant::now() + Duration::from_secs(seconds));
         v["chime"].as_bool().unwrap_or(false).then(|| s.player.clone())
     });
+    match kind {
+        "message" => {
+            ui.set_strip_title(v["title"].as_str().unwrap_or("").into());
+            ui.set_strip_sub(v["message"].as_str().unwrap_or("").into());
+            let icon = v["icon"].as_str().unwrap_or("mdi:information-outline").trim_start_matches("mdi:");
+            ui.set_strip_icon(icons::glyph(icon).map(String::from).unwrap_or_default().into());
+            ui.set_strip_has_picto(false);
+            ui.set_strip_critical(false);
+            ui.set_strip_on(true);
+        }
+        _ => match v["view"].as_str().unwrap_or("home") {
+            "dashboard" => {
+                if ui.get_web_active() {
+                    ui.set_dashboard_mode(true);
+                }
+            }
+            "media" => {
+                go_to_page(ui, "music");
+            }
+            other => {
+                ui.set_dashboard_mode(with_state(|s| s.settings.display_mode == "dashboard") && ui.get_web_active());
+                if !go_to_page(ui, other) {
+                    go_to_page(ui, "home");
+                }
+            }
+        },
+    }
     if let Some(player) = chime {
         player.play(voice::Sound::Chime);
     }
@@ -631,7 +1203,11 @@ fn send(cmd: Command) {
     }
 }
 
-fn start_pairing(ui: &MainWindow) {
+fn call(domain: &str, service: &str, entity_id: &str, data: Value) {
+    send(Command::CallService { domain: domain.into(), service: service.into(), entity_id: entity_id.into(), data });
+}
+
+fn start_pairing(ui: &AppWindow) {
     let (config, auth) = with_state(|s| (s.config.clone(), s.auth.clone()));
     let (Some(config), Some(auth)) = (config, auth) else { return };
     let weak = ui.as_weak();
@@ -639,11 +1215,13 @@ fn start_pairing(ui: &MainWindow) {
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
+                ui.set_pair_state(1);
                 ui.set_paired(true);
-                ui.set_status("Connecting to Home Assistant…".into());
+                ui.set_connecting(true);
             }
         });
     };
+    ui.set_pair_ha_url(config.ha_url.clone().into());
     match pairing::start(&config.ha_url, &config.ha_host_port(), config.http_port, auth, on_paired) {
         Ok(p) => {
             if let Some(img) = pairing::qr_image(&p.authorize_url, 254) {
@@ -656,132 +1234,34 @@ fn start_pairing(ui: &MainWindow) {
             );
             eprintln!("nspanel-app: pairing page at {}, login URL {}", p.panel_url, p.authorize_url);
         }
-        Err(e) => ui.set_pair_hint(format!("Cannot start pairing: {e}").into()),
+        Err(e) => {
+            ui.set_pair_state(2);
+            ui.set_pair_hint(format!("Cannot start pairing: {e}").into());
+        }
     }
 }
 
-/// Shows the current view's rows.
-fn apply_view(ui: &MainWindow, camera: &CameraControl) {
-    with_state(|s| {
-        let rows = dashboard::build_rows(&s.dash_config, s.view_index);
-        s.camera_row = rows.iter().position(|r| r.kind == dashboard::ROW_CAMERA);
-        *camera.entity.lock().unwrap() = s.camera_row.and_then(|i| rows[i].a.as_ref()).map(|c| c.entity.clone());
-        let data: Vec<RowData> = rows.iter().map(|r| dashboard::row_data(r, &s.states)).collect();
-        s.model.set_vec(data);
-        s.rows = rows;
-        let title = s.views.get(s.view_index).cloned().unwrap_or_default();
-        ui.set_views(ModelRc::new(VecModel::from(s.views.iter().map(SharedString::from).collect::<Vec<_>>())));
-        ui.set_view_index(s.view_index as i32);
-        if s.connected {
-            ui.set_header_info(title.into());
-        }
-    });
-    ui.invoke_scroll_top();
-}
-
-fn refresh_more_info(ui: &MainWindow) {
-    with_state(|s| {
-        if let Some((entity, name)) = &s.more_info {
-            ui.set_more_info(dashboard::more_info(entity, name.as_deref(), &s.states));
-        }
-    });
-}
-
-fn open_more_info(ui: &MainWindow, entity: &str) {
-    with_state(|s| {
-        let name = s
-            .rows
-            .iter()
-            .flat_map(|r| [r.a.as_ref(), r.b.as_ref()])
-            .flatten()
-            .find(|c| c.entity == entity)
-            .and_then(|c| c.name.clone());
-        s.more_info = Some((entity.to_string(), name));
-    });
-    refresh_more_info(ui);
-    ui.set_more_info_open(true);
-}
-
-fn about_text(s: &UiState) -> String {
-    let ip = s
-        .config
-        .as_ref()
-        .and_then(|c| pairing::local_ip_towards(&c.ha_host_port()))
-        .map(|ip| ip.to_string())
-        .unwrap_or_else(|| "–".into());
-    let uptime = std::fs::read_to_string("/proc/uptime")
-        .ok()
-        .and_then(|u| u.split_whitespace().next().and_then(|v| v.parse::<f64>().ok()))
-        .map(|secs| format!("{}h {}m", (secs / 3600.0) as u64, ((secs % 3600.0) / 60.0) as u64))
-        .unwrap_or_default();
-    let mem = std::fs::read_to_string("/proc/meminfo").ok().map(|m| {
-        let get = |k: &str| {
-            m.lines().find(|l| l.starts_with(k)).and_then(|l| l.split_whitespace().nth(1)).and_then(|v| v.parse::<u64>().ok())
-        };
-        match (get("MemTotal:"), get("MemAvailable:")) {
-            (Some(t), Some(a)) => format!("{} MB used of {} MB", (t - a) / 1024, t / 1024),
-            _ => String::new(),
-        }
-    });
-    let temp = hw::soc_temperature().map(|t| format!("{t:.0} °C")).unwrap_or_default();
-    let lux = s.lux.map(|l| format!("{l:.0} lx")).unwrap_or_else(|| "–".into());
-    format!(
-        "App {VERSION} · IP {ip}\nHome Assistant: {} ({})\nUptime {uptime} · {} · SoC {temp} · light {lux}",
-        s.config.as_ref().map(|c| c.ha_url.as_str()).unwrap_or("not configured"),
-        if s.connected { "connected" } else { "not connected" },
-        mem.unwrap_or_default()
-    )
-}
-
-fn settings_data(s: &UiState) -> SettingsData {
-    let current = &s.settings.dashboard;
-    let effective = if current.is_empty() {
-        s.config.as_ref().map(|c| c.dashboard.clone()).unwrap_or_default()
-    } else {
-        current.clone()
-    };
-    SettingsData {
-        theme_index: match s.settings.theme.as_str() {
-            "light" => 1,
-            "auto" => 2,
-            _ => 0,
-        },
-        brightness: s.settings.brightness as f32 / 100.0,
-        auto_brightness: s.settings.auto_brightness,
-        screensaver_index: s.settings.screensaver_index(),
-        style_index: if s.settings.screensaver_style == "black" { 1 } else { 0 },
-        proximity: s.settings.proximity_wake,
-        dashboards: ModelRc::new(VecModel::from(
-            s.dashboards.iter().map(|(_, t)| SharedString::from(t.as_str())).collect::<Vec<_>>(),
-        )),
-        dashboard_index: s.dashboards.iter().position(|(u, _)| *u == effective).map(|i| i as i32).unwrap_or(-1),
-        display_mode: if s.settings.display_mode == "assistant" { 1 } else { 0 },
-        volume: s.settings.volume as f32 / 100.0,
-        about: about_text(s).into(),
-    }
-}
-
-fn refresh_settings(ui: &MainWindow) {
-    let data = with_state(|s| settings_data(s));
-    ui.set_settings(data);
-}
-
-fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
+fn handle_event(ui: &AppWindow, event: Event) {
     match event {
         Event::Status { text, connected } => {
             ui.set_connected(connected);
-            ui.set_status(text.clone().into());
-            let title = with_state(|s| {
+            with_state(|s| {
                 s.connected = connected;
-                s.views.get(s.view_index).cloned().unwrap_or_default()
+                if connected {
+                    s.ever_connected = true;
+                    s.offline_since = None;
+                } else if s.offline_since.is_none() {
+                    s.offline_since = Some(Instant::now());
+                }
+                s.offline_text = text;
             });
-            ui.set_header_info(if connected { title.into() } else { text.into() });
-            refresh_assistant(ui);
+            update_connection_screens(ui);
+            refresh_pages(ui);
         }
         Event::NeedPairing => {
             ui.set_paired(false);
             ui.set_connected(false);
-            ui.set_header_info("Waiting for login".into());
+            ui.set_connecting(false);
             let start = with_state(|s| {
                 let first = !s.pairing_started;
                 s.pairing_started = true;
@@ -791,27 +1271,29 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
                 start_pairing(ui);
             }
         }
-        Event::Dashboard(config) => {
+        Event::Dashboard(_) => {
             ui.set_paired(true);
-            let need_list = with_state(|s| {
-                s.views = dashboard::view_titles(&config);
-                if s.view_index >= s.views.len() {
-                    s.view_index = 0;
-                }
-                s.dash_config = config;
-                s.dashboards.is_empty()
-            });
-            apply_view(ui, camera);
+            let need_list = with_state(|s| s.dashboards.is_empty());
             if need_list {
-                // Also gives the "Dashboard" select of the panel's device its options.
+                // Gives the "Dashboard" select of the panel's device its options.
                 send(Command::ListDashboards);
             }
         }
         Event::States(changes) => {
-            let refresh_details = with_state(|s| {
+            #[cfg(feature = "gpu")]
+            if gpu::FRAME_STATS.load(Ordering::Relaxed) {
+                let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() % 100_000).unwrap_or(0);
+                let ids: Vec<&str> = changes.iter().map(|(id, _)| id.as_str()).take(6).collect();
+                eprintln!("nspanel-app: states at {t} ms: {} {:?}", changes.len(), ids);
+            }
+            let watched = with_state(|s| {
+                let mut new_person = false;
                 for (id, st) in &changes {
                     match st {
                         Some(st) => {
+                            if id.starts_with("person.") && !s.states.contains_key(id) {
+                                new_person = true;
+                            }
                             s.states.insert(id.clone(), st.clone());
                         }
                         None => {
@@ -819,30 +1301,19 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
                         }
                     }
                 }
-                for (i, row) in s.rows.iter().enumerate() {
-                    let touches =
-                        |c: &Option<dashboard::CardRef>| c.as_ref().is_some_and(|c| changes.iter().any(|(id, _)| *id == c.entity));
-                    if (touches(&row.a) || touches(&row.b)) && i < s.model.row_count() {
-                        s.model.set_row_data(i, dashboard::row_data(row, &s.states));
-                    }
-                }
-                for (i, row) in s.assistant_rows.iter().enumerate() {
-                    let touches =
-                        |c: &Option<dashboard::CardRef>| c.as_ref().is_some_and(|c| changes.iter().any(|(id, _)| *id == c.entity));
-                    if (touches(&row.a) || touches(&row.b)) && i < s.assistant_model.row_count() {
-                        s.assistant_model.set_row_data(i, dashboard::row_data(row, &s.states));
-                    }
-                }
-                let c = assistant::effective(&s.settings);
-                let home = changes.iter().any(|(id, _)| *id == c.weather_entity || *id == c.media_player_entity);
-                (s.more_info.as_ref().is_some_and(|(e, _)| changes.iter().any(|(id, _)| id == e)), home)
+                let weather = weather_entity(s);
+                let media = media_entity(s);
+                let touches = changes.iter().any(|(id, _)| {
+                    *id == weather || *id == media || id == "sun.sun" || id == "zone.home" || id.starts_with("person.")
+                });
+                (touches, new_person)
             });
-            let (refresh_details, refresh_home) = refresh_details;
-            if refresh_details {
-                refresh_more_info(ui);
+            let (touches, new_person) = watched;
+            if touches {
+                refresh_pages(ui);
             }
-            if refresh_home {
-                refresh_assistant(ui);
+            if new_person {
+                apply_panel_config(ui);
             }
         }
         Event::Dashboards(list) => {
@@ -851,14 +1322,9 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
                 let _ = s.device_notify.send(());
                 s.dashboards = list;
             });
-            refresh_settings(ui);
         }
         Event::Panel(config) => {
-            let changed = with_state(|s| {
-                let new = match &config {
-                    Some(v) => assistant::from_integration(v),
-                    None => settings::AssistantConfig::default(),
-                };
+            with_state(|s| {
                 let web = config.as_ref().map(settings::WebConfig::from_integration).unwrap_or_default();
                 if web != s.settings.web {
                     eprintln!("nspanel-app: dashboard mode settings from Home Assistant: {web:?}");
@@ -871,18 +1337,13 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
                     s.settings.reporting = reporting;
                     s.settings.save();
                 }
-                if new != s.settings.assistant {
-                    eprintln!("nspanel-app: assistant mode settings from Home Assistant: {new:?}");
-                    s.settings.assistant = new;
-                    s.settings.save();
-                    true
-                } else {
-                    false
+                s.panel_config = config;
+                // Development settings stay on top of what Home Assistant sends.
+                if let Some(dev) = s.dev_config.clone() {
+                    overlay(&mut s.panel_config, &dev);
                 }
             });
-            if changed {
-                apply_assistant_config(ui);
-            }
+            apply_panel_config(ui);
         }
         Event::Show(v) => handle_show(ui, &v),
         Event::Command { key, .. } if key == "screenshot" => {
@@ -899,198 +1360,78 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
         Event::Command { key, value } => {
             let control = with_state(|s| panel_device::command(&key, &value, &s.device.lock().unwrap()));
             match control {
-                Some(control) => apply_control(ui, control, camera),
+                Some(control) => apply_control(ui, control),
                 None => eprintln!("nspanel-app: unknown command from Home Assistant: {key} = {value}"),
             }
         }
+        Event::Notes { kind, notes } => {
+            info::update(&kind, &notes);
+            with_state(|s| info::refresh(ui, s));
+        }
         Event::Forecast { hourly, items } => {
             with_state(|s| if hourly { s.forecast_hourly = items } else { s.forecast_daily = items });
-            refresh_assistant(ui);
+            refresh_pages(ui);
         }
     }
 }
 
+/// The connecting screen (paired, no data yet) and the offline screen (no
+/// network / Home Assistant away for a while after it worked).
+fn update_connection_screens(ui: &AppWindow) {
+    with_state(|s| {
+        if s.dev_screens {
+            return;
+        }
+        let paired = ui.get_paired();
+        ui.set_connecting(paired && !s.connected && !s.ever_connected && s.config.is_some());
+        let away = !s.connected && s.ever_connected && s.offline_since.is_some_and(|t| t.elapsed() > Duration::from_secs(15));
+        let cause = if !away {
+            0
+        } else if s.offline_text.contains("network") {
+            1
+        } else {
+            2
+        };
+        if ui.get_offline_cause() != cause {
+            ui.set_offline_cause(cause);
+        }
+    });
+}
+
 /// Carries out a request from Home Assistant (ESPHome API or the PanelOS
 /// integration) on the UI thread.
-fn apply_control(ui: &MainWindow, control: esphome::Control, camera: &CameraControl) {
+fn apply_control(ui: &AppWindow, control: esphome::Control) {
     match control {
-        esphome::Control::Setting(k, v) => on_setting(ui, &k, &v, camera),
+        esphome::Control::Setting(k, v) => on_setting(ui, &k, &v),
         esphome::Control::Screen(true) => wake(ui),
         esphome::Control::Screen(false) => with_state(|s| {
             if !s.screensaver {
                 start_screensaver(ui, s);
             }
         }),
-        esphome::Control::Timer { kind, id, name, left, active, .. } => handle_timer(ui, kind, id, name, left, active),
+        esphome::Control::Timer { kind, id, name, left, total, active } => handle_timer(ui, kind, id, name, left, total, active),
     }
 }
 
-/// Maps a button on the panel to a Home Assistant service call.
-fn command_for(entity: &str, action: &str, states: &HashMap<String, EntityState>) -> Option<Command> {
-    let domain = entity.split('.').next().unwrap_or("").to_string();
-    let st = states.get(entity);
-    let attr = |k: &str| st.and_then(|s| s.attrs.get(k)).and_then(Value::as_f64);
-    let call = |domain: &str, service: &str, data: Value| Command::CallService {
-        domain: domain.into(),
-        service: service.into(),
-        entity_id: entity.into(),
-        data,
-    };
-    Some(match (domain.as_str(), action) {
-        ("cover", "open") => call("cover", "open_cover", json!({})),
-        ("cover", "close") => call("cover", "close_cover", json!({})),
-        ("cover", "stop") => call("cover", "stop_cover", json!({})),
-        ("climate", "temp_up") | ("climate", "temp_down") => {
-            let step = attr("target_temp_step").unwrap_or(0.5);
-            let current = attr("temperature")?;
-            let delta = if action == "temp_up" { step } else { -step };
-            let min = attr("min_temp").unwrap_or(7.0);
-            let max = attr("max_temp").unwrap_or(35.0);
-            let target = ((current + delta) / step).round() * step;
-            call("climate", "set_temperature", json!({"temperature": target.clamp(min, max)}))
-        }
-        ("climate", "mode_toggle") | ("climate", "toggle") => {
-            let state = st.map(|s| s.state.as_str()).unwrap_or("off");
-            let modes = st.map(|s| dashboard::attr_list(s, "hvac_modes")).unwrap_or_default();
-            let next = if state == "off" {
-                if modes.iter().any(|m| m == "heat") { "heat".to_string() } else { modes.into_iter().find(|m| m != "off")? }
-            } else {
-                "off".to_string()
-            };
-            call("climate", "set_hvac_mode", json!({"hvac_mode": next}))
-        }
-        ("media_player", "play_pause") => call("media_player", "media_play_pause", json!({})),
-        ("media_player", "next") => call("media_player", "media_next_track", json!({})),
-        ("media_player", "prev") => call("media_player", "media_previous_track", json!({})),
-        ("media_player", "vol_up") | ("media_player", "vol_down") => {
-            let v = attr("volume_level").unwrap_or(0.0);
-            let delta = if action == "vol_up" { 0.05 } else { -0.05 };
-            call("media_player", "volume_set", json!({"volume_level": (((v + delta) * 100.0).round() / 100.0).clamp(0.0, 1.0)}))
-        }
-        (_, "toggle") => {
-            let service_domain = match domain.as_str() {
-                "light" | "switch" | "fan" | "input_boolean" | "media_player" | "cover" | "automation" => domain.as_str(),
-                _ => "homeassistant",
-            };
-            call(service_domain, "toggle", json!({}))
-        }
-        _ => return None,
-    })
-}
-
-fn slider_command(entity: &str, what: &str, v: f32, states: &HashMap<String, EntityState>) -> Option<Command> {
-    let st = states.get(entity)?;
-    let v = v.clamp(0.0, 1.0) as f64;
-    let call = |domain: &str, service: &str, data: Value| Command::CallService {
-        domain: domain.into(),
-        service: service.into(),
-        entity_id: entity.into(),
-        data,
-    };
-    Some(match what {
-        "brightness" if v < 0.01 => call("light", "turn_off", json!({})),
-        "brightness" => call("light", "turn_on", json!({"brightness_pct": (v * 100.0).round().max(1.0)})),
-        "ct" => {
-            let min = dashboard::attr_f64(st, "min_color_temp_kelvin").unwrap_or(2000.0);
-            let max = dashboard::attr_f64(st, "max_color_temp_kelvin").unwrap_or(6500.0);
-            call("light", "turn_on", json!({"color_temp_kelvin": (min + v * (max - min)).round()}))
-        }
-        "hue" => call("light", "turn_on", json!({"hs_color": [(v * 360.0).round(), 100]})),
-        "position" => call("cover", "set_cover_position", json!({"position": (v * 100.0).round()})),
-        "volume" => call("media_player", "volume_set", json!({"volume_level": (v * 100.0).round() / 100.0})),
-        _ => return None,
-    })
-}
-
-fn select_command(entity: &str, what: &str, index: i32, states: &HashMap<String, EntityState>) -> Option<Command> {
-    let st = states.get(entity)?;
-    let (list_attr, service, field) = match what {
-        "hvac" => ("hvac_modes", "set_hvac_mode", "hvac_mode"),
-        "fan" => ("fan_modes", "set_fan_mode", "fan_mode"),
-        "preset" => ("preset_modes", "set_preset_mode", "preset_mode"),
-        "swing" => ("swing_modes", "set_swing_mode", "swing_mode"),
-        "source" => ("source_list", "select_source", "source"),
-        _ => return None,
-    };
-    let value = dashboard::attr_list(st, list_attr).get(usize::try_from(index).ok()?)?.clone();
-    let domain = entity.split('.').next().unwrap_or("");
-    Some(Command::CallService {
-        domain: domain.into(),
-        service: service.into(),
-        entity_id: entity.into(),
-        data: json!({ field: value }),
-    })
-}
-
-fn update_camera_mode(ui: &MainWindow, camera: &CameraControl) {
-    // A camera shown by a show request: its entity while it is open, then
-    // back to the dashboard's camera.
-    with_state(|s| {
-        let wanted = match &s.camera_override {
-            Some(e) if ui.get_camera_full() => Some(e.clone()),
-            Some(_) => {
-                s.camera_override = None;
-                None
-            }
-            None => None,
-        };
-        let entity = wanted.or_else(|| s.camera_row.and_then(|i| s.rows[i].a.as_ref()).map(|c| c.entity.clone()));
-        let mut current = camera.entity.lock().unwrap();
-        if *current != entity {
-            *current = entity;
-        }
-    });
-    let dashboard_hidden = ui.get_display_mode() == 1 && !ui.get_show_dashboard();
-    let mode = if !ui.get_paired() || ui.get_screensaver() || ui.get_settings_open() || ui.get_more_info_open() {
-        camera::OFF
-    } else if ui.get_camera_full() {
-        camera::FULL
-    } else if dashboard_hidden {
-        camera::OFF
-    } else {
-        with_state(|s| {
-            let Some(idx) = s.camera_row else { return camera::OFF };
-            let offset: f32 = dashboard::LIST_PADDING_TOP
-                + s.rows[..idx].iter().map(|r| dashboard::row_height(r.kind) + dashboard::ROW_SPACING).sum::<f32>();
-            let top = offset + ui.get_scroll_y();
-            let bottom = top + dashboard::row_height(dashboard::ROW_CAMERA);
-            if bottom > 0.0 && top < ui.get_list_height() { camera::LIST } else { camera::OFF }
-        })
-    };
-    camera.mode.store(mode, Ordering::SeqCst);
-}
-
-fn wake(ui: &MainWindow) {
+fn wake(ui: &AppWindow) {
     platform::note_activity();
-    if ui.get_screensaver() {
-        ui.set_screensaver(false);
-        with_state(|s| s.screensaver = false);
+    if ui.get_screensaver_on() {
+        ui.set_screensaver_on(false);
+        with_state(|s| {
+            s.screensaver = false;
+            s.screen_off = false;
+        });
     }
 }
 
-fn start_screensaver(ui: &MainWindow, s: &mut UiState) {
+fn start_screensaver(ui: &AppWindow, s: &mut UiState) {
     s.screensaver = true;
-    ui.set_screensaver_black(s.settings.screensaver_style == "black");
-    ui.set_more_info_open(false);
-    ui.set_settings_open(false);
-    ui.set_camera_full(false);
-    ui.set_show_dashboard(false);
-    ui.set_weather_open(false);
-    ui.set_media_open(false);
-    ui.set_message_open(false);
     s.show_until = None;
-    s.more_info = None;
-    let weather = assistant::effective(&s.settings).weather_entity;
-    let (info, icon) = match s.states.get(&weather) {
-        Some(w) if !weather.is_empty() => (
-            dashboard::weather_text(w),
-            icons::glyph(dashboard::weather_icon(&w.state)).map(String::from).unwrap_or_default(),
-        ),
-        _ => (String::new(), String::new()),
-    };
-    ui.set_saver_info(info.into());
-    ui.set_saver_icon(icon.into());
-    ui.set_screensaver(true);
+    ui.set_set_view(0);
+    ui.set_strip_on(false);
+    let style = s.panel_config.as_ref().and_then(|c| c.get("saver_style")).and_then(Value::as_i64).unwrap_or(1) as i32;
+    ui.set_saver_style(style);
+    ui.set_screensaver_on(true);
 }
 
 /// Weight of a new once-a-minute reading in its average (about five minutes).
@@ -1221,12 +1562,17 @@ fn auto_dark(s: &mut UiState) -> bool {
     }
 }
 
-fn update_theme(ui: &MainWindow, s: &mut UiState) {
+fn update_theme(ui: &AppWindow, s: &mut UiState) {
     let dark = match s.settings.theme.as_str() {
         "light" => false,
         "auto" => auto_dark(s),
         _ => true,
     };
+    ui.set_theme_mode(match s.settings.theme.as_str() {
+        "light" => 0,
+        "auto" => 2,
+        _ => 1,
+    });
     if s.dark != Some(dark) {
         s.dark = Some(dark);
         ui.global::<Theme>().set_dark(dark);
@@ -1259,7 +1605,7 @@ fn fade_backlight() {
 
 /// Web view: the page for the chosen dashboard, rendered only while it is
 /// on the screen.
-fn update_web(ui: &MainWindow, s: &mut UiState) {
+fn update_web(ui: &AppWindow, s: &mut UiState) {
     let Some(view) = s.web.clone() else { return };
     let Some(config) = s.config.as_ref() else { return };
     let dashboard = if !s.settings.web.dashboard.is_empty() {
@@ -1279,45 +1625,24 @@ fn update_web(ui: &MainWindow, s: &mut UiState) {
         }
     }
     view.load(&url, !s.settings.web.show_header, !s.settings.web.show_sidebar);
-    let on_screen = ui.get_paired()
-        && (ui.get_display_mode() == 0 || ui.get_show_dashboard())
-        && !s.screensaver
-        && !ui.get_settings_open();
+    let on_screen = ui.get_web_shown() && !s.screensaver && ui.get_set_view() == 0;
     view.set_visible(on_screen);
 }
 
 /// Runs twice a second: theme, screensaver, proximity wake, backlight target.
-fn tick(ui: &MainWindow) {
+fn tick(ui: &AppWindow) {
+    update_connection_screens(ui);
     with_state(|s| update_web(ui, s));
-    let wake_now = with_state(|s| {
+    let result = with_state(|s| {
         s.lux = s.light.lux();
         update_theme(ui, s);
         // Layer opened by a show request: close it when its time is up.
         if s.show_until.is_some_and(|t| Instant::now() >= t) {
             s.show_until = None;
-            ui.set_message_open(false);
-            ui.set_weather_open(false);
-            ui.set_media_open(false);
-            if s.camera_override.is_some() {
-                ui.set_camera_full(false);
-            }
-            if s.settings.display_mode == "assistant" {
-                ui.set_show_dashboard(false);
-            }
+            ui.set_strip_on(false);
+            ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
         }
-        // Assistant mode: back to the home screen after a minute untouched.
         let idle = platform::idle_time();
-        if s.settings.display_mode == "assistant"
-            && s.show_until.is_none()
-            && idle > Duration::from_secs(60)
-            && (ui.get_show_dashboard() || ui.get_more_info_open() || ui.get_weather_open() || ui.get_media_open())
-        {
-            ui.set_show_dashboard(false);
-            ui.set_more_info_open(false);
-            ui.set_weather_open(false);
-            ui.set_media_open(false);
-            s.more_info = None;
-        }
         // Proximity test view: on while the file exists. Its first line is
         // the integration time to test (a change of the line learns the
         // resting level anew), the rest a prompt shown above the reading.
@@ -1352,7 +1677,7 @@ fn tick(ui: &MainWindow) {
         }
         // Screensaver (not while Home Assistant shows something)
         let timeout = s.settings.screensaver_seconds;
-        let showing = s.show_until.is_some() || ui.get_message_open() || s.camera_override.is_some() || s.proximity_test.is_some();
+        let showing = s.show_until.is_some() || s.proximity_test.is_some() || ui.get_voice_on() || s.ringing.is_some();
         if !s.screensaver && !showing && timeout > 0 && ui.get_paired() && !ui.get_setup() && idle > Duration::from_secs(timeout as u64) {
             start_screensaver(ui, s);
         }
@@ -1366,7 +1691,7 @@ fn tick(ui: &MainWindow) {
             }
         }
         // Backlight
-        let target = if s.screensaver && s.settings.screensaver_style == "black" && !wake_now {
+        let target = if s.screensaver && (s.settings.screensaver_style == "black" || s.screen_off) && !wake_now {
             0.0
         } else {
             let normal = if s.settings.auto_brightness {
@@ -1378,18 +1703,14 @@ fn tick(ui: &MainWindow) {
         };
         s.brightness_target = target;
         report_device(s);
-        let refresh = s.assistant_refreshed.elapsed() > Duration::from_secs(60);
-        if refresh {
-            s.assistant_refreshed = Instant::now();
-        }
-        (wake_now, refresh)
+        (wake_now, s.weather_refreshed.elapsed() > Duration::from_secs(60))
     });
-    let (wake_now, refresh) = wake_now;
+    let (wake_now, refresh) = result;
     if wake_now {
         wake(ui);
     }
     if refresh {
-        refresh_assistant(ui);
+        refresh_pages(ui);
     }
 }
 
@@ -1416,7 +1737,7 @@ fn touch_test_text(step: usize) -> String {
     }
 }
 
-fn show_proximity_test(ui: &MainWindow, s: &UiState, raw: f64) {
+fn show_proximity_test(ui: &AppWindow, s: &UiState, raw: f64) {
     let rest = s.proximity.rest().unwrap_or(raw);
     let signal = raw - rest;
     let margin = s.proximity.margin();
@@ -1438,7 +1759,7 @@ fn show_proximity_test(ui: &MainWindow, s: &UiState, raw: f64) {
     ui.set_prox_test_near(s.proximity.near());
 }
 
-fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
+fn on_setting(ui: &AppWindow, key: &str, value: &str) {
     let mut reload = false;
     match key {
         "restart_app" => {
@@ -1454,7 +1775,7 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
             if let Some(auth) = with_state(|s| s.auth.clone()) {
                 auth.forget();
             }
-            ui.set_settings_open(false);
+            ui.set_set_view(0);
             send(Command::Reload);
             return;
         }
@@ -1466,7 +1787,7 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
             "auto_brightness" => s.settings.auto_brightness = value == "true",
             "brightness" => s.settings.brightness = value.parse::<u8>().unwrap_or(70).clamp(1, 100),
             "screensaver_index" => {
-                if let Some((secs, _)) = value.parse::<usize>().ok().and_then(|i| SCREENSAVER_CHOICES.get(i)) {
+                if let Some((secs, _)) = value.parse::<usize>().ok().and_then(|i| settings::SCREENSAVER_CHOICES.get(i)) {
                     s.settings.screensaver_seconds = *secs;
                 }
             }
@@ -1475,7 +1796,6 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
             "display_mode" => {
                 if matches!(value, "dashboard" | "assistant") {
                     s.settings.display_mode = value.to_string();
-                    ui.set_show_dashboard(false);
                 }
             }
             "wake_words" => {
@@ -1498,7 +1818,6 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
                 if let Some((url, _)) = value.parse::<usize>().ok().and_then(|i| s.dashboards.get(i)) {
                     s.settings.dashboard = url.clone();
                     *s.shared.dashboard.lock().unwrap() = url.clone();
-                    s.view_index = 0;
                     reload = true;
                 }
             }
@@ -1506,15 +1825,76 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
         }
         s.settings.save();
     });
-    refresh_settings(ui);
-    if key == "display_mode" {
-        apply_assistant_config(ui);
-    } else {
-        refresh_assistant(ui);
-    }
+    apply_panel_config(ui);
     if reload {
         send(Command::Reload);
-        let _ = camera;
+    }
+}
+
+/// Taps, holds and drags from the pages and layers (`act(what, value)`).
+fn handle_act(ui: &AppWindow, what: &str, value: &str) {
+    platform::note_activity();
+    match what {
+        "saver.wake" => wake(ui),
+        "timers.stop" => stop_ringing(ui),
+        w if w.starts_with("timers.") || w.starts_with("watch.") || w.starts_with("alarms.") => timers_act(ui, w, value),
+        "voice.close" => ui.set_voice_on(false),
+        "strip.close" => ui.set_strip_on(false),
+        "shade.open" => shade::open(ui),
+        "shade.peek" => shade::fill(ui),
+        // A home widget's view: clock → timers, date / event → calendar,
+        // weather now / curve / hours / days → weather, music → music.
+        "home.tap" => {
+            let kind = match value {
+                "0" => "timers",
+                "1" | "3" => "calendar",
+                "2" | "4" | "5" | "6" => "weather",
+                "7" => "music",
+                _ => return,
+            };
+            if !go_to_page(ui, kind) {
+                open_temporary_page(ui, kind);
+            }
+        }
+        w if w.starts_with("set.") => shade::act(ui, w, value),
+        w if w.starts_with("quick.") => quick::act(ui, w, value),
+        w if w.starts_with("thermo.") => thermo::act(ui, w, value),
+        w if w.starts_with("cam.") => cam::act(ui, w, value),
+        w if w.starts_with("cal.") => cal::act(ui, w, value),
+        w if w.starts_with("todo.") => todo::act(ui, w, value),
+        w if w.starts_with("info.") => info::act(ui, w, value),
+        "shade.close" => ui.set_set_view(0),
+        "music.picker" | "music.picker-close" | "music.show" | "music.transfer" | "music.group" => mus::act(ui, what, value),
+        "music.play" | "music.next" | "music.prev" | "music.shuffle" | "music.repeat" | "music.volume" | "music.seek" => {
+            let entity = with_state(|s| media_entity(s));
+            if entity.is_empty() {
+                return;
+            }
+            match what {
+                "music.play" => call("media_player", "media_play_pause", &entity, json!({})),
+                "music.next" => call("media_player", "media_next_track", &entity, json!({})),
+                "music.prev" => call("media_player", "media_previous_track", &entity, json!({})),
+                "music.shuffle" => call("media_player", "shuffle_set", &entity, json!({"shuffle": !ui.get_music_shuffle()})),
+                "music.repeat" => {
+                    let next = match ui.get_music_repeat() {
+                        0 => "all",
+                        1 => "one",
+                        _ => "off",
+                    };
+                    call("media_player", "repeat_set", &entity, json!({"repeat": next}))
+                }
+                "music.volume" => {
+                    let v: f64 = value.parse().unwrap_or(0.5);
+                    call("media_player", "volume_set", &entity, json!({"volume_level": (v.clamp(0.0, 1.0) * 100.0).round() / 100.0}))
+                }
+                "music.seek" => {
+                    let v: f64 = value.parse().unwrap_or(0.0);
+                    call("media_player", "media_seek", &entity, json!({"seek_position": v.max(0.0)}))
+                }
+                _ => {}
+            }
+        }
+        _ => eprintln!("nspanel-app: act {what} {value} (not handled yet)"),
     }
 }
 
@@ -1534,13 +1914,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let settings = Settings::load();
     let config = AppConfig::load();
-    let fixture = std::env::var("NSPANEL_FIXTURE").ok();
     // mDNS: announces the ESPHome API, so Home Assistant finds the panel;
     // browses for Home Assistant when the setup screen asks for it.
     let mdns_browser = Arc::new(mdns::Browser::default());
-    if fixture.is_none() {
-        mdns::spawn(esphome::mdns_service(), mdns_browser.clone());
-    }
+    mdns::spawn(esphome::mdns_service(), mdns_browser.clone());
     let shared = Arc::new(ha::Shared::default());
     let dashboard_name = if !settings.dashboard.is_empty() {
         settings.dashboard.clone()
@@ -1548,20 +1925,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         config.as_ref().map(|c| c.dashboard.clone()).unwrap_or_default()
     };
     *shared.dashboard.lock().unwrap() = dashboard_name;
-    // The same entities and forecast as apply_assistant_config() sets later,
-    // so the first session needs no reload.
-    *shared.extra_entities.lock().unwrap() = assistant::extra_entities(&settings);
-    *shared.forecast_entity.lock().unwrap() = assistant::effective(&settings).weather_entity.clone();
+    // The same entities and forecast as apply_panel_config() sets later, so the
+    // first session needs no reload (the integration's settings come with it).
+    *shared.extra_entities.lock().unwrap() = vec!["sun.sun".into(), "zone.home".into(), settings.weather_entity.clone()];
+    *shared.forecast_entity.lock().unwrap() = settings.weather_entity.clone();
     let auth = config
         .as_ref()
         .ok()
         .map(|c| Arc::new(Auth::load(&c.ha_url, PathBuf::from(format!("{PERSIST_DIR}/ha_auth.json")))));
 
     // Home Assistant client first, the display after: the first screen shows
-    // the right time and current states instead of 1970 and empty tiles.
+    // the right time and current states instead of 1970 and empty pages.
     let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
-    let ha_early = match (&config, &auth, &fixture) {
-        (Ok(c), Some(a), None) => {
+    let ha_early = match (&config, &auth) {
+        (Ok(c), Some(a)) => {
             let (event_tx, event_rx) = mpsc::channel::<Event>();
             ha::spawn(c.ws_url(), shared.clone(), a.clone(), cmd_rx, move |event| {
                 let _ = event_tx.send(event);
@@ -1575,7 +1952,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The boot splash owns the display until now: it shows the finished logo,
     // gives up DRM master and keeps the picture until this app has drawn.
     let splash = splash_handoff();
-    let display = Rc::new(std::cell::RefCell::new(display::Display::open("/dev/dri/card0")?));
+    let display = Rc::new(RefCell::new(display::Display::open("/dev/dri/card0")?));
     // Display buffers the web helper renders into while the web view is all
     // there is on the screen.
     let web_buffers = display.borrow_mut().create_web_buffers(3);
@@ -1609,10 +1986,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     slint::platform::set_platform(Box::new(platform::PanelPlatform::new(Rc::clone(&window), display, touch)))
         .map_err(|e| format!("set_platform: {e:?}"))?;
 
-    let ui = MainWindow::new()?;
-    update_clock(&ui);
+    let ui = AppWindow::new()?;
     // Hand-over picture: the splash's last frame (same logo, same pixels),
-    // then it shrinks and fades over the UI.
+    // then it fades over the UI.
     {
         // intro.rgba (tools/splash/storyboard.py): u16 x, y, w, h + RGBA.
         let raw: &[u8] = include_bytes!("../assets/intro.rgba");
@@ -1656,15 +2032,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let model = Rc::new(VecModel::<RowData>::default());
-    ui.set_rows(model.clone().into());
-    let assistant_model = Rc::new(VecModel::<RowData>::default());
-    ui.set_assistant_rows(assistant_model.clone().into());
     let phrase = wake_phrase(&settings.wake_words);
-    ui.set_screensaver_labels(ModelRc::new(VecModel::from(
-        SCREENSAVER_CHOICES.iter().map(|(_, l)| SharedString::from(*l)).collect::<Vec<_>>(),
-    )));
-
     let device = shared.device.clone();
     let (device_notify, device_rx) = mpsc::channel::<()>();
     let mic_muted = Arc::new(std::sync::atomic::AtomicBool::new(settings.mic_muted));
@@ -1673,6 +2041,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     hw::set_volume(settings.volume);
     let ringing_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     ui.set_mic_muted(settings.mic_muted);
+    ui.set_voice_assistant("".into());
+    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
     STATE.with(|s| {
         *s.borrow_mut() = Some(UiState {
             config: config.as_ref().ok().cloned(),
@@ -1680,17 +2050,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             shared: shared.clone(),
             commands: None,
             settings,
-            dash_config: Value::Null,
-            views: Vec::new(),
-            view_index: 0,
-            rows: Vec::new(),
             states: HashMap::new(),
-            model,
-            camera_row: None,
             pairing_started: false,
-            more_info: None,
             dashboards: Vec::new(),
             connected: false,
+            ever_connected: false,
+            offline_since: None,
+            offline_text: String::new(),
             screensaver: false,
             backlight: hw::Backlight::open(),
             light: hw::LightSensor::open(),
@@ -1701,7 +2067,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             lux: None,
             dark: None,
             theme_pending: None,
-            started: Instant::now(),
             device: device.clone(),
             device_notify,
             last_reported_lux: None,
@@ -1716,41 +2081,52 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             web_pull: None,
             web_pulled: None,
             timers: HashMap::new(),
+            timer_seq: 0,
+            dismissed_timers: Default::default(),
+            laps: Vec::new(),
+            lap_at: 0.0,
             ringing: None,
             ringing_flag: ringing_flag.clone(),
             mic_muted: mic_muted.clone(),
             wake_words: wake_words.clone(),
             player: player.clone(),
-            assist_hide_at: None,
+            voice_hide_at: None,
+            panel_config: None,
             forecast_hourly: Vec::new(),
             forecast_daily: Vec::new(),
-            assistant_rows: Vec::new(),
-            assistant_model,
             wake_phrase: phrase,
+            wake_hint: Default::default(),
+            quick_title: String::new(),
             art_url: None,
             art_tx: None,
+            art: None,
             show_until: None,
-            camera_override: None,
-            assistant_reset: 0,
-            assistant_refreshed: Instant::now(),
+            digits: Default::default(),
+            prev_digits: Default::default(),
+            flip_at: None,
+            weather_refreshed: Instant::now(),
+            dev_screens: false,
+            dnd: false,
+            dev_config: None,
+            temp_page: None,
+            screen_off: false,
+            weather_key: String::new(),
+            dev_wx: None,
         })
     });
-    apply_assistant_config(&ui);
-    let _ = with_state(|s| s.started);
     // The look before the first frame (auto theme: the light sensor now).
     with_state(|s| {
         s.lux = s.light.lux();
         update_theme(&ui, s);
     });
-
-    let camera = CameraControl::default();
+    apply_panel_config(&ui);
+    update_clock(&ui);
 
     // Voice satellite and ESPHome native API (settings, sensors, Assist).
     let (to_api_tx, to_api_rx) = mpsc::channel::<voice::ToApi>();
     let (from_api_tx, from_api_rx) = mpsc::channel::<voice::FromApi>();
     let link = esphome::VoiceLink { to_api: to_api_rx, from_api: from_api_tx, active_wake_words: wake_words.clone() };
     let weak = ui.as_weak();
-    let cam = camera.clone();
     // Only Home Assistant (and app.json api_allow) may use the ESPHome API.
     let api_config = config.as_ref().ok().cloned();
     let api_peers = move || {
@@ -1758,13 +2134,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     esphome::spawn(device, device_rx, link, api_peers, move |control| {
         let weak = weak.clone();
-        let cam = cam.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
-            apply_control(&ui, control, &cam);
+            apply_control(&ui, control);
         });
     });
-    if fixture.is_none() {
+    // NSPANEL_NO_VOICE: no microphone, wake words or player (measurements).
+    if std::env::var_os("NSPANEL_NO_VOICE").is_none() {
         let weak = ui.as_weak();
         voice::spawn(
             to_api_tx,
@@ -1790,127 +2166,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let ringing = ringing_flag.clone();
         roam::spawn(move || !voice::busy() && !speaking.load(Ordering::SeqCst) && !ringing.load(Ordering::SeqCst));
     }
-    let weak = ui.as_weak();
-    ui.on_stop_timer(move || {
-        if let Some(ui) = weak.upgrade() {
-            with_state(|s| {
-                s.ringing = None;
-                s.ringing_flag.store(false, Ordering::SeqCst);
-            });
-            ui.set_timer_ringing(false);
-        }
-    });
-    let weak = ui.as_weak();
-    ui.on_dismiss_assist(move || {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_assist_state(0);
-        }
-    });
-
-    ui.on_media_action(|action| {
-        let cmd = with_state(|s| {
-            let c = assistant::effective(&s.settings);
-            command_for(&c.media_player_entity, action.as_str(), &s.states)
-        });
-        if let Some(cmd) = cmd {
-            send(cmd);
-        }
-    });
-    ui.on_media_volume(|v| {
-        let cmd = with_state(|s| {
-            let c = assistant::effective(&s.settings);
-            slider_command(&c.media_player_entity, "volume", v, &s.states)
-        });
-        if let Some(cmd) = cmd {
-            send(cmd);
-        }
-    });
-    ui.on_overlay_closed(|| with_state(|s| s.show_until = None));
 
     // UI callbacks
     let weak = ui.as_weak();
-    let cam = camera.clone();
-    ui.on_action(move |entity, action| {
-        let Some(ui) = weak.upgrade() else { return };
-        let entity = entity.as_str();
-        if action == "tap" {
-            let details = with_state(|s| dashboard::has_details(entity, &s.states));
-            if details {
-                open_more_info(&ui, entity);
-                return;
-            }
-            let toggleable = matches!(entity.split('.').next(), Some("light" | "switch" | "fan" | "input_boolean" | "automation" | "media_player"));
-            if !toggleable {
-                return;
-            }
-        }
-        let action = if action == "tap" { "toggle" } else { action.as_str() };
-        if let Some(cmd) = with_state(|s| command_for(entity, action, &s.states)) {
-            send(cmd);
-        }
-        let _ = &cam;
-    });
-    let weak = ui.as_weak();
-    let cam = camera.clone();
-    ui.on_view_selected(move |i| {
+    ui.on_act(move |what, value| {
         if let Some(ui) = weak.upgrade() {
-            with_state(|s| s.view_index = i.max(0) as usize);
-            apply_view(&ui, &cam);
-        }
-    });
-    ui.on_more_info_slider(|what, v| {
-        let cmd = with_state(|s| {
-            let entity = s.more_info.as_ref()?.0.clone();
-            slider_command(&entity, what.as_str(), v, &s.states)
-        });
-        if let Some(cmd) = cmd {
-            send(cmd);
-        }
-    });
-    ui.on_more_info_select(|what, i| {
-        let cmd = with_state(|s| {
-            let entity = s.more_info.as_ref()?.0.clone();
-            select_command(&entity, what.as_str(), i, &s.states)
-        });
-        if let Some(cmd) = cmd {
-            send(cmd);
-        }
-    });
-    ui.on_more_info_action(|action| {
-        let cmd = with_state(|s| {
-            let entity = s.more_info.as_ref()?.0.clone();
-            command_for(&entity, action.as_str(), &s.states)
-        });
-        if let Some(cmd) = cmd {
-            send(cmd);
-        }
-    });
-    ui.on_more_info_closed(|| with_state(|s| s.more_info = None));
-    let weak = ui.as_weak();
-    ui.on_settings_opened(move || {
-        send(Command::ListDashboards);
-        if let Some(ui) = weak.upgrade() {
-            refresh_settings(&ui);
+            handle_act(&ui, what.as_str(), value.as_str());
         }
     });
     let weak = ui.as_weak();
-    let cam = camera.clone();
-    ui.on_setting_changed(move |k, v| {
+    ui.global::<Act>().on_act(move |what, value| {
         if let Some(ui) = weak.upgrade() {
-            on_setting(&ui, k.as_str(), v.as_str(), &cam);
+            handle_act(&ui, what.as_str(), value.as_str());
         }
     });
     let weak = ui.as_weak();
-    ui.on_wake(move || {
+    ui.on_page_changed(move |now| {
+        platform::note_activity();
+        // Pages that fetch while on screen (cameras) start or stop.
         if let Some(ui) = weak.upgrade() {
-            wake(&ui);
+            leave_temporary_page(&ui, now);
+            with_state(|s| cam::refresh(&ui, s));
+        }
+    });
+    let weak = ui.as_weak();
+    ui.on_theme_mode_changed(move |m| {
+        if let Some(ui) = weak.upgrade() {
+            on_setting(&ui, "theme", match m {
+                0 => "light",
+                1 => "dark",
+                _ => "auto",
+            });
         }
     });
 
-    // Timers: clock, sensors/backlight/screensaver, camera visibility, dev scroll.
-    let clock = slint::Timer::default();
+    // Timers: clock, sensors/backlight/screensaver, dev commands.
+    let clock_timer = slint::Timer::default();
     let weak = ui.as_weak();
-    clock.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
+    clock_timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
         if let Some(ui) = weak.upgrade() {
             update_clock(&ui);
         }
@@ -1924,22 +2217,74 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let fader = slint::Timer::default();
     fader.start(slint::TimerMode::Repeated, Duration::from_millis(20), fade_backlight);
-    let camera_timer = slint::Timer::default();
+    let dev_timer = slint::Timer::default();
     let weak = ui.as_weak();
-    let cam = camera.clone();
-    camera_timer.start(slint::TimerMode::Repeated, Duration::from_millis(400), move || {
-        if let Some(ui) = weak.upgrade() {
-            update_camera_mode(&ui, &cam);
-        }
-    });
-    let dev_scroll = slint::Timer::default();
-    let weak = ui.as_weak();
-    dev_scroll.start(slint::TimerMode::Repeated, Duration::from_millis(200), move || {
+    dev_timer.start(slint::TimerMode::Repeated, Duration::from_millis(200), move || {
         let dev: Vec<String> = std::mem::take(&mut *platform::DEV_COMMANDS.lock().unwrap());
         for line in dev {
             let (Some(ui), Ok(v)) = (weak.upgrade(), serde_json::from_str::<Value>(&line)) else { continue };
             if let Some(show) = v.get("show") {
                 handle_show(&ui, show);
+            }
+            if let Some(a) = v.get("act").and_then(Value::as_array) {
+                handle_act(&ui, a.first().and_then(Value::as_str).unwrap_or(""), a.get(1).and_then(Value::as_str).unwrap_or(""));
+            }
+            if let Some(p) = v.get("page").and_then(Value::as_i64) {
+                ui.set_page(p as i32);
+            }
+            // Development: the system screens on demand, frame statistics.
+            if let Some(b) = v.get("connecting").and_then(Value::as_bool) {
+                with_state(|s| s.dev_screens = true);
+                ui.set_connecting(b);
+            }
+            if let Some(c) = v.get("offline").and_then(Value::as_i64) {
+                with_state(|s| s.dev_screens = true);
+                ui.set_offline_cause(c as i32);
+            }
+            if let Some(list) = v.get("pages").and_then(Value::as_array) {
+                let slots: Vec<PageSlot> =
+                    list.iter().filter_map(Value::as_str).map(|k| PageSlot { kind: k.into(), variant: 0 }).collect();
+                ui.set_page(0);
+                ui.set_pages(ModelRc::new(VecModel::from(slots)));
+            }
+            if let Some(o) = v.get("wx") {
+                with_state(|s| s.dev_wx = o.as_object().map(|_| o.clone()));
+                refresh_pages(&ui);
+            }
+            // Development: integration settings merged over the current ones
+            // (e.g. {"config": {"pages": [...]}}), as if Home Assistant sent them.
+            if let Some(c) = v.get("config").filter(|c| c.is_object()) {
+                with_state(|s| {
+                    let mut dev = s.dev_config.clone().unwrap_or_else(|| json!({}));
+                    if let (Some(d), Some(n)) = (dev.as_object_mut(), c.as_object()) {
+                        for (k, val) in n {
+                            d.insert(k.clone(), val.clone());
+                        }
+                    }
+                    s.dev_config = Some(dev.clone());
+                    overlay(&mut s.panel_config, &dev);
+                });
+                apply_panel_config(&ui);
+            }
+            if v.get("dev_screens").and_then(Value::as_bool) == Some(false) {
+                with_state(|s| s.dev_screens = false);
+            }
+            if let Some(b) = v.get("pair").and_then(Value::as_bool) {
+                ui.set_paired(!b);
+            }
+            if let Some(b) = v.get("dark").and_then(Value::as_bool) {
+                ui.global::<Theme>().set_dark(b);
+            }
+            #[cfg(feature = "gpu")]
+            if let Some(b) = v.get("frame_stats").and_then(Value::as_bool) {
+                gpu::FRAME_STATS.store(b, Ordering::SeqCst);
+            }
+            if let Some(a) = v.get("assist").and_then(Value::as_array) {
+                ui.set_voice_heard(a.get(1).and_then(Value::as_str).unwrap_or("").into());
+                ui.set_voice_answer(a.get(2).and_then(Value::as_str).unwrap_or("").into());
+                let st = a.first().and_then(Value::as_i64).unwrap_or(0) as i32;
+                ui.set_voice_state(st.max(1));
+                ui.set_voice_on(st > 0);
             }
             // Measurements: another page in the web view, or a scripted scroll
             // of the page's largest scrolling element (no touch, no click).
@@ -1967,59 +2312,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     view.dev(&format!("SCROLLTEST {px} {ms}"));
                 }
             }
-            if let Some(a) = v.get("assist").and_then(Value::as_array) {
-                ui.set_assist_heard(a.get(1).and_then(Value::as_str).unwrap_or("").into());
-                ui.set_assist_answer(a.get(2).and_then(Value::as_str).unwrap_or("").into());
-                ui.set_assist_state(a.first().and_then(Value::as_i64).unwrap_or(0) as i32);
-            }
-        }
-        if platform::SCROLL_REQUEST.swap(false, Ordering::SeqCst) {
-            if let Some(ui) = weak.upgrade() {
-                let before = ui.get_scroll_y();
-                ui.invoke_scroll_by(380.0);
-                if ui.get_scroll_y() == before {
-                    ui.invoke_scroll_top();
-                }
-            }
         }
     });
-
-    // Development: draw a saved dashboard config + states without Home Assistant.
-    if let Some(path) = fixture {
-        let fixture: Value = serde_json::from_str(&std::fs::read_to_string(&path)?)?;
-        handle_event(&ui, Event::Dashboard(fixture["config"].clone()), &camera);
-        let states = fixture["states"]
-            .as_object()
-            .map(|m| {
-                m.iter()
-                    .map(|(id, v)| {
-                        let st = EntityState {
-                            state: v["state"].as_str().unwrap_or_default().to_string(),
-                            attrs: v["attributes"].as_object().cloned().unwrap_or_default(),
-                        };
-                        (id.clone(), Some(st))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        handle_event(&ui, Event::States(states), &camera);
-        handle_event(&ui, Event::Status { text: "Fixture".into(), connected: true }, &camera);
-        if fixture.get("panel").is_some() {
-            handle_event(&ui, Event::Panel(Some(fixture["panel"].clone())), &camera);
-        }
-        for (key, hourly) in [("forecast_hourly", true), ("forecast_daily", false)] {
-            if let Some(items) = fixture[key].as_array() {
-                handle_event(&ui, Event::Forecast { hourly, items: items.clone() }, &camera);
-            }
-        }
-        handle_event(
-            &ui,
-            Event::Dashboards(vec![("".into(), "Overview".into()), ("wall-panel".into(), "Wall panel".into())]),
-            &camera,
-        );
-        ui.run()?;
-        return Ok(());
-    }
 
     let (config, auth) = match (config, auth) {
         (Ok(c), Some(a)) => (c, a),
@@ -2027,14 +2321,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let e = result.err().unwrap_or_else(|| "no login store".into());
             eprintln!("nspanel-app: not configured ({e}): setup screen");
             ui.set_paired(true);
-            ui.set_header_info("Not configured".into());
             start_setup(&ui, mdns_browser, &e);
             ui.run()?;
             return Ok(());
         }
     };
     ui.set_paired(auth.is_paired());
-    ui.set_status("Connecting to Home Assistant…".into());
+    ui.set_connecting(auth.is_paired());
+    ui.set_pair_ha_url(config.ha_url.clone().into());
 
     with_state(|s| s.commands = Some(cmd_tx));
 
@@ -2042,14 +2336,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // to the UI thread, the ones from the wait first, in order.
     if let Some((events, buffered)) = ha_early {
         let weak = ui.as_weak();
-        let cam = camera.clone();
         std::thread::spawn(move || {
             for event in buffered.into_iter().chain(events.iter()) {
                 let weak = weak.clone();
-                let cam = cam.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(ui) = weak.upgrade() {
-                        handle_event(&ui, event, &cam);
+                        handle_event(&ui, event);
                     }
                 });
             }
@@ -2061,10 +2353,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
-                ui.set_has_art(img.is_some());
-                if let Some(img) = img {
-                    ui.set_media_art(slint::Image::from_rgb8(img));
-                }
+                with_state(|s| s.art = img.map(slint::Image::from_rgb8));
+                refresh_pages(&ui);
             }
         });
     });
@@ -2072,9 +2362,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s.art_tx = Some(art_tx);
         s.art_url = None;
     });
-    refresh_assistant(&ui);
+    refresh_pages(&ui);
 
-    if web::available() {
+    // NSPANEL_NO_WEB: no web view (measurements).
+    if web::available() && std::env::var_os("NSPANEL_NO_WEB").is_none() {
         // Only the newest frame matters: one UI job at a time takes it.
         type Latest = Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, webstats::FrameTimes)>;
         let latest: Arc<std::sync::Mutex<Latest>> = Arc::default();
@@ -2134,15 +2425,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && !(ui.get_web_overlay()
                         || ui.get_web_pull() > 0.0
                         || ui.get_touch_test()
-                        || ui.get_more_info_open()
-                        || ui.get_weather_open()
-                        || ui.get_media_open()
-                        || ui.get_camera_full()
-                        || ui.get_settings_open()
-                        || ui.get_screensaver()
-                        || ui.get_message_open()
-                        || ui.get_assist_state() > 0
-                        || ui.get_timer_ringing()
+                        || ui.get_set_view() > 0
+                        || ui.get_screensaver_on()
+                        || ui.get_strip_on()
+                        || ui.get_voice_on()
+                        || ui.get_timers_ringing()
                         || ui.get_setup()
                         || ui.get_prox_test()
                         || ui.get_intro_visible())
@@ -2159,6 +2446,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             update_web(&ui, s);
         });
         ui.set_web_active(true);
+        apply_panel_config(&ui);
     }
     let weak = ui.as_weak();
     ui.on_touch_test_event(move |kind, x, y| {
@@ -2202,9 +2490,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.on_web_touch(move |kind, x, y| {
         let Some(ui) = weak.upgrade() else { return };
         // Inside with_state only the decision; UI callbacks run after it.
-        // The top edge (24 px) belongs to the settings swipe and never reaches
-        // the page; a pull down from below it, on content scrolled to its top,
-        // reloads the page (pull to refresh).
+        // The top edge (24 px) belongs to the quick settings swipe and never
+        // reaches the page; a pull down from below it, on content scrolled to
+        // its top, reloads the page (pull to refresh).
         let (swiped, pulled) = with_state(|s| {
             let Some(view) = s.web.clone() else { return (false, None) };
             match kind {
@@ -2254,25 +2542,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_web_pull(p);
         }
         if swiped {
-            if ui.get_display_mode() == 1 {
-                ui.set_show_dashboard(false);
-            } else {
-                ui.set_settings_open(true);
-                ui.invoke_settings_opened();
-            }
+            shade::open(&ui);
         }
     });
 
-    let weak = ui.as_weak();
-    camera::spawn(config.ha_url.clone(), auth, camera.clone(), move |frame| {
-        let weak = weak.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(ui) = weak.upgrade() {
-                ui.set_camera_image(slint::Image::from_rgb8(frame));
-            }
-        });
-    });
-
+    let _ = VERSION;
     ui.run()?;
     Ok(())
 }

@@ -1,0 +1,70 @@
+{
+ "sunset": {
+  "day": [
+   "#ff2bd6",
+   "#ff3ce0",
+   "#b04cff"
+  ],
+  "night": [
+   "#8c6bff",
+   "#a98cff",
+   "#7b5cff"
+  ],
+  "dawn": [
+   "#ff8fd8",
+   "#ffb0d8",
+   "#c89cff"
+  ]
+ },
+ "city": {
+  "day": [
+   "#ff4fb0",
+   "#ff7ab8",
+   "#ff7ab8"
+  ],
+  "night": [
+   "#00e5ff",
+   "#00e5ff",
+   "#00e5ff"
+  ],
+  "dawn": [
+   "#ff9ad0",
+   "#ffb4d6",
+   "#ffb4d6"
+  ]
+ },
+ "beach": {
+  "day": [
+   "#ff7a59",
+   "#ff8f6b",
+   "#ff8f6b"
+  ],
+  "night": [
+   "#00d8e0",
+   "#5fe6ff",
+   "#5fe6ff"
+  ],
+  "dawn": [
+   "#ff8fd8",
+   "#ffb0d8",
+   "#ffb0d8"
+  ]
+ },
+ "stars": {
+  "day": [
+   "#e05cff",
+   "#e87bff",
+   "#e87bff"
+  ],
+  "night": [
+   "#b967ff",
+   "#c58cff",
+   "#c58cff"
+  ],
+  "dawn": [
+   "#c99cff",
+   "#e0b8ff",
+   "#e0b8ff"
+  ]
+ }
+}

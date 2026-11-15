@@ -9,6 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::rc::{Rc, Weak};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use drm014::control::{Device as _, FbCmd2Flags};
@@ -69,6 +70,23 @@ struct Buffers {
     shown: RefCell<Option<gbm::BufferObject<u32>>>,
     /// Waiting for its page flip.
     pending: RefCell<Option<gbm::BufferObject<u32>>>,
+    /// A picture of the shown buffer is being read (set when the read ends).
+    shown_read: RefCell<Option<Arc<AtomicBool>>>,
+    /// Buffers that left the screen while a picture of them was being read:
+    /// kept from GBM (not drawn into) until the read ends.
+    held: RefCell<Vec<(gbm::BufferObject<u32>, Arc<AtomicBool>)>>,
+}
+
+impl Buffers {
+    /// A buffer leaves the screen: back to GBM, or held while it is read.
+    fn retire(&self, bo: gbm::BufferObject<u32>) {
+        if let Some(done) = self.shown_read.borrow_mut().take() {
+            if !done.load(Ordering::Acquire) {
+                self.held.borrow_mut().push((bo, done));
+            }
+        }
+        self.held.borrow_mut().retain(|(_, done)| !done.load(Ordering::Acquire));
+    }
 }
 
 /// The window: Slint's window plus the Skia renderer on the GBM surface.
@@ -106,7 +124,75 @@ impl WindowAdapter for GpuWindow {
     }
 }
 
+/// Development: log frame times every 5 s (NSPANEL_FRAME_STATS or the dev input).
+pub static FRAME_STATS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+struct Stats {
+    since: std::time::Instant,
+    last: Option<std::time::Instant>,
+    render: Vec<f32>,
+    interval: Vec<f32>,
+}
+
+fn pct(v: &mut [f32], p: f32) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v[((v.len() as f32 - 1.0) * p).round() as usize]
+}
+
+fn note_frame(render_ms: f32, start: std::time::Instant) {
+    use std::sync::atomic::Ordering;
+    if !FRAME_STATS.load(Ordering::Relaxed) {
+        return;
+    }
+    let wait = FLIP_WAIT.with(|w| w.replace(0.0));
+    let recorded = T_RECORDED.with(|c| c.take());
+    let present = T_PRESENT.with(|c| c.take());
+    if render_ms > 40.0 {
+        let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() % 100_000).unwrap_or(0);
+        let ms = |a: std::time::Instant, b: std::time::Instant| b.saturating_duration_since(a).as_secs_f32() * 1000.0;
+        let (rec, flush) = match (recorded, present) {
+            (Some(r), Some(p)) => (ms(start, r), ms(r, p)),
+            _ => (-1.0, -1.0),
+        };
+        let swap = present.map(|p| render_ms - ms(start, p) - wait).unwrap_or(-1.0);
+        eprintln!("nspanel-app: slow frame at {t} ms: render {render_ms:.1} ms = items {rec:.1} + flush {flush:.1} + flip wait {wait:.1} + swap {swap:.1}");
+    }
+    STATS.with(|st| {
+        let mut st = st.borrow_mut();
+        let now = std::time::Instant::now();
+        let s = st.get_or_insert_with(|| Stats { since: now, last: None, render: Vec::new(), interval: Vec::new() });
+        if let Some(l) = s.last.replace(now) {
+            s.interval.push(now.duration_since(l).as_secs_f32() * 1000.0);
+        }
+        s.render.push(render_ms);
+        let secs = s.since.elapsed().as_secs_f32();
+        if secs >= 5.0 {
+            let n = s.render.len();
+            eprintln!(
+                "nspanel-app: frames {:.1}/s | interval p50 {:.1} p99 {:.1} max {:.1} ms | render p50 {:.1} p99 {:.1} max {:.1} ms",
+                n as f32 / secs,
+                pct(&mut s.interval, 0.5),
+                pct(&mut s.interval, 0.99),
+                pct(&mut s.interval, 1.0),
+                pct(&mut s.render, 0.5),
+                pct(&mut s.render, 0.99),
+                pct(&mut s.render, 1.0)
+            );
+            *st = None;
+        }
+    });
+}
+
 thread_local! {
+    /// Time spent waiting for the previous page flip inside the last render (ms).
+    static FLIP_WAIT: Cell<f32> = const { Cell::new(0.0) };
+    /// Phases of the frame being drawn: items recorded, pre-present reached.
+    static T_RECORDED: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    static T_PRESENT: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    static STATS: RefCell<Option<Stats>> = const { RefCell::new(None) };
     /// Called with what is on the screen (width, height, RGB rows top down)
     /// after the next frame is drawn.
     static READBACK: RefCell<Vec<Box<dyn FnOnce(u32, u32, Vec<u8>)>>> = const { RefCell::new(Vec::new()) };
@@ -209,9 +295,19 @@ impl GpuWindow {
             #[allow(unreachable_patterns)]
             _ => false,
         };
+        if std::env::var_os("NSPANEL_FRAME_STATS").is_some() {
+            FRAME_STATS.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
         let gl_surface = OpenGLSurface::new_with_config(handles.clone(), handles, size, None, config, Some(&filter))?;
         let renderer = SkiaRenderer::new_with_surface(&SkiaSharedContext::default(), Box::new(gl_surface));
-        let buffers = Rc::new(Buffers { surface, device, shown: RefCell::new(None), pending: RefCell::new(None) });
+        let buffers = Rc::new(Buffers {
+            surface,
+            device,
+            shown: RefCell::new(None),
+            pending: RefCell::new(None),
+            shown_read: RefCell::new(None),
+            held: RefCell::new(Vec::new()),
+        });
 
         // Before each swap: the previous frame must have reached the screen
         // (at most one frame queued), then anything that reads the frame.
@@ -219,6 +315,7 @@ impl GpuWindow {
             let display = Rc::downgrade(&display);
             let buffers = Rc::downgrade(&buffers);
             renderer.set_pre_present_callback(Some(Box::new(move || {
+                T_PRESENT.with(|c| c.set(Some(std::time::Instant::now())));
                 if let (Some(display), Some(buffers)) = (display.upgrade(), buffers.upgrade()) {
                     wait_for_flip(&display, &buffers);
                 }
@@ -245,7 +342,25 @@ impl GpuWindow {
         if !self.needs_redraw.take() && !self.window.has_active_animations() && !readback {
             return Ok(false);
         }
-        let _ = self.renderer.render()?;
+        let started = std::time::Instant::now();
+        {
+            use i_slint_renderer_skia::SkiaRendererExt;
+            let _ = self.renderer.render_transformed_with_post_callback(
+                0.0,
+                (0.0, 0.0),
+                self.size,
+                Some(&|_| T_RECORDED.with(|c| c.set(Some(std::time::Instant::now())))),
+            )?;
+        }
+        note_frame(started.elapsed().as_secs_f32() * 1000.0, started);
+        // Development: when the window stops / starts asking for animation frames.
+        if FRAME_STATS.load(Ordering::Relaxed) {
+            thread_local!(static ACTIVE: Cell<bool> = const { Cell::new(false) });
+            let active = self.window.has_active_animations();
+            if ACTIVE.with(|a| a.replace(active)) != active {
+                eprintln!("nspanel-app: animations {}", if active { "running" } else { "stopped" });
+            }
+        }
         self.present().map_err(|e| PlatformError::Other(format!("present: {e}")))?;
         Ok(true)
     }
@@ -275,6 +390,77 @@ impl GpuWindow {
     pub fn flipped(&self) {
         flip_done(&self.display, &self.buffers);
     }
+
+    /// A picture of the UI frame on screen, read off the UI thread from the
+    /// buffer itself: no extra frame, no GPU stall (reading back from GL waits
+    /// for the GPU and then reads uncached memory, ~65 ms on the panel, which
+    /// was a visible hitch every time Home Assistant's page asked for the
+    /// screen). Gives the sink back when no UI buffer is on screen.
+    pub fn read_screen(&self, sink: ScreenSink) -> Result<(), ScreenSink> {
+        let shown = self.buffers.shown.borrow();
+        let Some(bo) = shown.as_ref() else { return Err(sink) };
+        if !self.display.borrow().gbm_on_screen() {
+            return Err(sink);
+        }
+        // Only plain linear buffers can be read as pixels.
+        let linear = matches!(bo.modifier(), gbm::Modifier::Linear | gbm::Modifier::Invalid);
+        if !linear {
+            return Err(sink);
+        }
+        SCREEN_SINKS.with(|s| s.borrow_mut().push(sink));
+        // A read of this buffer is under way: its picture serves this sink too.
+        if self.buffers.shown_read.borrow().as_ref().is_some_and(|d| !d.load(Ordering::Acquire)) {
+            return Ok(());
+        }
+        let (width, height, stride) = (self.size.width, self.size.height, bo.stride());
+        let fd = match bo.fd() {
+            Ok(fd) => fd,
+            Err(e) => {
+                eprintln!("nspanel-app: screen buffer export: {e}");
+                let sinks = SCREEN_SINKS.with(|s| std::mem::take(&mut *s.borrow_mut()));
+                drop(shown);
+                for sink in sinks {
+                    read_back_next_frame(sink);
+                }
+                return Ok(());
+            }
+        };
+        let done = Arc::new(AtomicBool::new(false));
+        *self.buffers.shown_read.borrow_mut() = Some(done.clone());
+        std::thread::spawn(move || {
+            let started = std::time::Instant::now();
+            let rgb = read_dmabuf(&fd, width, height, stride);
+            drop(fd);
+            done.store(true, Ordering::Release);
+            if FRAME_STATS.load(Ordering::Relaxed) {
+                eprintln!("nspanel-app: screen picture read in {:.1} ms (off the UI thread)", started.elapsed().as_secs_f32() * 1000.0);
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                let sinks = SCREEN_SINKS.with(|s| std::mem::take(&mut *s.borrow_mut()));
+                match rgb {
+                    Some(rgb) => {
+                        for sink in sinks {
+                            sink(width, height, rgb.clone());
+                        }
+                    }
+                    None => {
+                        eprintln!("nspanel-app: screen buffer could not be mapped, reading the next frame back");
+                        for sink in sinks {
+                            read_back_next_frame(sink);
+                        }
+                    }
+                }
+            });
+        });
+        Ok(())
+    }
+}
+
+/// What on-screen pictures are waiting for (see [`GpuWindow::read_screen`]).
+pub type ScreenSink = Box<dyn FnOnce(u32, u32, Vec<u8>)>;
+
+thread_local! {
+    static SCREEN_SINKS: RefCell<Vec<ScreenSink>> = const { RefCell::new(Vec::new()) };
 }
 
 /// After a flip: the buffer that was pending is on screen now (if the UI's
@@ -285,18 +471,68 @@ fn flip_done(display: &Rc<RefCell<Display>>, buffers: &Buffers) {
         return;
     }
     if d.gbm_on_screen() {
-        if let Some(bo) = buffers.pending.borrow_mut().take() {
-            *buffers.shown.borrow_mut() = Some(bo);
+        let next = buffers.pending.borrow_mut().take();
+        if let Some(bo) = next {
+            let old = buffers.shown.borrow_mut().replace(bo);
+            if let Some(old) = old {
+                buffers.retire(old);
+            }
         }
     } else {
         // A web buffer is on screen: the UI's buffers are free again.
-        buffers.shown.borrow_mut().take();
+        let old = buffers.shown.borrow_mut().take();
+        if let Some(old) = old {
+            buffers.retire(old);
+        }
         buffers.pending.borrow_mut().take();
     }
 }
 
+/// What a scanout buffer shows, read through its dma-buf (XRGB8888, linear):
+/// RGB rows top down. Runs off the UI thread; the buffer is not drawn into
+/// meanwhile (it is on screen, or held by [`Buffers::retire`]).
+fn read_dmabuf(fd: &OwnedFd, width: u32, height: u32, stride: u32) -> Option<Vec<u8>> {
+    use std::os::fd::AsRawFd;
+    const DMA_BUF_IOCTL_SYNC: libc::c_ulong = 0x4008_6200;
+    const SYNC_READ: u64 = 1;
+    const SYNC_END: u64 = 4;
+    let len = (stride * height) as usize;
+    // SAFETY: a read-only shared mapping of the whole buffer, unmapped below.
+    let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_SHARED, fd.as_raw_fd(), 0) };
+    if ptr == libc::MAP_FAILED {
+        return None;
+    }
+    let sync = |flags: u64| {
+        // SAFETY: DMA_BUF_IOCTL_SYNC with a struct dma_buf_sync { u64 flags }.
+        unsafe { libc::ioctl(fd.as_raw_fd(), DMA_BUF_IOCTL_SYNC as _, &flags as *const u64) };
+    };
+    sync(SYNC_READ);
+    // One copy out of the (uncached) mapping, then the conversion in cached memory.
+    let mut raw = vec![0u8; len];
+    // SAFETY: the mapping is `len` bytes long and readable.
+    raw.copy_from_slice(unsafe { std::slice::from_raw_parts(ptr as *const u8, len) });
+    sync(SYNC_READ | SYNC_END);
+    // SAFETY: unmaps the mapping made above.
+    unsafe { libc::munmap(ptr, len) };
+    let (w, h, s) = (width as usize, height as usize, stride as usize);
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        // XRGB8888 little endian: B, G, R, X.
+        for px in raw[y * s..y * s + w * 4].chunks_exact(4) {
+            rgb.extend_from_slice(&[px[2], px[1], px[0]]);
+        }
+    }
+    Some(rgb)
+}
+
 /// Blocks until no page flip is pending (inside rendering, before the swap).
 fn wait_for_flip(display: &Rc<RefCell<Display>>, buffers: &Buffers) {
+    let started = std::time::Instant::now();
+    wait_for_flip_inner(display, buffers);
+    FLIP_WAIT.with(|w| w.set(w.get() + started.elapsed().as_secs_f32() * 1000.0));
+}
+
+fn wait_for_flip_inner(display: &Rc<RefCell<Display>>, buffers: &Buffers) {
     loop {
         let (pending, fd) = {
             let d = display.borrow();

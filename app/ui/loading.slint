@@ -2,6 +2,64 @@
 // itself in Morse (P = dot dash dash dot) over the calm Morse pattern, again
 // and again, until the page is ready; then it fades and the dashboard shows.
 
+// The PanelOS mark writing itself in Morse (P = dot dash dash dot), as in the
+// start-up film: one unit is 100 ms, a dot pops in over 160 ms, a dash grows
+// over its three units, cubic ease-out, nothing bounces; one round takes
+// 2.4 s and the mark fades at its end. Dots are Signal; dashes Paper on dark
+// grounds and Ink on light ones. No glow: the brand keeps the glow for the
+// start-up film itself.
+export component MorseWrite inherits Rectangle {
+    in property <length> u: 16px;
+    in property <bool> dark: true;
+    property <float> ms: mod(animation-tick() / 1ms, 2400);
+    pure function ease(t: float) -> float {
+        return 1 - Math.pow(1 - clamp(t, 0, 1), 3);
+    }
+    pure function grow(start: float, len: float) -> float {
+        return root.ease((root.ms - start) / len);
+    }
+    property <float> fade: 1 - clamp((root.ms - 1900) / 400, 0, 1);
+    property <color> dash-col: root.dark ? #F5F3EE : #101114;
+    width: 5 * root.u;
+    height: 3 * root.u;
+
+    Rectangle {
+        opacity: root.fade;
+        // dot
+        Rectangle {
+            x: 0; y: 0;
+            width: root.u; height: root.u;
+            border-radius: root.u / 2;
+            background: #FF4A1C;
+            opacity: root.grow(0, 160);
+        }
+        // dash
+        Rectangle {
+            x: 2 * root.u; y: 0;
+            width: max(root.u, 3 * root.u * root.grow(200, 300)); height: root.u;
+            border-radius: root.u / 2;
+            background: root.dash-col;
+            opacity: root.ms >= 200 ? 1 : 0;
+        }
+        // dash
+        Rectangle {
+            x: 0; y: 2 * root.u;
+            width: max(root.u, 3 * root.u * root.grow(600, 300)); height: root.u;
+            border-radius: root.u / 2;
+            background: root.dash-col;
+            opacity: root.ms >= 600 ? 1 : 0;
+        }
+        // dot
+        Rectangle {
+            x: 4 * root.u; y: 2 * root.u;
+            width: root.u; height: root.u;
+            border-radius: root.u / 2;
+            background: #FF4A1C;
+            opacity: root.grow(1000, 160);
+        }
+    }
+}
+
 export component WebLoading inherits Rectangle {
     // false: fades out (the page is ready).
     in property <bool> loading: true;
@@ -17,16 +75,6 @@ export component WebLoading inherits Rectangle {
     opacity: root.loading ? 1 : 0;
     animate opacity { duration: 450ms; easing: ease-out; }
 
-    // Morse timing, unit 100 ms: one round of the mark in 2.4 s.
-    property <float> ms: mod(animation-tick() / 1ms, 2400);
-    property <length> u: 16px;
-    // Grows in over 160 ms (dots) or over the dash's length (dashes).
-    pure function grow(start: float, len: float) -> float {
-        return clamp((root.ms - start) / len, 0, 1);
-    }
-    // The whole mark fades at the end of each round.
-    property <float> fade: 1 - clamp((root.ms - 1900) / 400, 0, 1);
-
     Image {
         source: root.background-image;
         width: 480px;
@@ -35,45 +83,11 @@ export component WebLoading inherits Rectangle {
         y: (parent.height - self.height) / 2;
     }
 
-    mark := Rectangle {
-        width: 5 * root.u;
-        height: 3 * root.u;
+    mark := MorseWrite {
+        u: 16px;
+        dark: true;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        opacity: root.fade;
-
-        // dot
-        Rectangle {
-            x: 0; y: 0;
-            width: root.u; height: root.u;
-            border-radius: root.u / 2;
-            background: #FF4A1C;
-            opacity: root.grow(0, 160);
-        }
-        // dash
-        Rectangle {
-            x: 2 * root.u; y: 0;
-            width: max(root.u, 3 * root.u * root.grow(200, 300)); height: root.u;
-            border-radius: root.u / 2;
-            background: #F5F3EE;
-            opacity: root.ms >= 200 ? 1 : 0;
-        }
-        // dash
-        Rectangle {
-            x: 0; y: 2 * root.u;
-            width: max(root.u, 3 * root.u * root.grow(600, 300)); height: root.u;
-            border-radius: root.u / 2;
-            background: #F5F3EE;
-            opacity: root.ms >= 600 ? 1 : 0;
-        }
-        // dot
-        Rectangle {
-            x: 4 * root.u; y: 2 * root.u;
-            width: root.u; height: root.u;
-            border-radius: root.u / 2;
-            background: #FF4A1C;
-            opacity: root.grow(1000, 160);
-        }
     }
 
     for line[i] in [root.line-a, root.line-b]: Text {
