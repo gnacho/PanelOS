@@ -49,6 +49,16 @@ The Marketplace is built into Home Assistant since 2026.11 (it replaces HACS).
 5. From the unpacked ZIP, copy the folder `custom_components/panelos` into that `custom_components` folder. The result is `config/custom_components/panelos`, with the `__init__.py` and `manifest.json` files directly inside.
 6. Restart Home Assistant: **Settings → System**, the power icon at the top right, **Restart Home Assistant**.
 
+## Upgrading from 0.0.3
+
+Up to PanelOS 0.0.3 the integration was called NSPanel Pro (`nspanel_pro`); since 0.0.4 it is PanelOS (`panelos`), and the panel is a device of its own.
+
+1. Write the new image to the panel (install guide, "Updating later").
+2. Install PanelOS as above, then remove the old **NSPanel Pro** integration (**Settings → Devices & services**, its entry, **Delete**) and the folder `custom_components/nspanel_pro`.
+3. Restart Home Assistant and add PanelOS ([Set up](#set-up)); set its options again (weather, media player, tiles, dashboard).
+
+The panel's settings and sensors move from its ESPHome device to the PanelOS device and keep their entity ids, history and settings; the ESPHome device keeps the voice satellite.
+
 ## Set up
 
 1. **Settings → Devices & services → Add integration**, search for **PanelOS** and select it.

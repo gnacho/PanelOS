@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.0.4
+
+**Upgrading from 0.0.3**: the integration is now `panelos` instead of `nspanel_pro`. Write the new image to the panel, install PanelOS in Home Assistant, remove the old NSPanel Pro integration and its `custom_components/nspanel_pro` folder, restart Home Assistant and add PanelOS ([docs/home_assistant.md](docs/home_assistant.md#upgrading-from-003)).
 
 ### Home Assistant
 
@@ -18,6 +20,10 @@
 - Noto Sans as a second font in the web view: card texts no longer show boxes for characters such as Mushroom's separator.
 - Dashboard mode is a secondary function next to the assistant; the docs say what a dashboard for the panel should look like (light and simple).
 - **Home Assistant dashboards in a web view**: WPE WebKit on the GPU (Panfrost), logged in as the panel's own user like the Home Assistant apps, custom cards included; header and sidebar can be hidden. A swipe down from the top edge opens the settings. The browser is a separate SquashFS bundle on the persistent partition; without it the panel shows its native dashboard.
+
+### Brand
+
+- PanelOS has its own look: the mark (P in Morse, the red dots and the dashes), the logo, the Morse pattern, guidelines and a kit with icons, logos, a start-up film and its sound (`branding/`).
 
 ### Installation
 

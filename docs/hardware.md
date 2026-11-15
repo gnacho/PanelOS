@@ -127,7 +127,7 @@ Accuracy, with that fix (2026-11-15, the app's touch test view, `docs/bringup.md
 | bottom row (12) | +2.1 ± 5.5 px | +7.2 ± 0.7 px |
 | all 36 | +0.5 ± 7.2 px | |
 
-The only systematic part is in y at the top and bottom edges: a touch there is reported 7–8 px nearer the edge, the same in every round and with either hand (y about 3 % stretched around the middle; x not). Everything else is where the finger landed. All of it is far below a fingertip (40–50 px). A calibration screen would therefore not help in everyday use; should other panels show the same edge shift, a fixed correction of y would remove it.
+The only systematic part is in y at the top and bottom edges: a touch there is reported 7–8 px nearer the edge, the same in every round and with either hand (y about 3 % stretched around the middle; x not). Everything else is where the finger landed. All of it is far below a fingertip (40–50 px), so on this panel a calibration would not help in everyday use. It is one panel, though: whether every unit behaves the same is not known (glass, sensor and controller tuning can differ from unit to unit). Hence a touch calibration in the settings, started on the panel or from the integration: it runs these nine points and applies a correction only when the offsets are systematic, the same in every round.
 
 ## GPIO and pin map (from the vendor device tree)
 

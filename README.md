@@ -2,7 +2,7 @@
 
 Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running a native **Rust + Slint** Home Assistant dashboard and voice satellite. No browser, no cloud.
 
-Version **0.0.3** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
+Version **0.0.4** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
 
 ## Supported devices
 
