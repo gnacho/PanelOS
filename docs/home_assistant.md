@@ -7,10 +7,12 @@ Custom integration for panels running PanelOS (`custom_components/panelos` in th
 - **Assistant mode settings** (integration options): weather entity, media player, quick tiles (lights, switches, shutters, fans, thermostats, scenes, scripts, sensors, input booleans), full-screen conversation on/off.
 - **Sensor reporting** (integration options): how much the illuminance, SoC temperature and Wi-Fi signal must change before the panel sends a new value (see below).
 - **The PanelOS page** in the sidebar (administrators): every setting of a panel in one place, beside a live picture of its screen (see [The PanelOS page](#the-panelos-page)).
+- **Critical alerts and status screens**, shared by every panel (each with its own panels on or off): the integration follows their sensors and shows them on the panels (see [Alerts and status screens](#alerts-and-status-screens)).
 - **Actions** that put something on a panel's screen (administrators and automations only):
   - `panelos.show_view`: `view` = `home`, `dashboard`, `weather`, `media` or `camera` (with `entity_id: camera.…`), `seconds` (default 30, 0 = until someone touches the screen), `panel_id` (empty = every panel).
   - `panelos.show_message`: `title` (up to 100 characters), `message` (up to 1000), `icon` (`mdi:…`), `seconds`, `chime`, `panel_id`.
-  Both fail with an error if no panel is connected.
+  - `panelos.show_status` / `panelos.clear_status`: `screen` = the ID of a status screen whose trigger is "Automation" (as the PanelOS page shows it).
+  The view and message actions fail with an error if no panel is connected.
 
 The voice satellite stays on Home Assistant's built-in ESPHome integration: the panel is an ESPHome device for it, named after the panel with "Voice" added, and shown as connected via the panel's device. Without this integration the panel still works (native dashboard, voice through ESPHome), but its display and settings have no entities in Home Assistant.
 
@@ -93,9 +95,27 @@ Up to PanelOS 0.0.3 the panel's display, settings and sensors were on the ESPHom
 
 ## The PanelOS page
 
-**PanelOS** in the sidebar (with the PanelOS mark as its icon) is a page of its own in the PanelOS look: Space Grotesk headings, Noto Sans text, Signal red for what is switched on, Graphite or Paper ground following Home Assistant's dark or light mode. A menu on the left (tabs on narrower screens) leads to Panel, Display, Dashboard, Assistant, Sensors and Device; the panel's screen stays beside them as a live picture, refreshed every few seconds while the page is open, so a change shows within a second. Tapping the picture wakes the screen. Dashboard holds the size and the card resources: how many the panel loads and how much it leaves out, the switch for leaving out unused ones, and per resource its size and an always-load switch. The explanations are behind the (i) buttons. Restart app and Reboot need a second tap.
+**PanelOS** in the sidebar (with the PanelOS mark as its icon) is a page of its own in the PanelOS look: Space Grotesk headings, Noto Sans text, Signal red only for what is lit or active, Graphite or Paper ground following Home Assistant's dark or light mode. It holds every panel: on a wide screen a menu on the left (the PanelOS logo, a panel switcher, the sections, All panels, Add a panel) with the selected panel's screen beside it as a live picture; on a medium screen a top bar with section pills; on a phone a bottom bar and a small floating screen. Editors open as drawers (wide) or sheets (phone); less used settings are behind **More options**, explanations behind the (i) buttons, and no text is ever cut.
 
-The page uses the websocket commands `panelos/page/subscribe`, `panelos/page/options`, `panelos/page/command`, `panelos/page/screen` and `panelos/page/resources` (administrators only); the panel sends the picture as a PNG with `panelos/screen` when asked (command `screenshot`).
+- **Overview**: the panel at a glance.
+- **Pages**: the pages in swipe order (the first is the start page), each with its look (drawn as a small picture) and its options: a weather page's background and widgets on its 4 × 4 grid, the player and the turntable's wood, the timers page's functions and colours, the quick controls' entities and the mixing desk's labels, the cameras' fit, start view and doorbell, the calendars written on the wall calendar, the pager's finish. A page type can be added more than once (several weather pages, each with its own background and widgets); a page can be hidden without losing its settings.
+- **Alerts**: critical alerts and status screens (shared by every panel, see below), with a test on one panel.
+- **Voice**, **Display** (theme, brightness, screensaver after and when, do not disturb, new notifications) and **Device** (sensor reporting, touch calibration, restart, reboot, name and area).
+- **All panels**: what each panel can do, and **Copy settings** to other panels (each part copied, adapted to what the target can do, or skipped, with the reason).
+- **Add a panel** starts the integration's setup for another panel, with its defaults or a copy of an existing panel.
+
+What a panel can do (its touch screen, pictures, web view, video, microphone, speaker, sensors) comes from the panel itself (`caps` in its device report); sections, page types, looks and options it cannot do are left out or shown greyed with the reason. "Sending to the panel…" turns into "Up to date on the panel" once the integration has stored the change and sent it on.
+
+The page uses the websocket commands `panelos/page/subscribe`, `panelos/page/options`, `panelos/page/command`, `panelos/page/screen`, `panelos/page/resources`, `panelos/page/house` (alerts and status screens), `panelos/page/test` (show one on a panel for a few seconds) and `panelos/page/touch_test` (administrators only); the panel sends the picture as a PNG with `panelos/screen` when asked (command `screenshot`).
+
+## Alerts and status screens
+
+Stored once for all panels (`.storage/panelos.house`), each item with the panels it appears on:
+
+- **Critical alerts**: binary sensors that count as critical (suggested by their device class: smoke, carbon monoxide, gas, water leak, problem, tamper, safety). While one is on, every panel it is shown on takes the whole screen in red with its sound, even in do not disturb, until the sensor clears; holding the button silences it when the alert allows holding.
+- **Status screens**: a state at home shown on the panels in its own colour (a room in use, a call going on, the robot vacuum at work …), with the panel's own words for its kind unless it has its own headline and line. Triggers: an entity's state (on, off, above or below a number, equal to a text), "after" another status screen ends (with a countdown), or an automation (`panelos.show_status` / `panelos.clear_status`).
+
+A panel that connects gets what is active at that moment.
 
 ## Dashboard mode
 
@@ -128,8 +148,8 @@ Lower values give a finer history and automations that react to smaller changes,
 
 The panel uses its own WebSocket connection to Home Assistant (its own user, no administrator rights needed):
 
-- It subscribes with `{"type": "panelos/subscribe", "panel_id": "nspanel-pro"}`. Events carry `{"config": {...}}` (now and after every options change; `{}` when there is no entry for the panel; the reporting steps as `illuminance_change`, `soc_temperature_change` and `wifi_signal_change`), `{"show": {...}}` (an action call) or `{"command": {"key": "theme", "value": "Dark"}}` (an entity of the panel's device was set; the keys are the ones below).
-- It reports with `{"type": "panelos/report", "panel_id": "nspanel-pro", "device": {...}, "options": {...}, "states": {...}}`: the device (name, maker, model, version, MAC) once per connection, the options of the selects and the entity states (`screen`, `dashboard`, `theme`, `brightness`, `auto_brightness`, `screensaver`, `screensaver_style`, `proximity_wake`, `display_mode`, `illuminance`, `presence`, `soc_temperature`, `wifi_signal`, `ip_address`, `app_version`) when they change. Only the connection that holds the panel's subscription may report for it.
+- It subscribes with `{"type": "panelos/subscribe", "panel_id": "nspanel-pro"}`. Events carry `{"config": {...}}` (now and after every options change; `{}` when there is no entry for the panel; the pages, `screensaver`, `dnd`, `popups`, the reporting steps as `illuminance_change`, `soc_temperature_change` and `wifi_signal_change`), `{"show": {...}}` (an action call, a status screen `status` / `status_clear`, a critical alert `critical` / `critical_clear`, or `touch_test`) or `{"command": {"key": "theme", "value": "Dark"}}` (an entity of the panel's device was set; the keys are the ones below).
+- It reports with `{"type": "panelos/report", "panel_id": "nspanel-pro", "device": {...}, "options": {...}, "states": {...}}`: the device (name, maker, model, version, MAC, what it can do as `caps`) once per connection, the options of the selects and the entity states (`screen`, `dashboard`, `theme`, `brightness`, `auto_brightness`, `screensaver`, `screensaver_style`, `proximity_wake`, `display_mode`, `illuminance`, `presence`, `soc_temperature`, `wifi_signal`, `ip_address`, `app_version`) when they change. Only the connection that holds the panel's subscription may report for it.
 
 ## Example: doorbell
 

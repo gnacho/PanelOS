@@ -59,3 +59,19 @@ show_message:
       default: false
       selector:
         boolean:
+
+show_status:
+  fields:
+    screen:
+      required: true
+      example: status_1
+      selector:
+        text:
+
+clear_status:
+  fields:
+    screen:
+      required: true
+      example: status_1
+      selector:
+        text:

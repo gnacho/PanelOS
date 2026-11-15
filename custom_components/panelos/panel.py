@@ -38,8 +38,20 @@ from .const import (
     CONF_ZOOM,
     CONF_LOADING_SCREEN,
     CONF_PAGES,
+    CONF_CAPS,
+    CONF_DND,
+    CONF_POPUPS,
+    CONF_SCREENSAVER,
+    DEFAULT_CAPS,
+    DEFAULT_DND,
     DEFAULT_PAGES,
+    DEFAULT_POPUPS,
+    DEFAULT_SCREENSAVER,
+    DND_ALLOW,
+    DND_MODES,
     DOMAIN,
+    POPUP_KINDS,
+    SCREENSAVER_WHEN,
     ENTITY_KEYS,
     ESPHOME_ENTITIES,
     REPORTING,
@@ -56,6 +68,8 @@ _SELECT_KEYS = frozenset(ENTITY_KEYS["select"])
 _DEVICE_FIELDS = ("name", "manufacturer", "model", "sw_version", "hw_version", "mac")
 _TEXT_MAX = 255
 _OPTIONS_MAX = 200
+_CAP_MAX = 24
+_CAPS_MAX = 32
 _MISSING = object()
 
 type Send = Callable[[dict[str, Any]], None]
@@ -92,9 +106,67 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "skip_resources": list(getattr(getattr(entry, "runtime_data", None), "skip", [])),
         "zoom": max(50, min(150, int(options.get(CONF_ZOOM, 100)))),
         "loading_screen": bool(options.get(CONF_LOADING_SCREEN, True)),
-        "pages": [dict(page) for page in options.get(CONF_PAGES, DEFAULT_PAGES)],
+        "pages": shown_pages(options.get(CONF_PAGES, DEFAULT_PAGES)),
+        "screensaver": screensaver_config(options.get(CONF_SCREENSAVER)),
+        "dnd": dnd_config(options.get(CONF_DND)),
+        "popups": popups_config(options.get(CONF_POPUPS)),
         **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
+
+
+def shown_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The pages the panel swipes through: the hidden ones are left out (the first, the start page, never is)."""
+    return [
+        {"kind": page["kind"], "variant": int(page.get("variant", 0)), "entities": list(page.get("entities", [])), "options": dict(page.get("options", {}))}
+        for i, page in enumerate(pages)
+        if i == 0 or not page.get("hidden")
+    ]
+
+
+def _time(value: Any, default: str) -> str:
+    return value if isinstance(value, str) and len(value) == 5 and value[2] == ":" else default
+
+
+def screensaver_config(stored: Any) -> dict[str, Any]:
+    """When the screensaver may start, with the defaults filled in."""
+    s = {**DEFAULT_SCREENSAVER, **(stored if isinstance(stored, dict) else {})}
+    lux = s.get("lux")
+    return {
+        "when": s["when"] if s.get("when") in SCREENSAVER_WHEN else DEFAULT_SCREENSAVER["when"],
+        "lux": lux if isinstance(lux, (int, float)) and not isinstance(lux, bool) else DEFAULT_SCREENSAVER["lux"],
+        "from": _time(s.get("from"), DEFAULT_SCREENSAVER["from"]),
+        "to": _time(s.get("to"), DEFAULT_SCREENSAVER["to"]),
+        "light_entity": s["light_entity"] if isinstance(s.get("light_entity"), str) else "",
+    }
+
+
+def dnd_config(stored: Any) -> dict[str, Any]:
+    """Do not disturb, with the defaults filled in."""
+    s = stored if isinstance(stored, dict) else {}
+    allow = s.get("allow") if isinstance(s.get("allow"), dict) else {}
+    return {
+        "mode": s["mode"] if s.get("mode") in DND_MODES else DEFAULT_DND["mode"],
+        "from": _time(s.get("from"), DEFAULT_DND["from"]),
+        "to": _time(s.get("to"), DEFAULT_DND["to"]),
+        "allow": {key: bool(allow.get(key, DEFAULT_DND["allow"][key])) for key in DND_ALLOW},
+    }
+
+
+def popups_config(stored: Any) -> dict[str, Any]:
+    """How new notifications show, with the defaults filled in."""
+    s = {**DEFAULT_POPUPS, **(stored if isinstance(stored, dict) else {})}
+    seconds = s.get("seconds")
+    return {
+        "kind": s["kind"] if s.get("kind") in POPUP_KINDS else DEFAULT_POPUPS["kind"],
+        "sound": bool(s.get("sound")),
+        "seconds": int(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else DEFAULT_POPUPS["seconds"],
+    }
+
+
+def panel_caps(entry: ConfigEntry) -> list[str]:
+    """What the panel can do, as it reported it (an NSPanel Pro until it does)."""
+    caps = entry.data.get(CONF_CAPS)
+    return list(caps) if isinstance(caps, list) else list(DEFAULT_CAPS)
 
 
 def _scalar(value: Any) -> bool:
@@ -433,6 +505,12 @@ class Panel:
 
     def _device_reported(self, device: dict[str, Any]) -> None:
         info = {key: device[key][:64] for key in _DEVICE_FIELDS if isinstance(device.get(key), str) and device[key]}
+        caps = device.get("caps")
+        if isinstance(caps, list):
+            caps = sorted({c[:_CAP_MAX] for c in caps[:_CAPS_MAX] if isinstance(c, str) and c})
+            if caps != self.entry.data.get(CONF_CAPS):
+                self.hass.config_entries.async_update_entry(self.entry, data={**self.entry.data, CONF_CAPS: caps})
+                async_dispatcher_send(self.hass, SIGNAL_PAGE)
         if info == self.entry.data.get(CONF_DEVICE):
             return
         self.hass.config_entries.async_update_entry(self.entry, data={**self.entry.data, CONF_DEVICE: info})

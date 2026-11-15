@@ -47,12 +47,16 @@ DEFAULT_PANEL_ID = "nspanel-pro"
 TILE_DOMAINS = ("light", "switch", "cover", "fan", "input_boolean", "scene", "script", "sensor", "climate")
 
 # The panel's pages, in the order they are swiped: each a kind, its look
-# (variant), the entities it shows and its own switches.
+# (variant), the entities it shows and its own switches. The same kind may
+# come more than once (several weather pages); the first page is the start
+# page. A page can be hidden: it keeps its settings here but is not sent.
 CONF_PAGES = "pages"
 MAX_PAGES = 12
-# kind: (number of looks, entity domains, how many entities)
+# kind: (number of looks, entity domains, how many entities). "home" is the
+# weather page (clock, weather and widgets on a living background); its
+# entities are what its widgets show (weather, calendars, player).
 PAGE_KINDS = {
-    "home": (1, (), 0),
+    "home": (1, ("weather", "calendar", "media_player"), 10),
     "weather": (2, ("weather",), 1),
     "clock": (8, (), 0),
     "music": (5, ("media_player",), 1),
@@ -65,6 +69,46 @@ PAGE_KINDS = {
     "info": (4, (), 0),
 }
 DEFAULT_PAGES = [{"kind": kind} for kind in ("home", "weather", "music", "timers")]
+
+# When the screensaver may start (the idle time is the panel's own
+# "screensaver" setting): when the room is dark (darker than `lux`, from the
+# panel's light sensor or `light_entity`), between two times, from sunset to
+# sunrise ("night") or any time.
+CONF_SCREENSAVER = "screensaver"
+SCREENSAVER_WHEN = ("dark", "window", "night", "any")
+# 3 lx: measured on the panel's own sensor, a lamp-lit evening room reads
+# 5-26 lx and a dark room about 1 lx.
+DEFAULT_SCREENSAVER = {"when": "dark", "lux": 3, "from": "22:00", "to": "06:00", "light_entity": ""}
+
+# Do not disturb: off, on, or on a schedule; what still comes through
+# (critical alerts always do).
+CONF_DND = "dnd"
+DND_MODES = ("off", "on", "schedule")
+DND_ALLOW = ("alarms", "timers", "status", "ring", "voice", "calls")
+DEFAULT_DND = {"mode": "off", "from": "22:00", "to": "07:00", "allow": dict.fromkeys(DND_ALLOW, True)}
+
+# New notifications: a strip at the top, a card, or only into the list.
+CONF_POPUPS = "popups"
+POPUP_KINDS = ("strip", "card", "off")
+DEFAULT_POPUPS = {"kind": "strip", "sound": True, "seconds": 10}
+
+# What a panel can do, as it reports it (device report "caps"); until a panel
+# reports them it counts as an NSPanel Pro.
+CONF_CAPS = "caps"
+DEFAULT_CAPS = ("touch", "images", "web", "video", "mic", "speaker", "proximity", "light")
+
+# Critical alerts and status screens are shared by every panel (one store for
+# the integration, each item with its panels).
+HOUSE_STORE = "panelos.house"
+# Status screen kinds; the panel has its own texts and pictures for each.
+STATUS_CATS = (
+    "occupied", "aftermath", "bathroom", "meeting", "focus", "sleeping", "movie",
+    "gaming", "vacuum", "cooking", "workout", "keepout", "custom",
+)
+# Device classes whose binary sensors are suggested as critical alerts.
+SAFETY_CLASSES = ("smoke", "carbon_monoxide", "gas", "moisture", "problem", "tamper", "safety")
+SERVICE_SHOW_STATUS = "show_status"
+SERVICE_CLEAR_STATUS = "clear_status"
 
 SERVICE_SHOW_VIEW = "show_view"
 SERVICE_SHOW_MESSAGE = "show_message"

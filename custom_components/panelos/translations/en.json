@@ -137,6 +137,26 @@
           "description": "Play a short chime on the panel."
         }
       }
+    },
+    "show_status": {
+      "name": "Show status screen",
+      "description": "Shows a status screen that is started by an action (set on the PanelOS page) on the panels it is set for.",
+      "fields": {
+        "screen": {
+          "name": "Status screen",
+          "description": "The status screen's ID, as shown on the PanelOS page."
+        }
+      }
+    },
+    "clear_status": {
+      "name": "Clear status screen",
+      "description": "Ends a status screen that was started by an action.",
+      "fields": {
+        "screen": {
+          "name": "Status screen",
+          "description": "The status screen's ID, as shown on the PanelOS page."
+        }
+      }
     }
   },
   "entity": {

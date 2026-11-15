@@ -1,6 +1,6 @@
 # PanelOS
 
-Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running a native **Rust + Slint** Home Assistant dashboard and voice satellite. No browser, no cloud.
+Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running its own native interface for Home Assistant (**Rust + Slint**, drawn on the GPU) and a voice satellite. No browser, no cloud.
 
 Version **0.0.4** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
 
@@ -8,30 +8,40 @@ Version **0.0.4** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0
 
 | Device | SoC | State |
 |---|---|---|
-| Sonoff NSPanel Pro (86 model) | Rockchip PX30 | working: dashboard, voice satellite, boot logo and animation, about 12 s boot |
+| Sonoff NSPanel Pro (86 model) | Rockchip PX30 | working: native interface, voice satellite, boot logo and animation, about 12 s boot |
 
-## Features
+## The interface
 
-- **Assistant mode**, the heart of PanelOS: a smart display for Home Assistant, made for talking to Assist and for a glance at the house. Today: a home screen with clock, weather, media and quick tiles, a full-screen conversation view, weather details, the media player, camera views, messages and timers. The new interface, designed and being built page by page:
-  - **Home**: widgets on living backgrounds that show the weather as it is outside right now (rain, snow, fog, wind, thunder, the sun and the moon where they really are), or calm drawn scenes;
-  - **Music**: what is playing in several looks, picking and grouping players;
-  - **Timers, alarms and a stopwatch**, with several timer themes;
-  - **Thermostat** in several looks, with a glow that shows from afar when it heats or cools;
-  - **Camera**: the whole picture or filled, all cameras in a grid, a ring overlay for a doorbell;
-  - **To-do lists** and a **calendar** (day, three days, week, month);
-  - **Info and alerts**, critical alerts included;
-  - **Status screens** for what happens at home (washing machine, robot vacuum and more);
-  - **Quick controls**: tiles, sliders, groups;
-  - **Voice feedback**, full screen while listening and answering;
-  - **Screensaver clocks** in many styles;
-  - **Settings**: a quick shade pulled down from the top, child lock, storage.
+PanelOS draws its own interface on the panel's GPU: no browser, no web page, every pixel made for a 480 × 480 wall screen and every motion running at the screen's full 60 frames a second. Swipe through your pages (there is no last one: after it comes the first again), pull down the quick shade, talk to Assist. Nothing stutters and nothing waits for a page to load.
 
-  **Weather: [Bellweather](https://github.com/lauden-io/Bellweather)** was made for exactly this: the weather here and now from real observations (radar, nearby stations) and a forecast blended from many models. The living backgrounds read it, and it gives the best experience; any Home Assistant weather entity works too.
-- **Native Home Assistant dashboard**: drawn by the panel itself from a Home Assistant dashboard (tiles, shutters, climate, media, camera), details layers, themes, screensaver, automatic brightness, wake on approach. Pairing with a QR code, no token typing.
+<!-- screenshots: a few frames per function, neutral data -->
+
+**A weather page that looks outside.** Your clock, the weather and your widgets sit on a living picture of the sky as it is right now: rain runs down the glass, fog drifts, clouds travel with the wind, lightning flashes, and the sun and the moon stand where they really are. Pick a photo of nature, the countryside or a city, a drawn scene, a quiet line drawing, or a synthwave night drive with neon letters and cars on the road. Want more than one? Add another weather page with its own background and its own widgets.
+
+**Pages for everything you use, each in looks with character.**
+- **Music**: a clean cover, the cover full screen, a turntable whose arm follows the track, a cassette and half a cassette; pick any player of the house, move the music to another one or play in several rooms at once.
+- **Timers, alarms and a stopwatch**: a plain ring, a kitchen timer, an hourglass, a flip clock or a synthwave sunset; quick starts, your own lengths, alarms for chosen days.
+- **Thermostat**: a dial, a remote control, a wall thermostat with slide switches, or a neon one; room by room.
+- **Cameras**: one big or all of them, and when the doorbell rings the panel wakes with the visitor on screen, and with a lock, hold to open.
+- **Calendar**: agenda, day, three days, week and month, or a departure board, a tear-off calendar and a wall calendar with your events written in pen.
+- **To-do lists**: a plain list, a shop receipt, a terminal, embossed label tapes, or a yellow notepad in handwriting where every letter comes out a little different.
+- **Notifications**: a list, sticky notes on a fridge, a 90s pager, or the evening news.
+- **Quick controls**: tiles, a mixing desk with faders, or a flight deck with toggle switches.
+
+**It tells you what matters.** Status screens show what happens at home (someone in the bathroom, a call going on, the robot vacuum at work) in their own colour, with a few words that change every time; a swipe folds one into a strip on top. A critical alert (smoke, CO, gas, water) takes the whole screen in red and keeps sounding until someone holds the button. Do not disturb lets through what you choose.
+
+**Talk to it.** Wake words run on the panel itself. While you speak the screen listens with you, in a plain, terminal, comic or oscilloscope look, and the answer appears as it is spoken.
+
+**It is yours.** Every page, its order, its look and what it shows are set on the PanelOS page in Home Assistant's sidebar, with a live picture of the panel's screen beside the settings. And this is only a glimpse: there is a lot more in it than fits here.
+
+**Weather: [Bellweather](https://github.com/lauden-io/Bellweather)** was made for exactly this. It tells the weather here and now from real observations (radar, nearby stations) and blends its forecast from many models, each weighted by how well it did lately. The living backgrounds read it, so they show what is really happening outside: use it for the best experience. Any other Home Assistant weather entity works too, only less precisely; how much less, Bellweather's repository shows with its measurements and the evidence behind them.
+
+## More features
+
 - **Voice satellite**: on-device wake words (microWakeWord), Assist pipelines, echo cancellation, timers, announcements, follow-up listening.
 - **Dashboard mode** (secondary): a Home Assistant dashboard in a web view, custom cards included; within the limits of the panel's hardware, so a light, simple dashboard made for it works best ([docs/home_assistant.md](docs/home_assistant.md#dashboard-mode)).
 - **First-start setup on the panel**: Home Assistant found on the network (mDNS) or its address typed on a keypad; pairing with a QR code.
-- **Home Assistant device**: the PanelOS integration (`custom_components/panelos`) adds the panel as a device with its display, settings and sensors, sets its dashboard and assistant modes and shows views or messages on it; the voice satellite is an ESPHome device (announced over mDNS like any ESPHome device), connected via the panel.
+- **Home Assistant device and page**: the PanelOS integration (`custom_components/panelos`) adds the panel as a device with its display, settings and sensors, and a PanelOS page in the sidebar where every panel's pages, looks, alerts, status screens, display and voice are set beside a live picture of its screen; it also shows views or messages on it; the voice satellite is an ESPHome device (announced over mDNS like any ESPHome device), connected via the panel.
 - **Super fast boot**: about 12 s from power on to the dashboard, more than four times faster than the stock firmware (about 53 s). The PanelOS logo already shows in the bootloader, then the boot animation; the UI comes with the right time and current Home Assistant data. After a power cut it waits for Home Assistant and the network as long as it takes and comes back by itself.
 
 Details: [docs/app.md](docs/app.md).
@@ -63,12 +73,12 @@ In short: turn on developer mode and ADB in the eWeLink app, back up the panel, 
 - No TLS yet: Home Assistant must be reachable over plain `http://`.
 - mDNS (finding Home Assistant on the setup screen, Home Assistant discovering the panel) only works inside one network segment, unless the router repeats mDNS between them.
 - Web mode (the real Home Assistant frontend) is not started.
-- The look is a first version; a full redesign is planned.
+- Alarm sounds are simple beeps for now.
 
 ## Repository layout
 
 - `app/` the panel app (Rust + Slint), see [docs/app.md](docs/app.md)
-- `custom_components/panelos/` Home Assistant integration (the panel's device, dashboard and assistant mode settings, screen actions), installable with the Home Assistant Marketplace or HACS, see [docs/home_assistant.md](docs/home_assistant.md)
+- `custom_components/panelos/` Home Assistant integration (the panel's device, its PanelOS page, shared alerts and status screens, screen actions), installable with the Home Assistant Marketplace or HACS, see [docs/home_assistant.md](docs/home_assistant.md)
 - `docs/` hardware notes ([docs/hardware.md](docs/hardware.md)), backup and restore, bring-up notes ([docs/bringup.md](docs/bringup.md)), security and development aids ([docs/security.md](docs/security.md)), design decisions and plans, feature list
 - `kernel/` board device tree (`dts/`), mainline kernel patches (`patches/`), config fragment (`configs/`)
 - `buildroot/` Buildroot external tree (`BR2_EXTERNAL`): root filesystem defconfig, init scripts, boot splash, small tools

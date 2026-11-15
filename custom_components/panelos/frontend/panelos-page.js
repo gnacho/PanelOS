@@ -1,286 +1,936 @@
-// The PanelOS page in Home Assistant's sidebar: every setting of a panel
-// beside a live picture of its screen, in PanelOS's own look (brand guide:
-// Signal red for what is active, Graphite / Paper grounds, Space Grotesk
-// headings, Noto Sans text). Data and changes go over the websocket
-// commands in page.py (panelos/page/*).
+// The PanelOS page in Home Assistant's sidebar: every panel's settings beside
+// a live picture of its screen, in PanelOS's own look (brand guide: Signal
+// red only for what is lit or active, Night / Graphite / Paper grounds, Ink
+// text on light, Space Grotesk headings, Noto Sans text).
+//
+// Shell: left navigation (wide), top bar with section pills (medium), top bar
+// with a bottom bar and a floating mini screen (narrow). Each PanelOS entry is
+// one panel; what a panel can do (its reported "caps") decides which
+// sections, page types, looks and options it is offered. Critical alerts and
+// status screens are shared by every panel. Data and changes go over the
+// websocket commands in page.py (panelos/page/*).
 
 const PICTURE_EVERY_MS = 2500;
 const PICTURE_AFTER_CHANGE_MS = 700;
+const ALL_PICTURES_EVERY_MS = 10000;
+const SYNC_FALLBACK_MS = 3000;
 
-// The PanelOS mark: dots always Signal, dashes the text colour of the ground.
-const MARK_DOTS = "M2 8a2 2 0 1 0 4 0a2 2 0 1 0-4 0zM18 16a2 2 0 1 0 4 0a2 2 0 1 0-4 0z";
-const MARK_DASHES = "M12 6h8a2 2 0 0 1 0 4h-8a2 2 0 0 1 0-4zM4 14h8a2 2 0 0 1 0 4H4a2 2 0 0 1 0-4z";
-const ICON = {
-  menu: "M3,6H21V8H3V6M3,11H21V13H3V11M3,16H21V18H3V16Z",
-  panel: "M4,4H20A2,2 0 0,1 22,6V18A2,2 0 0,1 20,20H4A2,2 0 0,1 2,18V6A2,2 0 0,1 4,4M4,6V18H20V6H4Z",
-  display: "M12,7A5,5 0 0,1 17,12A5,5 0 0,1 12,17A5,5 0 0,1 7,12A5,5 0 0,1 12,7M12,9A3,3 0 0,0 9,12A3,3 0 0,0 12,15A3,3 0 0,0 15,12A3,3 0 0,0 12,9M12,2L14.39,5.42C13.65,5.15 12.84,5 12,5C11.16,5 10.35,5.15 9.61,5.42L12,2M3.34,7L7.5,6.65C6.9,7.16 6.36,7.78 5.94,8.5C5.5,9.24 5.25,10 5.11,10.79L3.34,7M3.36,17L5.12,13.23C5.26,14 5.53,14.78 5.95,15.5C6.37,16.24 6.91,16.86 7.5,17.37L3.36,17M20.65,7L18.88,10.79C18.74,10 18.47,9.23 18.05,8.5C17.63,7.78 17.1,7.15 16.5,6.64L20.65,7M20.64,17L16.5,17.36C17.09,16.85 17.62,16.22 18.04,15.5C18.46,14.77 18.73,14 18.87,13.21L20.64,17M12,22L9.59,18.56C10.33,18.83 11.14,19 12,19C12.82,19 13.63,18.83 14.37,18.56L12,22Z",
-  dashboard: "M13,3V9H21V3M13,21H21V11H13M3,21H11V15H3M3,13H11V3H3V13Z",
-  assistant: "M12,2A3,3 0 0,1 15,5V11A3,3 0 0,1 12,14A3,3 0 0,1 9,11V5A3,3 0 0,1 12,2M19,11C19,14.53 16.39,17.44 13,17.93V21H11V17.93C7.61,17.44 5,14.53 5,11H7A5,5 0 0,0 12,16A5,5 0 0,0 17,11H19Z",
-  sensors: "M3,3H5V19H21V21H3V3M7,17V10H9V17H7M11,17V6H13V17H11M15,17V13H17V17H15Z",
-  device: "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.67 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
-  info: "M11,9H13V7H11M12,20C7.59,20 4,16.41 4,12C4,7.59 7.59,4 12,4C16.41,4 20,7.59 20,12C20,16.41 16.41,20 12,20M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M11,17H13V11H11V17Z",
-  close: "M19,6.41L17.59,5L12,10.59L6.41,5L5,6.41L10.59,12L5,17.59L6.41,19L12,13.41L17.59,19L19,17.59L13.41,12L19,6.41Z",
-  plus: "M19,13H13V19H11V13H5V11H11V5H13V11H19V13Z",
-  chevron: "M7.41,8.58L12,13.17L16.59,8.58L18,10L12,16L6,10L7.41,8.58Z",
+const DEFAULT_CAPS = ["touch", "images", "web", "video", "mic", "speaker", "proximity", "light"];
+const CAP_NAMES = {
+  touch: "Touch screen", images: "Pictures and animation", web: "Web view", video: "Live video",
+  mic: "Microphone", speaker: "Speaker", proximity: "Proximity sensor", light: "Light sensor",
+  temp: "Temperature sensor", humidity: "Humidity sensor", rotate: "Turns its screen",
+  relays: "Built-in relays", buttons: "Physical buttons", update: "Software updates", storage: "Storage overview",
 };
+// Why something is missing, in plain words ({p} = the panel's name).
+const NEEDS_REASON = {
+  images: "{p}'s screen shows text and simple shapes only.",
+  web: "{p} has no web view.",
+  video: "{p} cannot play live video.",
+  mic: "{p} has no microphone.",
+  speaker: "{p} has no speaker.",
+  proximity: "{p} has no proximity sensor.",
+  light: "{p} has no light sensor.",
+  fixed: "{p}'s screen has a fixed set of pages.",
+};
+
+// The page types (PAGE_KINDS in const.py). "home" is shown as Weather.
+const PAGE_TYPES = {
+  home: { name: "Weather", icon: "weather-partly-cloudy", desc: "Clock, weather and your widgets on a living background.", needs: [] },
+  quick: { name: "Quick controls", icon: "toggle-switch-outline", desc: "Lights, shutters and devices at a tap.", needs: [] },
+  music: { name: "Music", icon: "music", desc: "What plays, with the controls.", needs: [] },
+  timers: { name: "Timers and alarms", icon: "timer-outline", desc: "Timers, alarms and a stopwatch.", needs: ["speaker"] },
+  thermostat: { name: "Thermostat", icon: "thermostat", desc: "Heating and cooling, room by room.", needs: [] },
+  camera: { name: "Cameras", icon: "cctv", desc: "Live view and the visitor alert.", needs: ["video"] },
+  todo: { name: "To-do list", icon: "format-list-checks", desc: "Shopping and task lists.", needs: ["images"] },
+  calendar: { name: "Calendar", icon: "calendar-month", desc: "Day, week and month, with details.", needs: ["images"] },
+  info: { name: "Notifications", icon: "bell-outline", desc: "Messages from Home Assistant.", needs: [] },
+  clock: { name: "Clock", icon: "clock-outline", desc: "A big clock face.", needs: [] },
+  weather: { name: "Weather details", icon: "weather-cloudy-clock", desc: "Today and the coming days in detail.", needs: [] },
+};
+const TYPE_ORDER = ["home", "quick", "music", "timers", "thermostat", "camera", "todo", "calendar", "info", "clock", "weather"];
+
+// Looks per page type, in the panel's order (index = the page's variant).
+const LOOKS = {
+  weather: ["Cards", "Living photo"],
+  clock: ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Wandering", "Split-flap"],
+  music: ["Plain", "Full cover", "Turntable", "Cassette", "Half cassette"],
+  timers: ["Plain", "Kitchen timer", "Hourglass", "Synthwave", "Flip clock"],
+  thermostat: ["Dial", "Remote control", "Wall thermostat", "Synthwave"],
+  quick: ["Tiles", "Mixing desk", "Flight deck"],
+  camera: ["Camera"],
+  calendar: ["Plain", "Departure board", "Tear-off", "Wall calendar"],
+  todo: ["Plain", "Receipt", "Terminal", "Label maker", "Notepad"],
+  info: ["List", "Fridge notes", "Pager", "TV news"],
+};
+// Looks beyond the first that need pictures on the panel's screen.
+const LOOK_NEEDS_IMAGES = new Set(["weather", "music", "thermostat", "quick", "info"]);
+
+// Weather page backgrounds: options.theme 0..8, synthwave (8) with options.scene 0..3.
+const BACKGROUNDS = [
+  { name: "Photo · nature", theme: 0 }, { name: "Photo · countryside", theme: 1 }, { name: "Photo · city", theme: 2 },
+  { name: "Drawn · countryside", theme: 3 }, { name: "Drawn · city", theme: 4 }, { name: "Drawn · neutral", theme: 5 },
+  { name: "Drawn · big city", theme: 6 }, { name: "Line drawing", theme: 7 },
+  { name: "Synthwave · mountains", theme: 8, scene: 0 }, { name: "Synthwave · city", theme: 8, scene: 1 },
+  { name: "Synthwave · beach", theme: 8, scene: 2 }, { name: "Synthwave · space", theme: 8, scene: 3 },
+];
+const SW_SCENES = ["Mountains", "City", "Beach", "Space"];
+// Turntable wood (music options.wood): the panel's deck pictures.
+const WOODS = [
+  { id: "walnut", name: "Walnut", c: "#5b3a24" }, { id: "oak", name: "Oak", c: "#a87a46" }, { id: "cherry", name: "Cherry", c: "#8c4a2f" },
+  { id: "beech", name: "Beech", c: "#c99a6b" }, { id: "pine", name: "Pine", c: "#d8b27a" }, { id: "pear", name: "Pear", c: "#b98560" },
+  { id: "scandi-oak", name: "Scandi oak", c: "#dcc39b" },
+];
+// Pager look finish (info options.finish).
+const PAGER_FINISH = [
+  { id: "graphite", name: "Graphite", c: "#2e3033" }, { id: "purple", name: "Purple", c: "#6c3fb3" },
+  { id: "clear", name: "Clear", c: "linear-gradient(135deg,#c9d6df,#8fa3b0)" }, { id: "offwhite", name: "Off-white", c: "#d5d0c3" },
+];
+const TIMER_FUNCTIONS = [["timer", "Timers"], ["alarm", "Alarms"], ["stopwatch", "Stopwatch"]];
+const VOICE_LOOKS = ["Plain", "Terminal", "Comic", "Oscilloscope"];
+
+// Widgets of a weather page (options.items, a 4 x 4 grid), as the panel
+// draws them (app/ui/home.slint, HomeItem): {kind, col, row, w, h, style,
+// accent "#rrggbb" ("" = the panel's accent), weight, tap, opts}.
+// kind: 0 clock, 1 date, 2 weather now, 3 next event, 4 forecast curve,
+//   5 hourly forecast, 6 daily forecast, 7 music.
+// style: clock 0 digital, 1 big digits + seconds line, 2 round, 3 square,
+//   4 minimal, 5 numerals, 6 split-flap, 7 the time in words; music: the
+//   scroll speed of long titles 1..5 (with opts bit 1); others 0.
+// opts (bits): clock 1 seconds, 2 date, 4 weather, 8 next event; date 1 year,
+//   2 week number; weather now 1 condition, 2 high / low, 4 rain chance,
+//   8 feels like; next event 1 time, 2 calendar colour; curve 1 rain bars,
+//   2 icons; hourly / daily 1 rain chance; music 1 long titles scroll.
+// The weather, calendars and player of a weather page are its entities (the
+// first weather.*, every calendar.*, the first media_player.*).
+const WIDGETS = {
+  0: { name: "Clock", icon: "clock-outline", min: [2, 1], def: [2, 1], style: 1, opts: 1, bits: [[1, "Seconds"], [2, "Date"], [4, "Weather"], [8, "Next event"]] },
+  1: { name: "Date", icon: "calendar-today", min: [2, 1], def: [2, 1], opts: 0, bits: [[1, "Year"], [2, "Week number"]] },
+  2: { name: "Weather now", icon: "weather-partly-cloudy", min: [1, 1], def: [2, 1], opts: 1, bits: [[1, "Condition"], [2, "High and low"], [4, "Chance of rain"], [8, "Feels like"]] },
+  3: { name: "Next event", icon: "calendar-clock", min: [2, 1], def: [4, 1], opts: 3, bits: [[1, "Time"], [2, "Calendar colour"]] },
+  4: { name: "Forecast curve", icon: "chart-bell-curve-cumulative", min: [3, 1], def: [4, 1], opts: 3, bits: [[1, "Rain bars"], [2, "Icons"]] },
+  5: { name: "Hourly forecast", icon: "clock-time-four-outline", min: [3, 1], def: [4, 1], opts: 1, bits: [[1, "Chance of rain"]] },
+  6: { name: "Daily forecast", icon: "calendar-week", min: [3, 1], def: [4, 1], opts: 1, bits: [[1, "Chance of rain"]] },
+  7: { name: "Music", icon: "music", min: [1, 1], def: [4, 1], opts: 0, bits: [] },
+};
+const CLOCK_STYLES = ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Split-flap", "In words"];
+// The panel's own layout when a weather page has none (as the panel draws it).
+const DEFAULT_ITEMS = [
+  { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, opts: 1 },
+  { kind: 4, col: 0, row: 1, w: 4, h: 1, style: 0, opts: 3 },
+  { kind: 7, col: 0, row: 3, w: 4, h: 1, style: 0, opts: 0 },
+];
+const ACCENTS = ["#FF4A1C", "#F5F3EE", "#FFB020", "#3CCB7F", "#2E9BFF", "#B06CFF", "#FF5C9A"];
+
+// Status screen kinds (the panel has its own texts and pictures for each).
+const STATUS_CATS = [
+  { id: "occupied", name: "Occupied", c: "#d9480f", pictos: ["toilet-sitter", "stop-sign"], mdi: "toilet" },
+  { id: "aftermath", name: "Air recovery", c: "#5c7f0a", pictos: ["gas-mask", "toilet-fumes"], mdi: "fan", countdown: true },
+  { id: "bathroom", name: "Bathroom in use", c: "#1971c2", pictos: ["shower-person", "wet-floor"], mdi: "shower" },
+  { id: "meeting", name: "On a call", c: "#3b5bdb", pictos: ["on-air", "headset"], mdi: "headset" },
+  { id: "focus", name: "Focus time", c: "#6741d9", pictos: ["door-hanger", "quiet-face"], mdi: "headset" },
+  { id: "sleeping", name: "Someone is sleeping", c: "#1e2b4d", pictos: ["moon-zzz", "crib"], mdi: "sleep" },
+  { id: "movie", name: "Movie night", c: "#a61e4d", pictos: ["popcorn", "clapper"], mdi: "popcorn" },
+  { id: "gaming", name: "Gaming", c: "#087f5b", pictos: ["gamepad", "pixel-skull", "gta-vi"], mdi: "controller" },
+  { id: "vacuum", name: "Robot vacuum at work", c: "#495057", pictos: ["robot-vacuum", "vacuum-sock"], mdi: "robot-vacuum" },
+  { id: "cooking", name: "Cooking", c: "#b45309", pictos: ["chef-hat", "pan-flames"], mdi: "chef-hat" },
+  { id: "workout", name: "Workout", c: "#c2255c", pictos: ["dumbbell", "kettlebell"], mdi: "dumbbell" },
+  { id: "keepout", name: "Keep out", c: "#343a40", pictos: ["stop-hand", "skull-bones", "eye"], mdi: "hand-back-right" },
+  { id: "custom", name: "Custom", c: "#0b7285", pictos: ["zip-face", "eye", "printer-3d"], mdi: "alert-outline" },
+];
+const STATUS_CAT = Object.fromEntries(STATUS_CATS.map((c) => [c.id, c]));
+const STATUS_COLOURS = ["#d9480f", "#5c7f0a", "#1971c2", "#3b5bdb", "#6741d9", "#1e2b4d", "#a61e4d", "#087f5b", "#495057", "#b45309", "#c2255c", "#343a40", "#0b7285"];
+
+// Critical alerts: suggested by device class.
+const SAFETY = {
+  smoke: { name: "Smoke", icon: "smoke-detector" }, carbon_monoxide: { name: "Carbon monoxide", icon: "molecule-co" },
+  gas: { name: "Gas", icon: "gas-cylinder" }, moisture: { name: "Water leak", icon: "water-alert" },
+  problem: { name: "Problem", icon: "alert-outline" }, tamper: { name: "Tamper", icon: "shield-alert-outline" },
+  safety: { name: "Safety", icon: "alert-octagon-outline" },
+};
+
+const DND_ITEMS = [
+  { id: "critical", name: "Critical alerts", locked: true },
+  { id: "alarms", name: "Alarms" }, { id: "timers", name: "Timers" }, { id: "status", name: "Status screens" },
+  { id: "ring", name: "Doorbell and camera ring" }, { id: "voice", name: "Voice answers when woken" },
+  { id: "calls", name: "Calls and announcements" },
+];
+const DND_DEFAULT_ALLOW = { alarms: true, timers: true, status: true, ring: true, voice: true, calls: true };
+const DEFAULT_SCREENSAVER = { when: "dark", lux: 3, from: "22:00", to: "06:00", light_entity: "" };
+const DEFAULT_DND = { mode: "off", from: "22:00", to: "07:00", allow: DND_DEFAULT_ALLOW };
+const DEFAULT_POPUPS = { kind: "strip", sound: true, seconds: 10 };
 
 const SECTIONS = [
-  { id: "panel", title: "Panel", icon: "panel" },
-  { id: "pages", title: "Pages", icon: "dashboard" },
-  { id: "display", title: "Display", icon: "display" },
-  { id: "dashboard", title: "Dashboard", icon: "dashboard" },
-  { id: "assistant", title: "Assistant", icon: "assistant" },
-  { id: "sensors", title: "Sensors", icon: "sensors" },
-  { id: "device", title: "Device", icon: "device" },
+  { id: "overview", name: "Overview", icon: "monitor-dashboard" },
+  { id: "pages", name: "Pages", icon: "view-grid-outline" },
+  { id: "alerts", name: "Alerts", long: "Alerts and status", icon: "bell-outline" },
+  { id: "voice", name: "Voice", icon: "account-voice", needs: "mic" },
+  { id: "display", name: "Display", icon: "brightness-6" },
+  { id: "device", name: "Device", icon: "cellphone-cog" },
 ];
 
-// Explanations behind the (i) buttons; plain texts (only the panel is playful).
-const INFO = {
-  display: "How the panel looks and when its screen sleeps. Automatic brightness follows the light in the room; the Auto theme switches between dark and light by the same light.",
-  dashboard: "Dashboard mode shows a Home Assistant dashboard in the panel's web view, custom cards included. The panel is logged in as its own Home Assistant user: dashboards for administrators only, or views shown only to some users, stay empty on it. \"Chosen on the panel\" leaves the choice to the panel's Dashboard setting.",
-  resources: "Home Assistant loads every card resource on every dashboard, used or not; on the panel each one costs load time. The panel leaves out the ones the dashboard it shows does not need, worked out again whenever the dashboard changes: a resource counts as used when its name matches a card type or a setting of the dashboard. Switch one on to always load it.",
-  assistant: "Assistant mode is the smart-display home screen: clock, weather, the media player and quick tiles, and the conversation full screen while you talk to it.",
-  sensors: "Every value the panel sends is a row in the recorder's database. The panel sends a sensor only when it has changed by at least this much since the value it sent last. Lower: finer history, more writes. Higher: fewer writes, only larger changes show up.",
-  device: "Restart app restarts the panel's software (a few seconds); Reboot restarts the whole panel. Both need a second tap.",
-  preview: "The panel's screen as it is now, every few seconds while this page is open. Tap it to wake the screen.",
+const REPORTING = {
+  illuminance_change: { label: "Light", now: "illuminance", unit: "lx" },
+  soc_temperature_change: { label: "Chip temperature", now: "soc_temperature", unit: "°C" },
+  wifi_signal_change: { label: "Wi-Fi signal", now: "wifi_signal", unit: "dBm" },
 };
-
-// The pages the panel can show, in the words of the page list.
-const PAGE_NAMES = {
-  home: "Home", weather: "Weather", clock: "Clock", music: "Music", timers: "Timers", thermostat: "Thermostat",
-  quick: "Quick controls", camera: "Cameras", calendar: "Calendar", todo: "To-do", info: "Notifications",
-};
-const LOOKS = JSON.parse(atob("eyJ3ZWF0aGVyIjpbIkNhcmRzIiwiTGl2aW5nIHBob3RvIl0sIm11c2ljIjpbIlBsYWluIiwiRnVsbCBjb3ZlciIsIlR1cm50YWJsZSIsIkNhc3NldHRlIiwiSGFsZiBjYXNzZXR0ZSJdLCJ0aW1lcnMiOlsiRnVsbCBDaXJjbGUiLCJEb25lIHRvIGEgVHVybiIsIlNhbmRzIG9mIFRpbWUiLCJJbiB0aGUgRmFzdCBMYW5lIiwiRmxpcCBTaWRlIl0sInRoZXJtb3N0YXQiOlsiQ29tZm9ydCBab25lIiwiUHVzaCBNeSBCdXR0b25zIiwiT2xkIEZsYW1lIiwiSW4gdGhlIEZhc3QgTGFuZSJdLCJxdWljayI6WyJUaWxlcyIsIk1peGluZyBkZXNrIiwiRmxpZ2h0IGRlY2siXSwiY2FsZW5kYXIiOlsiUGxhaW4gU2FpbGluZyIsIk5vdyBCb2FyZGluZyIsIlNlaXplIHRoZSBEYXkiLCJIYW5nIGluIFRoZXJlIl0sInRvZG8iOlsiQ2xlYW4gU2xhdGUiLCJQYXBlciBUcmFpbCIsIlJvb3QgQWNjZXNzIiwiTGFiZWwgTWUgSW1wcmVzc2VkIiwiTm90ZSB0byBTZWxmIl0sImluZm8iOlsiSGVhZHMgVXAiLCJGcmlkZ2UgTWFnbmV0IiwiQmVlcCBCZWVwIiwiQnJlYWtpbmcgTmV3cyJdfQ=="));
-
-// Home backgrounds (photo / drawn / line / synthwave), the synthwave scenes, the voice feedback looks.
-const NAMES = JSON.parse(atob("eyJiZyI6WyJQaG90byBcdTAwYjcgbmF0dXJlIiwiUGhvdG8gXHUwMGI3IGNvdW50cnlzaWRlIiwiUGhvdG8gXHUwMGI3IGNpdHkiLCJEcmF3biBcdTAwYjcgY291bnRyeXNpZGUiLCJEcmF3biBcdTAwYjcgY2l0eSIsIkRyYXduIFx1MDBiNyBuZXV0cmFsIiwiRHJhd24gXHUwMGI3IGJpZyBjaXR5IiwiTGluZSIsIkluIHRoZSBGYXN0IExhbmUiXSwic2NlbmUiOlsiUmlkZSBpbnRvIHRoZSBTdW5zZXQiLCJDb25jcmV0ZSBKdW5nbGUiLCJMaWZlJ3MgYSBCZWFjaCIsIlN0YXJyeS1FeWVkIl0sInZvaWNlIjpbIlBsYWluIiwiVGVybWluYWwiLCJDb21pYyIsIk9zY2lsbG9zY29wZSJdfQ=="));
 
 // Readable names of integrations, for entities with the same name.
 const PLATFORMS = {
-  met: "Met.no", open_meteo: "Open-Meteo", openweathermap: "OpenWeatherMap",
-  accuweather: "AccuWeather", pirateweather: "Pirate Weather", music_assistant: "Music Assistant", cast: "Google Cast",
-  esphome: "ESPHome", sonos: "Sonos", dlna_dmr: "DLNA", jellyfin: "Jellyfin", apple_tv: "Apple TV",
+  met: "Met.no", open_meteo: "Open-Meteo", openweathermap: "OpenWeatherMap", accuweather: "AccuWeather",
+  pirateweather: "Pirate Weather", music_assistant: "Music Assistant", cast: "Google Cast", esphome: "ESPHome",
+  sonos: "Sonos", dlna_dmr: "DLNA", jellyfin: "Jellyfin", apple_tv: "Apple TV",
 };
-// The name of an integration for a label: a known one, else its domain in words.
 const platformName = (p) => p && (PLATFORMS[p] || p.charAt(0).toUpperCase() + p.slice(1).replace(/_/g, " "));
 
-const REPORTING = {
-  illuminance_change: { label: "Illuminance", now: "illuminance", nowUnit: "lx" },
-  soc_temperature_change: { label: "SoC temperature", now: "soc_temperature", nowUnit: "°C" },
-  wifi_signal_change: { label: "Wi-Fi signal", now: "wifi_signal", nowUnit: "dBm" },
+// Default icons per domain (when an entity has none of its own).
+const DOMAIN_ICONS = {
+  light: "lightbulb", switch: "toggle-switch-outline", cover: "window-shutter", fan: "fan", climate: "thermostat",
+  media_player: "speaker", camera: "cctv", calendar: "calendar-month", todo: "format-list-checks", weather: "weather-partly-cloudy",
+  sensor: "eye", binary_sensor: "checkbox-blank-circle-outline", input_boolean: "toggle-switch-outline", scene: "palette",
+  script: "script-text-outline", vacuum: "robot-vacuum", lock: "lock-outline",
+};
+const SENSOR_ICONS = { temperature: "thermometer", humidity: "water-percent", illuminance: "brightness-6", carbon_dioxide: "molecule-co2", power: "flash", energy: "lightning-bolt", battery: "battery" };
+
+// ---------------------------------------------------------------- DOM helpers
+
+function h(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [k, v] of Object.entries(attrs)) {
+      if (v == null || v === false) continue;
+      if (k === "class") node.className = v;
+      else if (k === "style" && typeof v === "object") {
+        for (const [sk, sv] of Object.entries(v)) {
+          if (sv == null) continue;
+          if (sk.startsWith("--")) node.style.setProperty(sk, sv);
+          else node.style[sk] = sv;
+        }
+      } else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+      else if (k === "value" && (tag === "input" || tag === "textarea")) node.value = v;
+      else if (k === "checked" || k === "selected" || k === "disabled") node[k] = Boolean(v);
+      else if (v === true) node.setAttribute(k, "");
+      else node.setAttribute(k, v);
+    }
+  }
+  append(node, children);
+  return node;
+}
+
+function append(node, children) {
+  for (const c of children) {
+    if (c == null || c === false || c === "") continue;
+    if (Array.isArray(c)) append(node, c);
+    else node.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+}
+
+// An MDI icon (Home Assistant's own icon element).
+function icon(name, cls) {
+  const e = document.createElement("ha-icon");
+  e.setAttribute("icon", name.includes(":") ? name : `mdi:${name}`);
+  e.className = "mdi" + (cls ? ` ${cls}` : "");
+  return e;
+}
+
+// An inline SVG from markup (look pictures).
+function svgNode(markup, cls) {
+  const wrap = document.createElement("div");
+  wrap.className = cls || "art";
+  wrap.innerHTML = markup;
+  return wrap;
+}
+
+const clone = (x) => JSON.parse(JSON.stringify(x));
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const mb = (bytes) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// ---------------------------------------------------------------- look pictures
+// Small drawings of the panel's looks (not screenshots): enough to tell them
+// apart; the live preview shows the real thing.
+
+let artId = 0;
+const svgWrap = (body, bg) =>
+  `<svg viewBox="0 0 120 120" preserveAspectRatio="xMidYMid slice" aria-hidden="true">${bg ? `<rect width="120" height="120" fill="${bg}"/>` : ""}${body}</svg>`;
+function grad(stops, vertical = true) {
+  const id = `pa${++artId}`;
+  const s = stops.map(([o, c]) => `<stop offset="${o}" stop-color="${c}"/>`).join("");
+  return [id, `<defs><linearGradient id="${id}" x1="0" y1="0" x2="${vertical ? 0 : 1}" y2="${vertical ? 1 : 0}">${s}</linearGradient></defs>`];
+}
+const txt = (x, y, size, fill, t, weight = 500, anchor = "middle") =>
+  `<text x="${x}" y="${y}" font-size="${size}" fill="${fill}" font-family="PanelOS Heading, Space Grotesk, sans-serif" font-weight="${weight}" text-anchor="${anchor}">${t}</text>`;
+const bars = (x, y, widths, fill, gap = 7, hgt = 3) => widths.map((w, i) => `<rect x="${x}" y="${y + i * gap}" width="${w}" height="${hgt}" rx="${hgt / 2}" fill="${fill}"/>`).join("");
+
+function synthBase(scene) {
+  const [g1, d1] = grad([[0, "#12002b"], [0.55, "#4b0f63"], [0.62, "#c2347a"], [0.63, "#1a0633"], [1, "#0b0018"]]);
+  const [g2, d2] = grad([[0, "#ffd45a"], [1, "#ff3d9a"]]);
+  let s = `${d1}${d2}<rect width="120" height="120" fill="url(#${g1})"/>`;
+  if (scene === 3) {
+    s += [[12, 14], [30, 30], [52, 10], [88, 20], [104, 40], [70, 34], [18, 50], [96, 8]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="0.9" fill="#fff"/>`).join("");
+    s += `<circle cx="82" cy="40" r="14" fill="url(#${g2})"/><ellipse cx="82" cy="40" rx="24" ry="5" fill="none" stroke="#ff8fd0" stroke-width="1.6"/>`;
+  } else {
+    s += `<circle cx="60" cy="58" r="22" fill="url(#${g2})"/>`;
+    s += [56, 62, 67, 71].map((y, i) => `<rect x="36" y="${y}" width="48" height="${1 + i * 0.6}" fill="#4b0f63"/>`).join("");
+  }
+  if (scene === 0) s += `<path d="M0 75 L22 52 L38 66 L60 44 L80 64 L98 50 L120 72 V76 H0Z" fill="#240a40" stroke="#ff2bd6" stroke-width="1"/>`;
+  if (scene === 1) s += `<path d="M0 76 V60 H10 V48 H20 V62 H28 V40 H40 V58 H48 V50 H60 V66 H66 V36 H78 V60 H86 V52 H98 V64 H108 V56 H120 V76Z" fill="#1a0633"/>` + [[14, 52], [32, 46], [34, 52], [70, 42], [72, 50], [90, 56], [112, 60]].map(([x, y]) => `<rect x="${x}" y="${y}" width="2" height="2" fill="#4ff0ff"/>`).join("");
+  if (scene === 2) s += `<rect x="0" y="70" width="120" height="6" fill="#ff6fb5" opacity=".5"/><path d="M96 76 Q98 56 92 40" stroke="#14001f" stroke-width="3" fill="none"/><path d="M92 40 q-14 -2 -20 6 M92 40 q12 -6 22 0 M92 40 q-6 -10 -16 -10 M92 40 q4 -10 14 -10" stroke="#14001f" stroke-width="3" fill="none"/>`;
+  s += `<g stroke="#ff2bd6" stroke-width="0.8" opacity=".75">${[78, 84, 92, 102, 116].map((y) => `<line x1="0" y1="${y}" x2="120" y2="${y}"/>`).join("")}${[-60, -20, 20, 60, 100, 140, 180].map((x) => `<line x1="60" y1="76" x2="${x}" y2="120"/>`).join("")}</g>`;
+  return s;
+}
+
+// A weather page background, by its BACKGROUNDS index.
+function bgArt(i) {
+  const b = BACKGROUNDS[i] || BACKGROUNDS[1];
+  if (b.theme === 8) return svgWrap(synthBase(b.scene));
+  switch (b.theme) {
+    case 0: {
+      const [g, d] = grad([[0, "#6fa8dc"], [1, "#d7e8f3"]]);
+      return svgWrap(`${d}<rect width="120" height="120" fill="url(#${g})"/><circle cx="92" cy="28" r="9" fill="#fff6d5"/><path d="M0 78 Q30 58 60 72 T120 66 V120 H0Z" fill="#5d8a4a"/><path d="M0 92 Q40 76 80 90 T120 86 V120 H0Z" fill="#3f6b33"/><ellipse cx="44" cy="106" rx="30" ry="5" fill="#9cc2df" opacity=".85"/>`);
+    }
+    case 1: {
+      const [g, d] = grad([[0, "#9cc3e8"], [1, "#eef2ee"]]);
+      return svgWrap(`${d}<rect width="120" height="120" fill="url(#${g})"/><path d="M0 70 L120 64 V120 H0Z" fill="#9bb04f"/><path d="M0 84 L120 76 V120 H0Z" fill="#c6a94f"/><path d="M0 100 L120 92 V120 H0Z" fill="#7d9a3e"/><rect x="78" y="56" width="16" height="11" fill="#e9e1d2"/><path d="M76 57 L86 49 L96 57Z" fill="#a4442e"/>`);
+    }
+    case 2: {
+      const [g, d] = grad([[0, "#36507a"], [1, "#e6a979"]]);
+      const win = [[16, 66], [33, 56], [36, 64], [52, 64], [73, 52], [76, 60], [95, 68], [108, 82], [24, 90], [64, 92]].map(([x, y]) => `<rect x="${x}" y="${y}" width="2.5" height="3" fill="#ffd27a"/>`).join("");
+      return svgWrap(`${d}<rect width="120" height="120" fill="url(#${g})"/><path d="M0 120 V74 H12 V60 H22 V80 H30 V50 H42 V70 H50 V58 H62 V84 H70 V46 H84 V72 H92 V62 H104 V78 H120 V120Z" fill="#1f2531"/>${win}`);
+    }
+    case 3:
+      return svgWrap(`<circle cx="26" cy="28" r="8" fill="#ffd166"/><circle cx="30" cy="132" r="62" fill="#8cc084"/><circle cx="102" cy="138" r="58" fill="#6aa86a"/><circle cx="86" cy="74" r="7" fill="#3f7d4f"/><rect x="85" y="80" width="2" height="8" fill="#6b4a2f"/><circle cx="62" cy="86" r="5" fill="#3f7d4f"/>`, "#bfe3f2");
+    case 4:
+      return svgWrap(`<rect x="8" y="60" width="22" height="60" fill="#e07a5f"/><rect x="34" y="44" width="20" height="76" fill="#3d405b"/><rect x="58" y="66" width="24" height="54" fill="#81b29a"/><rect x="86" y="52" width="24" height="68" fill="#f2cc8f"/>${[[13, 68], [20, 68], [13, 80], [39, 52], [46, 52], [39, 64], [63, 74], [72, 74], [91, 60], [100, 60], [91, 72]].map(([x, y]) => `<rect x="${x}" y="${y}" width="4" height="5" fill="#fbf4e8" opacity=".85"/>`).join("")}`, "#f6dcb4");
+    case 5:
+      return svgWrap(`<circle cx="84" cy="34" r="10" fill="#f8f4ec"/><path d="M0 84 Q34 64 64 78 T120 72 V120 H0Z" fill="#d6cdbd"/><path d="M0 98 Q44 84 84 96 T120 92 V120 H0Z" fill="#bfb5a3"/>`, "#ece6da");
+    case 6:
+      return svgWrap(`<rect x="6" y="46" width="16" height="74" fill="#6c7fa3"/><rect x="24" y="24" width="18" height="96" fill="#4a5b7a"/><rect x="44" y="56" width="14" height="64" fill="#8597bb"/><rect x="60" y="14" width="20" height="106" fill="#3b4a66"/><rect x="82" y="38" width="16" height="82" fill="#6c7fa3"/><rect x="100" y="60" width="16" height="60" fill="#4a5b7a"/><rect x="69" y="6" width="2" height="8" fill="#3b4a66"/>`, "#a9c6e8");
+    default:
+      return svgWrap(`<g fill="none" stroke="#101114" stroke-width="1.6" stroke-linecap="round"><circle cx="86" cy="32" r="9"/><path d="M0 82 Q30 62 60 76 T120 70"/><path d="M0 98 Q40 82 80 96 T120 92"/><path d="M30 74 v-12 M24 66 q6 -10 12 0"/></g>`, "#f5f3ee");
+  }
+}
+
+const ART = {
+  weather: [
+    () => svgWrap(`${[14, 46, 78].map((x) => `<rect x="${x}" y="36" width="28" height="48" rx="6" fill="#25282d"/><circle cx="${x + 14}" cy="52" r="6" fill="#ffc94d"/>${bars(x + 7, 66, [14, 10], "#6b6a67")}`).join("")}${bars(14, 18, [44, 26], "#f5f3ee", 8, 4)}`, "#15171a"),
+    () => { const [g, d] = grad([[0, "#4f86c6"], [1, "#bcd7ee"]]); return svgWrap(`${d}<rect width="120" height="120" fill="url(#${g})"/><ellipse cx="38" cy="44" rx="22" ry="9" fill="#fff" opacity=".85"/><ellipse cx="80" cy="30" rx="16" ry="6" fill="#fff" opacity=".7"/><path d="M0 92 Q40 80 80 90 T120 86 V120 H0Z" fill="#4c7a3d"/>${txt(28, 84, 26, "#fff", "21°", 500, "start")}`); },
+  ],
+  clock: [
+    () => svgWrap(`${txt(60, 66, 30, "#f5f3ee", "12:45")}${bars(36, 78, [48], "#6b6a67")}`, "#0e0f10"),
+    () => svgWrap(`${txt(60, 56, 44, "#f5f3ee", "12", 600)}${txt(60, 100, 44, "#f5f3ee", "45", 600)}`, "#0e0f10"),
+    () => svgWrap(`<circle cx="60" cy="60" r="40" fill="none" stroke="#f5f3ee" stroke-width="3"/><line x1="60" y1="60" x2="60" y2="32" stroke="#f5f3ee" stroke-width="4" stroke-linecap="round"/><line x1="60" y1="60" x2="82" y2="68" stroke="#f5f3ee" stroke-width="3" stroke-linecap="round"/><line x1="60" y1="60" x2="44" y2="88" stroke="#ff4a1c" stroke-width="1.5"/>`, "#0e0f10"),
+    () => svgWrap(`<rect x="20" y="20" width="80" height="80" rx="14" fill="#1d1e21" stroke="#f5f3ee" stroke-width="2"/>${[0, 90, 180, 270].map((a) => `<line x1="60" y1="26" x2="60" y2="32" stroke="#f5f3ee" stroke-width="2" transform="rotate(${a} 60 60)"/>`).join("")}<line x1="60" y1="60" x2="60" y2="36" stroke="#f5f3ee" stroke-width="4" stroke-linecap="round"/><line x1="60" y1="60" x2="80" y2="60" stroke="#f5f3ee" stroke-width="3" stroke-linecap="round"/>`, "#0e0f10"),
+    () => svgWrap(`<circle cx="60" cy="60" r="3" fill="#f5f3ee"/><line x1="60" y1="60" x2="60" y2="30" stroke="#f5f3ee" stroke-width="3" stroke-linecap="round"/><line x1="60" y1="60" x2="84" y2="74" stroke="#f5f3ee" stroke-width="2" stroke-linecap="round"/>`, "#0e0f10"),
+    () => svgWrap(`<circle cx="60" cy="60" r="42" fill="none" stroke="#6b6a67" stroke-width="1.5"/>${txt(60, 32, 12, "#f5f3ee", "12")}${txt(91, 64, 12, "#f5f3ee", "3")}${txt(60, 96, 12, "#f5f3ee", "6")}${txt(29, 64, 12, "#f5f3ee", "9")}<line x1="60" y1="60" x2="60" y2="40" stroke="#f5f3ee" stroke-width="3" stroke-linecap="round"/><line x1="60" y1="60" x2="76" y2="66" stroke="#f5f3ee" stroke-width="2" stroke-linecap="round"/>`, "#0e0f10"),
+    () => svgWrap(`${txt(40, 46, 18, "#f5f3ee", "12:45")}`, "#000"),
+    () => svgWrap(`${[14, 62].map((x) => `<rect x="${x}" y="34" width="44" height="52" rx="6" fill="#2a2b2e"/>`).join("")}${txt(36, 74, 32, "#f5f3ee", "12", 600)}${txt(84, 74, 32, "#f5f3ee", "45", 600)}<line x1="14" y1="60" x2="106" y2="60" stroke="#0e0f10" stroke-width="2"/>`, "#0e0f10"),
+  ],
+  music: [
+    () => { const [g, d] = grad([[0, "#8e5bd0"], [1, "#3fb6c5"]], false); return svgWrap(`${d}<rect x="16" y="16" width="56" height="56" rx="8" fill="url(#${g})"/>${bars(16, 82, [70, 44], "#f5f3ee", 8, 4)}<rect x="16" y="100" width="88" height="3" rx="1.5" fill="#3a3c40"/><rect x="16" y="100" width="40" height="3" rx="1.5" fill="#f5f3ee"/>`, "#121314"); },
+    () => { const [g, d] = grad([[0, "#d05b8e"], [1, "#3f6bc5"]]); const [g2, d2] = grad([[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,.75)"]]); return svgWrap(`${d}${d2}<rect width="120" height="120" fill="url(#${g})"/><rect y="50" width="120" height="70" fill="url(#${g2})"/>${bars(14, 88, [64, 40], "#fff", 9, 4)}`); },
+    () => svgWrap(`<rect x="8" y="8" width="104" height="104" rx="6" fill="#4a3020"/><circle cx="54" cy="60" r="40" fill="#141414"/><circle cx="54" cy="60" r="28" fill="none" stroke="#2a2a2a"/><circle cx="54" cy="60" r="11" fill="#e8743b"/><circle cx="54" cy="60" r="1.6" fill="#141414"/><path d="M100 20 L98 70 L74 84" stroke="#c9c9c9" stroke-width="3" fill="none" stroke-linecap="round"/>`, "#2a1c12"),
+    () => svgWrap(`<rect x="12" y="28" width="96" height="64" rx="6" fill="#e8e2d4"/><rect x="26" y="42" width="68" height="26" rx="4" fill="#3a3a3a"/><circle cx="42" cy="55" r="9" fill="#f5f3ee"/><circle cx="78" cy="55" r="9" fill="#f5f3ee"/><circle cx="42" cy="55" r="3" fill="#3a3a3a"/><circle cx="78" cy="55" r="3" fill="#3a3a3a"/><path d="M30 92 L36 80 H84 L90 92Z" fill="#d6cfbf"/>`, "#1d1e21"),
+    () => svgWrap(`${bars(14, 20, [70, 44], "#f5f3ee", 9, 4)}<rect x="8" y="64" width="104" height="70" rx="6" fill="#e8e2d4"/><rect x="24" y="78" width="72" height="28" rx="4" fill="#3a3a3a"/><circle cx="42" cy="92" r="9" fill="#f5f3ee"/><circle cx="78" cy="92" r="9" fill="#f5f3ee"/>`, "#1d1e21"),
+  ],
+  timers: [
+    () => svgWrap(`<circle cx="60" cy="60" r="38" fill="none" stroke="#2a2c30" stroke-width="8"/><circle cx="60" cy="60" r="38" fill="none" stroke="#ff4a1c" stroke-width="8" stroke-dasharray="160 240" transform="rotate(-90 60 60)" stroke-linecap="round"/>${txt(60, 68, 22, "#f5f3ee", "5:00")}`, "#101114"),
+    () => svgWrap(`<circle cx="60" cy="62" r="40" fill="#fbfaf6" stroke="#d9d3c5" stroke-width="2"/><path d="M60 62 L60 22 A40 40 0 0 1 98 50 Z" fill="#e24a33"/><circle cx="60" cy="62" r="8" fill="#d9d3c5"/>${[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((a) => `<line x1="60" y1="24" x2="60" y2="29" stroke="#8a857a" stroke-width="1.5" transform="rotate(${a} 60 62)"/>`).join("")}`, "#f1ede4"),
+    () => svgWrap(`<path d="M38 18 H82 M38 102 H82" stroke="#d9c8a0" stroke-width="4" stroke-linecap="round"/><path d="M42 20 L60 60 L42 100 H78 L60 60 L78 20Z" fill="none" stroke="#d9c8a0" stroke-width="2.5"/><path d="M50 36 H70 L60 56Z" fill="#e3b85c"/><path d="M46 98 L60 80 L74 98Z" fill="#e3b85c"/>`, "#1b1c1f"),
+    () => svgWrap(`${synthBase(0)}<circle cx="60" cy="60" r="26" fill="none" stroke="#4ff0ff" stroke-width="4" stroke-dasharray="110 200" transform="rotate(-90 60 60)"/>`),
+    () => svgWrap(`${[14, 62].map((x) => `<rect x="${x}" y="34" width="44" height="52" rx="6" fill="#2a2b2e"/>`).join("")}${txt(36, 74, 30, "#f5f3ee", "05", 600)}${txt(84, 74, 30, "#f5f3ee", "00", 600)}<line x1="14" y1="60" x2="106" y2="60" stroke="#0e0f10" stroke-width="2"/>`, "#101114"),
+  ],
+  thermostat: [
+    () => svgWrap(`<circle cx="60" cy="62" r="40" fill="none" stroke="#2a2c30" stroke-width="7" stroke-dasharray="188 252" transform="rotate(135 60 62)" stroke-linecap="round"/><circle cx="60" cy="62" r="40" fill="none" stroke="#ff8a3d" stroke-width="7" stroke-dasharray="110 252" transform="rotate(135 60 62)" stroke-linecap="round"/>${txt(60, 70, 24, "#f5f3ee", "21.5")}`, "#121314"),
+    () => svgWrap(`<rect x="34" y="10" width="52" height="100" rx="14" fill="#f7f5f0" stroke="#cfc9bd"/><rect x="42" y="20" width="36" height="22" rx="3" fill="#c7d3c0"/>${txt(60, 37, 13, "#2a3a2a", "21.5")}${[[48, 56], [72, 56], [48, 74], [72, 74], [60, 92]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="6" fill="#e2ddd2"/>`).join("")}`, "#e8e4dc"),
+    () => svgWrap(`<rect x="22" y="22" width="76" height="76" rx="10" fill="#efe7da" stroke="#cbbfa8"/><circle cx="60" cy="60" r="24" fill="#e2d6c2" stroke="#b9ab92" stroke-width="2"/>${txt(60, 66, 15, "#4a3f34", "21°")}`, "#d9cfc0"),
+    () => svgWrap(`${synthBase(1)}<circle cx="60" cy="56" r="26" fill="rgba(0,0,0,.45)" stroke="#ff2bd6" stroke-width="3"/>${txt(60, 62, 16, "#fff", "21.5")}`),
+  ],
+  quick: [
+    () => svgWrap([0, 1, 2, 3].flatMap((r) => [0, 1].map((c) => `<rect x="${14 + c * 48}" y="${14 + r * 24}" width="44" height="20" rx="6" fill="${(r + c) % 3 === 0 ? "#f5f3ee" : "#26292e"}"/>`)).join(""), "#121314"),
+    () => svgWrap([0, 1, 2, 3].map((i) => `<rect x="${22 + i * 24}" y="16" width="4" height="76" rx="2" fill="#0c0c0d"/><rect x="${15 + i * 24}" y="${30 + (i * 17) % 44}" width="18" height="10" rx="2" fill="#d9d9d9"/><rect x="${13 + i * 24}" y="98" width="22" height="8" fill="#0c0c0c"/><rect x="${16 + i * 24}" y="101" width="14" height="2" fill="#f2f2f2"/>`).join(""), "#1c1d20"),
+    () => svgWrap(`<rect x="8" y="22" width="104" height="76" rx="6" fill="#4a5058" stroke="#2c3036"/>${[0, 1, 2, 3].map((i) => `<circle cx="${24 + i * 24}" cy="60" r="7" fill="#2c3036"/><rect x="${22 + i * 24}" y="${i % 2 ? 40 : 60}" width="4" height="20" rx="2" fill="#dcdcdc"/>`).join("")}${[[14, 28], [106, 28], [14, 92], [106, 92]].map(([x, y]) => `<circle cx="${x}" cy="${y}" r="2" fill="#8a9099"/>`).join("")}`, "#2b2f35"),
+  ],
+  camera: [
+    () => { const [g, d] = grad([[0, "#2d3a4a"], [1, "#56677a"]]); return svgWrap(`${d}<rect width="120" height="120" fill="url(#${g})"/><rect x="44" y="40" width="32" height="64" fill="#3b2f2a"/><circle cx="70" cy="74" r="2" fill="#c9a86b"/><rect x="0" y="104" width="120" height="16" fill="#3a434d"/><circle cx="14" cy="14" r="4" fill="#ff4a1c"/>`); },
+  ],
+  calendar: [
+    () => svgWrap(`${[0, 1, 2, 3, 4].map((i) => `<line x1="${14 + i * 23}" y1="18" x2="${14 + i * 23}" y2="104" stroke="#2a2c30"/>`).join("")}<rect x="16" y="30" width="19" height="16" rx="3" fill="#3b8cff"/><rect x="39" y="52" width="19" height="22" rx="3" fill="#8d5bff"/><rect x="62" y="36" width="19" height="12" rx="3" fill="#3ccb7f"/><rect x="85" y="66" width="19" height="18" rx="3" fill="#3b8cff"/>`, "#121314"),
+    () => svgWrap([0, 1, 2, 3, 4].map((i) => `<rect x="10" y="${16 + i * 19}" width="100" height="15" fill="#1d1d1d"/><rect x="14" y="${21 + i * 19}" width="22" height="5" fill="#f5c400"/><rect x="42" y="${21 + i * 19}" width="${40 + (i * 13) % 24}" height="5" fill="#f5c400"/>`).join(""), "#0b0b0b"),
+    () => svgWrap(`<rect x="26" y="16" width="68" height="88" rx="4" fill="#f5f3ee"/><rect x="26" y="16" width="68" height="18" rx="4" fill="#d63a1e"/>${txt(60, 82, 40, "#101114", "15", 600)}`, "#2a2c30"),
+    () => svgWrap(`<rect x="12" y="16" width="96" height="94" rx="3" fill="#fbf9f4"/>${[0, 1, 2, 3, 4, 5, 6].map((i) => `<circle cx="${22 + i * 13}" cy="16" r="2.5" fill="#6b6a67"/>`).join("")}${bars(20, 26, [40], "#101114", 0, 5)}${[0, 1, 2, 3].map((r) => [0, 1, 2, 3, 4, 5, 6].map((c) => `<rect x="${18 + c * 12.5}" y="${42 + r * 16}" width="10" height="12" fill="none" stroke="#d9d3c5"/>`).join("")).join("")}<path d="M44 62 q6 -4 12 0" stroke="#2e6bd6" fill="none"/>`, "#e9e4da"),
+  ],
+  todo: [
+    () => svgWrap([0, 1, 2, 3, 4].map((i) => `<rect x="16" y="${20 + i * 18}" width="10" height="10" rx="2.5" fill="none" stroke="#9a978f" stroke-width="1.5"/><rect x="34" y="${23 + i * 18}" width="${60 - (i * 9) % 30}" height="4" rx="2" fill="#f5f3ee"/>`).join(""), "#121314"),
+    () => svgWrap(`<path d="M30 8 H90 V104 l-5 6 -5 -6 -5 6 -5 -6 -5 6 -5 -6 -5 6 -5 -6 -5 6 -5 -6 -5 6 -5 -6Z" fill="#f7f5ef"/>${bars(38, 22, [44, 30, 38, 26, 40], "#9a978f", 12, 3)}`, "#2a2c30"),
+    () => svgWrap(`${bars(14, 24, [52, 70, 40, 64], "#3ccb7f", 14, 4)}<rect x="14" y="82" width="8" height="10" fill="#3ccb7f"/>`, "#050805"),
+    () => svgWrap([0, 1, 2, 3].map((i) => `<g transform="rotate(${[-3, 2, -1, 3][i]} 60 ${28 + i * 22})"><rect x="${20 + (i % 2) * 8}" y="${20 + i * 22}" width="${70 - (i % 3) * 10}" height="15" rx="2" fill="#0c0c0c"/><rect x="${27 + (i % 2) * 8}" y="${26 + i * 22}" width="${44 - (i % 3) * 8}" height="3" fill="#f2f2f2"/></g>`).join(""), "#26282c"),
+    () => svgWrap(`${[0, 1, 2, 3, 4, 5].map((i) => `<line x1="0" y1="${30 + i * 15}" x2="120" y2="${30 + i * 15}" stroke="#9fbce0"/>`).join("")}<line x1="26" y1="0" x2="26" y2="120" stroke="#e07a7a"/>${bars(32, 24, [50, 38, 56], "#2c3e7a", 15, 3)}`, "#fff3a8"),
+  ],
+  info: [
+    () => svgWrap([0, 1, 2, 3].map((i) => `<circle cx="22" cy="${26 + i * 22}" r="7" fill="#26292e"/><rect x="36" y="${21 + i * 22}" width="${62 - (i * 11) % 24}" height="4" rx="2" fill="#f5f3ee"/><rect x="36" y="${29 + i * 22}" width="40" height="3" rx="1.5" fill="#6b6a67"/>`).join(""), "#121314"),
+    () => svgWrap(`<rect x="0" y="0" width="6" height="120" fill="#c9cfd4"/><g transform="rotate(-6 40 40)"><rect x="18" y="20" width="40" height="40" fill="#ffe066"/></g><g transform="rotate(5 82 52)"><rect x="62" y="32" width="40" height="40" fill="#ff9fb2"/></g><g transform="rotate(-3 52 92)"><rect x="32" y="72" width="40" height="36" fill="#a0e7a0"/></g><circle cx="38" cy="22" r="4" fill="#d63a1e"/><circle cx="82" cy="34" r="4" fill="#2e6bd6"/><circle cx="52" cy="74" r="4" fill="#3ccb7f"/>`, "#dfe3e6"),
+    () => svgWrap(`<rect x="16" y="26" width="88" height="68" rx="12" fill="#2e3033"/><rect x="26" y="36" width="68" height="32" rx="3" fill="#9fb38a"/>${bars(32, 44, [46, 30], "#2a3a22", 9, 4)}<circle cx="38" cy="82" r="5" fill="#1d1e21"/><circle cx="60" cy="82" r="5" fill="#1d1e21"/><circle cx="82" cy="82" r="5" fill="#1d1e21"/><circle cx="96" cy="32" r="2.5" fill="#3ccb7f"/>`, "#1d1e21"),
+    () => svgWrap(`<rect x="0" y="70" width="120" height="22" fill="#d63a1e"/><rect x="8" y="77" width="30" height="8" fill="#fff"/><rect x="44" y="78" width="60" height="6" fill="#ffd9d0"/><rect x="0" y="96" width="120" height="12" fill="#f5f3ee"/>${bars(6, 100, [80], "#101114", 0, 4)}<rect x="20" y="16" width="80" height="46" rx="3" fill="#2b3a66"/>`, "#1a2340"),
+  ],
+  voice: [
+    () => svgWrap(`<circle cx="60" cy="60" r="38" fill="#ff4a1c" opacity=".12"/><circle cx="60" cy="60" r="26" fill="#ff4a1c" opacity=".22"/><circle cx="60" cy="60" r="14" fill="#ff4a1c"/>`, "#0e0f10"),
+    () => svgWrap(`${txt(14, 34, 12, "#3ccb7f", "&gt;", 600, "start")}${bars(26, 26, [50, 66, 38], "#3ccb7f", 16, 4)}<rect x="14" y="78" width="8" height="10" fill="#3ccb7f"/>`, "#050805"),
+    () => svgWrap(`<path d="M18 24 H102 a8 8 0 0 1 8 8 V72 a8 8 0 0 1 -8 8 H52 L36 98 L40 80 H18 a8 8 0 0 1 -8 -8 V32 a8 8 0 0 1 8 -8Z" fill="#fff" stroke="#101114" stroke-width="3"/><circle cx="44" cy="52" r="4" fill="#101114"/><circle cx="60" cy="52" r="4" fill="#101114"/><circle cx="76" cy="52" r="4" fill="#101114"/>`, "#ffd84a"),
+    () => svgWrap(`${[30, 60, 90].map((v) => `<line x1="${v}" y1="0" x2="${v}" y2="120" stroke="#163016"/><line x1="0" y1="${v}" x2="120" y2="${v}" stroke="#163016"/>`).join("")}<path d="M0 60 C10 30 20 30 30 60 S50 90 60 60 S80 30 90 60 S110 90 120 60" fill="none" stroke="#3cff7a" stroke-width="2.5"/>`, "#081008"),
+  ],
 };
 
+// The picture of a page's look (a weather page: its background).
+function lookArt(kind, variant, page) {
+  if (kind === "home") return svgNode(bgArt(bgIndex(page)));
+  const list = ART[kind] || ART.info;
+  return svgNode((list[variant] || list[0])());
+}
+
+// The BACKGROUNDS index of a weather page (options.theme / options.scene).
+function bgIndex(page) {
+  const o = (page && page.options) || {};
+  const theme = Number.isInteger(o.theme) ? o.theme : 1;
+  if (theme === 8) return 8 + Math.max(0, Math.min(3, Number.isInteger(o.scene) ? o.scene : 0));
+  return Math.max(0, Math.min(7, theme));
+}
+
+// The panel's pattern (brand guide), drawn fine enough next to the logo: its
+// unit (the dot) is at most a quarter of the logo's mark unit. Logo 140 px
+// wide: mark unit 4.9 px, pattern unit 1.2 px. One tile repeats seamlessly:
+// a row is 576 units long and shifts by 112 per row, 36 rows.
+function patternUrl(dark) {
+  const dot = dark ? "#4A1A12" : "#F6C7B8";
+  const dash = dark ? "#1E1F23" : "#E4E1D9";
+  const sig = [["c", 0], ["r", 32], ["r", 96], ["c", 160], ["r", 224], ["r", 288], ["r", 352], ["c", 448], ["c", 480], ["c", 512]];
+  let body = "";
+  for (let row = 0; row < 36; row++) {
+    const y = row * 41.6;
+    for (let k = -1; k <= 1; k++) {
+      const x0 = ((-112 * row) % 576 + 576) % 576 + k * 576;
+      for (const [t, x] of sig) {
+        const xx = x0 + x;
+        if (xx > 600 || xx < -60) continue;
+        body += t === "c" ? `<circle cx="${xx + 8}" cy="${y + 8}" r="8" fill="${dot}"/>` : `<rect x="${xx}" y="${y}" width="48" height="16" rx="8" fill="${dash}"/>`;
+      }
+    }
+  }
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 1497.6" width="576" height="1497.6"><rect width="576" height="1497.6" fill="${dark ? "#121314" : "#F5F3EE"}"/>${body}</svg>`;
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+}
+const PATTERN_SCALE = 1.2 / 16;
+
+// ---------------------------------------------------------------- style
+
+const FONTS = `
+@font-face { font-family: "PanelOS Text"; src: url("{STATIC}/fonts/NotoSans-Latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "PanelOS Heading"; src: url("{STATIC}/fonts/SpaceGrotesk-Latin.woff2") format("woff2"); font-weight: 300 700; font-display: swap; }
+`;
+
 const STYLE = `
-@font-face { font-family: "PanelOS Text"; src: url("{STATIC}/fonts/NotoSans-Latin.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
-@font-face { font-family: "PanelOS Heading"; src: url("{STATIC}/fonts/SpaceGrotesk-Latin.woff2") format("woff2"); font-weight: 400 700; font-display: swap; }
 :host {
-  --signal: #FF4A1C;
-  --signal-soft: rgba(255, 74, 28, 0.14);
-  --ground: #F5F3EE; --surface: #FFFFFF; --raised: #EBE8E1; --line: #DAD6CD;
-  --text: #101114; --muted: #5F5E5A; --faint: #9A978F; --ok: #1F9D55; --nav: #EFECE5;
-  --shadow: 0 1px 2px rgba(16,17,20,0.06), 0 8px 24px rgba(16,17,20,0.06);
-  --pattern: url("{STATIC}/pattern-light.svg");
+  --signal: #FF4A1C; --signal-soft: rgba(255, 74, 28, 0.13); --signal-line: rgba(255, 74, 28, 0.45);
+  --ground: #F5F3EE; --surface: #FFFFFF; --raised: #EBE8E1; --sunken: #E4E0D7; --line: #DAD6CD; --nav: #EFECE5;
+  --text: #101114; --muted: #5F5E5A; --faint: #8A877F; --ok: #1F9D55; --warn: #B7791F; --bad: #C7361B;
+  --on-signal: #101114;
+  --shadow: 0 1px 2px rgba(16,17,20,.06), 0 8px 24px rgba(16,17,20,.06);
+  --shadow-lg: 0 24px 64px rgba(16,17,20,.22);
+  --scrim: rgba(16,17,20,.38);
   --logo: url("{STATIC}/logo.svg");
-  display: block; min-height: 100vh; background: var(--ground); color: var(--text);
+  --bezel: #E9E6DF; --bezel-edge: #CFCAC0;
+  display: block; height: 100vh; height: 100dvh; overflow: hidden; position: relative;
+  background: var(--ground); color: var(--text); color-scheme: light;
   font-family: "PanelOS Text", "Noto Sans", system-ui, sans-serif; font-size: 15px; line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 :host([dark]) {
-  --ground: #121314; --surface: #1A1B1E; --raised: #232528; --line: #2A2C30;
-  --text: #F5F3EE; --muted: #A3A19C; --faint: #6B6A67; --ok: #3CCB7F; --nav: #0E0F10;
-  --shadow: none;
-  --pattern: url("{STATIC}/pattern-dark.svg");
+  --ground: #121314; --surface: #1A1B1E; --raised: #232528; --sunken: #0E0F10; --line: #2A2C30; --nav: #0E0F10;
+  --text: #F5F3EE; --muted: #A3A19C; --faint: #7D7B76; --ok: #3CCB7F; --warn: #E0A840; --bad: #FF6A4D;
+  --shadow: none; --shadow-lg: 0 24px 64px rgba(0,0,0,.6); --scrim: rgba(0,0,0,.6);
   --logo: url("{STATIC}/logo-dark.svg");
+  --bezel: #1C1D20; --bezel-edge: #34363B;
+  color-scheme: dark;
 }
-* { box-sizing: border-box; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 h1, h2, h3 { font-family: "PanelOS Heading", "Space Grotesk", "PanelOS Text", sans-serif; font-weight: 500; letter-spacing: -0.01em; margin: 0; }
-button { font: inherit; color: inherit; }
-svg { display: block; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.mdi { display: inline-flex; align-items: center; justify-content: center; flex: none; --mdc-icon-size: 20px; width: var(--mdc-icon-size); height: var(--mdc-icon-size); }
+.muted { color: var(--muted); } .faint { color: var(--faint); }
+.num { font-variant-numeric: tabular-nums; }
+.wrap { overflow-wrap: anywhere; }
 
-.shell { display: grid; grid-template-columns: 232px minmax(0, 1fr) 380px; min-height: 100vh; }
-:host([size=medium]) .shell { grid-template-columns: minmax(0, 1fr) 340px; }
-:host([size=narrow]) .shell { grid-template-columns: minmax(0, 1fr); }
-
-/* navigation */
-.nav { background: var(--nav); border-right: 1px solid var(--line); position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; }
+/* shell */
+.app { display: grid; height: 100%; grid-template-columns: 248px minmax(0, 1fr) 392px; grid-template-rows: minmax(0, 1fr); grid-template-areas: "nav main pv"; position: relative; }
+.app.no-preview { grid-template-columns: 248px minmax(0, 1fr); grid-template-areas: "nav main"; }
+.nav { grid-area: nav; background: var(--nav); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.top { grid-area: top; display: none; background: var(--ground); border-bottom: 1px solid var(--line); z-index: 5; min-width: 0; }
+.main { grid-area: main; overflow-y: auto; min-width: 0; min-height: 0; overscroll-behavior: contain; }
+.preview-col { grid-area: pv; overflow-y: auto; padding: 26px 24px 26px 4px; display: flex; flex-direction: column; align-items: center; gap: 14px; min-width: 0; min-height: 0; }
+.bnav { grid-area: bnav; display: none; }
+:host([size=medium]) .app { grid-template-columns: minmax(0, 1fr) 336px; grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "top top" "main pv"; }
+:host([size=medium]) .app.no-preview { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "main"; }
 :host([size=medium]) .nav, :host([size=narrow]) .nav { display: none; }
-.brand { height: 128px; background: var(--pattern) center / cover; display: flex; align-items: flex-end; padding: 0 22px 20px; border-bottom: 1px solid var(--line); }
-.brand i { display: block; width: 150px; height: 22px; background: var(--logo) left center / contain no-repeat; }
-.links { padding: 18px 12px; display: flex; flex-direction: column; gap: 4px; }
-.links button { display: flex; align-items: center; gap: 14px; border: 0; background: none; border-radius: 12px; padding: 11px 12px; cursor: pointer; text-align: left; color: var(--muted); font-size: 15px; }
-.links button svg { width: 20px; height: 20px; fill: currentColor; flex: none; }
+:host([size=medium]) .top, :host([size=narrow]) .top { display: block; }
+:host([size=medium]) .preview-col { padding: 20px 20px 20px 0; }
+:host([size=narrow]) .app, :host([size=narrow]) .app.no-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "top" "main" "bnav"; }
+:host([size=narrow]) .preview-col { display: none; }
+
+.brand { height: 112px; flex: none; display: flex; align-items: flex-end; padding: 0 12px 10px; border-bottom: 1px solid var(--line); background-color: var(--ground); background-repeat: repeat; }
+/* Brand guide: the logo sits in a calm panel of the pattern's ground, 2u clear on every side
+   (u = 4.9 px with a 140 px logo), corner 0.16 x the logo height, no border. */
+.brand-box { display: block; background: var(--ground); padding: 10px; border-radius: 3.25px; }
+.brand-box i { display: block; width: 140px; height: 20.3px; background: var(--logo) left center / contain no-repeat; }
+.nav-scroll { overflow-y: auto; flex: 1; display: flex; flex-direction: column; padding: 14px 12px; gap: 14px; min-height: 0; }
+.switcher { display: flex; align-items: center; gap: 12px; width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 16px; padding: 8px 10px 8px 8px; text-align: left; min-width: 0; }
+.switcher:hover { border-color: var(--signal-line); }
+.switcher .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.switcher .txt b { font-weight: 600; font-size: 15px; overflow-wrap: anywhere; }
+.switcher .txt small { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.thumb { flex: none; width: 44px; height: 44px; border-radius: 8px; overflow: hidden; background: #000; position: relative; box-shadow: 0 0 0 1px var(--bezel-edge); display: grid; place-items: center; color: #6b6a67; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb .mdi { --mdc-icon-size: 22px; }
+.links { display: flex; flex-direction: column; gap: 2px; }
+.links button { display: flex; align-items: center; gap: 14px; border: 0; background: none; border-radius: 12px; padding: 10px 12px; text-align: left; color: var(--muted); font-size: 15px; min-width: 0; }
+.links button .mdi { --mdc-icon-size: 21px; }
 .links button:hover { background: var(--raised); color: var(--text); }
 .links button.on { background: var(--signal-soft); color: var(--text); }
-.links button.on svg { fill: var(--signal); }
-.panels { padding: 0 12px 8px; display: flex; flex-direction: column; gap: 4px; }
-.panels button { border: 1px solid var(--line); background: var(--surface); border-radius: 12px; padding: 9px 12px; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.panels button.on { border-color: var(--signal); }
+.links button.on .mdi { color: var(--signal); }
+.links button .badge { margin-left: auto; }
+.nav-foot { border-top: 1px solid var(--line); padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; flex: none; }
 
-/* top bar (medium / narrow) */
-.top { display: none; position: sticky; top: 0; z-index: 3; background: var(--ground); border-bottom: 1px solid var(--line); }
-:host([size=medium]) .top, :host([size=narrow]) .top { display: block; }
-.top-row { display: flex; align-items: center; gap: 10px; height: 56px; padding: 0 16px; }
-.top-row i { display: block; width: 124px; height: 18px; background: var(--logo) left center / contain no-repeat; }
-.menu { display: none; border: 0; background: none; width: 40px; height: 40px; border-radius: 20px; margin-left: -8px; cursor: pointer; }
-.menu svg { width: 24px; height: 24px; fill: var(--text); margin: auto; }
-:host([narrow]) .menu { display: grid; }
-.tabs { display: flex; gap: 6px; padding: 0 12px 10px; overflow-x: auto; scrollbar-width: none; }
+.top-row { display: flex; align-items: center; gap: 6px; min-height: 58px; padding: 4px 8px 4px 4px; }
+.top-row > i.logo { display: block; width: 112px; height: 16.3px; background: var(--logo) left center / contain no-repeat; flex: none; margin: 0 6px 0 8px; }
+.top .switcher { border: 0; background: none; padding: 6px 8px; width: auto; flex: 1; border-radius: 12px; }
+.top .switcher:hover { background: var(--raised); }
+.tabs { display: flex; gap: 6px; padding: 0 14px 10px; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }
-.tabs button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 14px; white-space: nowrap; cursor: pointer; color: var(--muted); font-size: 14px; }
+.tabs button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 6px 14px 6px 10px; white-space: nowrap; color: var(--muted); font-size: 14px; display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.tabs button .mdi { --mdc-icon-size: 17px; }
 .tabs button.on { border-color: var(--signal); color: var(--text); background: var(--signal-soft); }
+.tabs button.on .mdi { color: var(--signal); }
+:host([size=narrow]) .tabs { display: none; }
+.ib { width: 40px; height: 40px; border-radius: 20px; border: 0; background: none; display: grid; place-items: center; color: var(--muted); flex: none; position: relative; padding: 0; }
+.ib .mdi { --mdc-icon-size: 22px; }
+.ib:hover, .ib[aria-expanded=true] { background: var(--raised); color: var(--text); }
+.ib:disabled { opacity: .4; cursor: default; }
+.ib.info { width: 32px; height: 32px; color: var(--faint); }
+.ib.info .mdi { --mdc-icon-size: 19px; }
+.ib.info:hover, .ib.info[aria-expanded=true] { color: var(--signal); background: var(--signal-soft); }
 
-/* content */
-.content { padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 22px; max-width: 760px; width: 100%; }
-:host([size=narrow]) .content { padding: 16px 16px 48px; gap: 16px; }
-.hero { display: flex; flex-direction: column; gap: 6px; padding: 4px 2px 6px; }
-.hero h1 { font-size: 30px; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.content { padding: 26px 34px 80px; display: flex; flex-direction: column; gap: 20px; max-width: 820px; width: 100%; }
+.content.wide { max-width: 1100px; }
+:host([size=medium]) .content { padding: 20px 24px 72px; }
+:host([size=narrow]) .content { padding: 14px 16px 120px; gap: 14px; }
+
+.bnav button { flex: 1 1 0; min-width: 0; border: 0; background: none; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11.5px; color: var(--muted); padding: 5px 0 3px; border-radius: 14px; text-align: center; }
+.bnav button .mdi { --mdc-icon-size: 23px; width: 56px; height: 30px; border-radius: 15px; }
+.bnav button.on { color: var(--text); }
+.bnav button.on .mdi { background: var(--signal-soft); color: var(--signal); }
+:host([size=narrow]) .bnav { display: flex; background: var(--surface); border-top: 1px solid var(--line); padding: 6px 6px calc(6px + env(safe-area-inset-bottom, 0px)); justify-content: space-around; z-index: 6; }
+
+/* content blocks */
+.hero { display: flex; align-items: flex-start; gap: 12px; padding: 2px 2px 4px; flex-wrap: wrap; }
+.hero .t { flex: 1 1 220px; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.hero h1 { font-size: 30px; line-height: 1.15; overflow-wrap: anywhere; }
 :host([size=narrow]) .hero h1 { font-size: 24px; }
-.hero .meta { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 14px; align-items: center; }
+:host([size=narrow]) .ov-hero h1 { display: none; }
+.hero .meta { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--muted); font-size: 14px; align-items: center; }
+.hero .acts { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.back { display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; color: var(--muted); padding: 4px 8px 4px 2px; border-radius: 10px; font-size: 14px; margin: -4px 0 -8px -2px; align-self: flex-start; }
+.back:hover { color: var(--text); background: var(--raised); }
 .state { display: inline-flex; align-items: center; gap: 7px; }
-.state b { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); }
-.state.on b { background: var(--ok); }
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 8px 22px 10px; box-shadow: var(--shadow); scroll-margin-top: 120px; }
-:host([size=narrow]) .card { padding: 6px 16px 8px; border-radius: 16px; }
-.card-head { display: flex; align-items: center; gap: 10px; min-height: 56px; position: relative; }
-.card-head h2 { font-size: 19px; flex: 1; }
-.ib { width: 34px; height: 34px; border-radius: 17px; border: 0; background: none; display: grid; place-items: center; cursor: pointer; color: var(--faint); flex: none; }
-.ib svg { width: 20px; height: 20px; fill: currentColor; }
-.ib:hover, .ib[aria-expanded=true] { color: var(--signal); background: var(--signal-soft); }
-.pop { position: absolute; right: 0; top: 48px; z-index: 4; width: min(340px, 100%); background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font-size: 14px; line-height: 1.5; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
-.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 64px; padding: 10px 0; border-top: 1px solid var(--line); }
-.row > .label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row > .control { flex: 0 1 auto; display: flex; align-items: center; gap: 12px; min-width: 0; justify-content: flex-end; }
-.row.stack { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 0 16px; }
-.row.stack > .control { justify-content: flex-start; flex-wrap: wrap; width: 100%; }
-:host([size=narrow]) .row:not(.stack) { flex-wrap: wrap; gap: 8px 16px; }
+.state b { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.state.on b { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
 
-.seg { display: inline-flex; background: var(--raised); border-radius: 999px; padding: 3px; gap: 2px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
-.seg button { border: 0; background: none; font-size: 14px; padding: 7px 15px; border-radius: 999px; cursor: pointer; white-space: nowrap; color: var(--muted); }
-.seg button.on { background: var(--signal); color: #fff; }
-.sel { position: relative; max-width: 300px; min-width: 170px; }
-.sel select { appearance: none; width: 100%; font: inherit; font-size: 14px; color: var(--text); background: var(--raised); border: 1px solid transparent; border-radius: 12px; padding: 9px 36px 9px 14px; cursor: pointer; text-overflow: ellipsis; }
-.sel select:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
-.sel svg { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); width: 20px; height: 20px; fill: var(--muted); pointer-events: none; }
-.switch { position: relative; width: 48px; height: 28px; flex: none; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 6px 22px 10px; box-shadow: var(--shadow); position: relative; min-width: 0; }
+:host([size=narrow]) .card { padding: 4px 16px 8px; border-radius: 16px; }
+.card-head { display: flex; align-items: center; gap: 8px; min-height: 56px; position: relative; flex-wrap: wrap; row-gap: 8px; padding: 6px 0; }
+.card-head h2 { font-size: 19px; flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.card-head .sub { color: var(--muted); font-size: 13.5px; font-family: "PanelOS Text", sans-serif; letter-spacing: 0; font-weight: 400; }
+.card-head .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; max-width: 100%; }
+.pop { position: absolute; right: 0; top: 50px; z-index: 30; width: min(360px, calc(100vw - 32px)); background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font-size: 14px; line-height: 1.5; box-shadow: var(--shadow-lg); font-family: "PanelOS Text", sans-serif; letter-spacing: 0; font-weight: 400; text-align: left; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; }
+.row.first, .card-head + .row { border-top: 0; }
+.row > .lw { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; }
+.row > .lw > .label { min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.row > .lw > .label small { color: var(--muted); font-size: 13px; }
+.row.click { cursor: pointer; }
+.row.click:hover > .lw > .label > span { text-decoration: underline; text-underline-offset: 3px; }
+.row.dim > .lw > .label, .row.dim > .lead, .row.dim > .stlead { opacity: .55; }
+.rinfo { position: relative; flex: none; }
+.rinfo .pop { left: 0; right: auto; top: 36px; width: min(320px, calc(100vw - 48px)); }
+.row > .control { flex: 0 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; justify-content: flex-end; flex-wrap: wrap; }
+.row.stack { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 0 16px; }
+.row.stack > .control { justify-content: flex-start; width: 100%; }
+:host([size=narrow]) .row:not(.stack):not(.keep) { flex-wrap: wrap; gap: 8px 16px; }
+:host([size=narrow]) .row:not(.stack):not(.keep) > .control { margin-left: auto; }
+.lead { width: 38px; height: 38px; border-radius: 12px; background: var(--raised); display: grid; place-items: center; flex: none; color: var(--muted); }
+.lead .mdi { --mdc-icon-size: 21px; }
+.lead.on { background: var(--signal-soft); color: var(--signal); }
+.below { padding: 0 0 14px; margin-top: -4px; }
+
+/* controls */
+.seg { display: inline-flex; flex-wrap: wrap; background: var(--raised); border-radius: 20px; padding: 3px; gap: 2px; max-width: 100%; }
+.seg button { border: 0; background: none; font-size: 14px; padding: 7px 15px; border-radius: 999px; color: var(--muted); text-align: center; }
+.seg button:hover { color: var(--text); }
+.seg button.on { background: var(--text); color: var(--ground); }
+.seg button:disabled { opacity: .4; cursor: default; }
+.sel { position: relative; max-width: 100%; min-width: 0; flex: 0 1 auto; display: inline-block; }
+.sel select { appearance: none; -webkit-appearance: none; max-width: 100%; font-size: 14px; color: var(--text); background: var(--raised); border: 1px solid transparent; border-radius: 12px; padding: 9px 36px 9px 14px; }
+.sel.full, .sel.full select { width: 100%; }
+.sel select:focus-visible, .inp:focus-visible, button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+.sel .mdi { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); pointer-events: none; color: var(--muted); }
+.inp { font-size: 14px; background: var(--raised); border: 1px solid transparent; border-radius: 12px; padding: 9px 13px; color: var(--text); min-width: 0; width: 100%; }
+.inp.time { width: 112px; font-variant-numeric: tabular-nums; }
+.inp.short { width: 200px; max-width: 100%; }
+.switch { position: relative; width: 48px; height: 28px; flex: none; display: inline-block; }
 .switch input { opacity: 0; width: 100%; height: 100%; margin: 0; position: absolute; cursor: pointer; z-index: 1; }
-.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--raised); border: 1px solid var(--line); transition: background 0.15s; }
-.switch span::after { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; border-radius: 50%; background: var(--faint); transition: transform 0.15s, background 0.15s; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--raised); border: 1px solid var(--line); transition: background .15s; }
+.switch span::after { content: ""; position: absolute; width: 20px; height: 20px; left: 3px; top: 3px; border-radius: 50%; background: var(--faint); transition: transform .15s, background .15s; }
 .switch input:checked + span { background: var(--signal); border-color: var(--signal); }
-.switch input:checked + span::after { transform: translateX(20px); background: #fff; }
-.switch input:disabled + span { opacity: 0.45; }
-.slider { display: flex; align-items: center; gap: 12px; }
-input[type=range] { -webkit-appearance: none; appearance: none; width: 210px; max-width: 52vw; height: 28px; background: transparent; cursor: pointer; }
+.switch input:checked + span::after { transform: translateX(20px); background: #F5F3EE; }
+.switch input:disabled { cursor: default; }
+.switch input:disabled + span { opacity: .45; }
+.slider { display: flex; align-items: center; gap: 12px; min-width: 0; }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 220px; max-width: 46vw; height: 28px; background: transparent; cursor: pointer; margin: 0; }
 input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 3px; background: linear-gradient(to right, var(--signal) var(--fill, 0%), var(--raised) var(--fill, 0%)); }
 input[type=range]::-moz-range-track { height: 6px; border-radius: 3px; background: var(--raised); }
 input[type=range]::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--signal); }
 input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); border: 2px solid var(--signal); margin-top: -7px; }
 input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--surface); border: 2px solid var(--signal); }
-input[type=range]:disabled { opacity: 0.4; cursor: default; }
-.value { min-width: 66px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
-.now { color: var(--faint); font-size: 13px; font-variant-numeric: tabular-nums; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; row-gap: 8px; min-width: 0; max-width: 100%; }
-.chip { display: inline-flex; align-items: center; gap: 4px; background: var(--raised); border-radius: 999px; padding: 6px 6px 6px 14px; font-size: 14px; max-width: 100%; min-width: 0; }
-.chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.chip button { border: 0; background: none; width: 26px; height: 26px; border-radius: 13px; display: grid; place-items: center; cursor: pointer; color: var(--muted); flex: none; }
-.chip button svg { width: 16px; height: 16px; fill: currentColor; }
-.chip button:hover { color: var(--signal); }
-.add { position: relative; display: inline-flex; }
-.add .sel { min-width: 0; max-width: 260px; }
-.pages { display: flex; flex-direction: column; gap: 10px; }
-.page-item { border: 1px solid var(--line); border-radius: 14px; padding: 4px 14px 6px; }
-.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
-.page-name { font-family: "Space Grotesk", sans-serif; font-weight: 500; font-size: 16px; }
-.page-head .btn svg { width: 16px; height: 16px; fill: currentColor; vertical-align: middle; }
-.page-head .btn:disabled { opacity: 0.35; cursor: default; }
-.res-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
-.res-head .sum { color: var(--muted); font-size: 14px; }
-.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 16px; cursor: pointer; font-size: 14px; white-space: nowrap; }
-.btn:hover { border-color: var(--signal); }
-.btn.primary { background: var(--signal); border-color: var(--signal); color: #fff; }
-.btn.armed { border-color: var(--signal); color: var(--signal); background: var(--signal-soft); }
-.btn:disabled { opacity: 0.45; cursor: default; }
-.res { display: flex; flex-direction: column; margin-top: 4px; }
-.res .item { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
-.res .item:first-child { border-top: 0; }
-.res .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.res .name small { color: var(--faint); margin-left: 8px; }
-.res .size { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
-.res .tag { color: var(--signal); font-size: 12px; border: 1px solid var(--signal); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
-.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 12px 28px; padding: 6px 0 16px; font-size: 14px; border-top: 1px solid var(--line); padding-top: 16px; }
-.facts dt { color: var(--muted); }
-.facts dd { margin: 0; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.actions { display: flex; gap: 10px; flex-wrap: wrap; padding: 4px 0 14px; }
+input[type=range]:disabled { opacity: .4; cursor: default; }
+.value { min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+.btn { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 8px 16px; font-size: 14px; display: inline-flex; align-items: center; gap: 7px; color: var(--text); max-width: 100%; min-width: 0; text-align: left; }
+.btn .mdi { --mdc-icon-size: 18px; }
+.btn:hover { border-color: var(--signal-line); }
+.btn.primary { background: var(--text); border-color: var(--text); color: var(--ground); }
+.btn.primary .mdi { color: var(--signal); }
+.btn.primary:hover { filter: brightness(1.1); }
+.btn.ghost { border-color: transparent; background: none; color: var(--muted); }
+.btn.ghost:hover { color: var(--text); background: var(--raised); }
+.btn.armed { border-color: var(--signal); background: var(--signal-soft); }
+.btn.danger { color: var(--bad); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.small { padding: 5px 12px; font-size: 13px; }
+.btn.pickbtn { background: var(--raised); border-color: transparent; border-radius: 14px; padding: 7px 10px 7px 12px; font-size: 14px; overflow-wrap: anywhere; }
+.btn.pickbtn > .mdi:last-child { color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
+.chip { display: inline-flex; align-items: center; gap: 6px; background: var(--raised); border: 1px solid transparent; border-radius: 18px; padding: 6px 14px; font-size: 14px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; text-align: left; }
+.chip .x { border: 0; background: none; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center; color: var(--muted); margin-right: -8px; padding: 0; flex: none; }
+.chip .x:hover { color: var(--signal); }
+.chip .x .mdi { --mdc-icon-size: 16px; }
+.chip > .mdi { --mdc-icon-size: 17px; }
+.chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+button.chip:hover { border-color: var(--signal-line); }
+.chip.on { background: var(--signal-soft); border-color: var(--signal); }
+.chip.on > .mdi { color: var(--signal); }
+.chip.add { background: none; border: 1px dashed var(--line); color: var(--muted); }
+.chip.add:hover { color: var(--text); border-color: var(--signal-line); }
+.chip.small-chip { padding: 3px 11px; font-size: 13px; }
+.badge { font-size: 11.5px; line-height: 18px; padding: 0 7px; border-radius: 9px; background: var(--raised); color: var(--muted); font-weight: 500; white-space: nowrap; }
+.badge.lit { background: var(--signal); color: var(--on-signal); font-weight: 600; }
+.tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
+.tag.sig { border-color: var(--signal-line); }
 
-/* live preview */
-.preview { position: sticky; top: 0; height: 100vh; padding: 28px 28px 28px 0; display: flex; flex-direction: column; gap: 14px; }
-:host([size=narrow]) .preview { position: static; height: auto; padding: 16px 16px 0; align-items: center; }
-.bezel { position: relative; aspect-ratio: 1; width: 100%; max-width: 352px; background: #0B0B0C; border-radius: 30px; padding: 20px; box-shadow: 0 24px 50px rgba(0,0,0,0.30), inset 0 0 0 1px rgba(255,255,255,0.07); cursor: pointer; }
-:host([size=narrow]) .bezel { max-width: 300px; }
-.screen { width: 100%; height: 100%; border-radius: 6px; overflow: hidden; background: #000; position: relative; }
-.screen img { width: 100%; height: 100%; display: block; }
-.screen .off { position: absolute; inset: 0; display: grid; place-items: center; color: #6B6A67; font-size: 14px; }
-.pv-foot { display: flex; align-items: center; justify-content: space-between; max-width: 352px; width: 100%; color: var(--muted); font-size: 14px; position: relative; }
-.empty { padding: 64px 24px; text-align: center; color: var(--muted); }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9; background: #101114; color: #F5F3EE; padding: 12px 18px; border-radius: 12px; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,0.3); max-width: calc(100vw - 32px); }
+.more { border-top: 1px solid var(--line); }
+.more > button { width: 100%; display: flex; align-items: center; gap: 8px; border: 0; background: none; padding: 14px 0; color: var(--muted); font-size: 14px; text-align: left; }
+.more > button:hover { color: var(--text); }
+.more > button .mdi { transition: transform .2s; }
+.more.open > button .mdi { transform: rotate(180deg); }
+.more .body { padding-bottom: 6px; }
+.more .body > .row:first-child { border-top: 1px solid var(--line); }
+
+/* look picker */
+.looks { position: relative; display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; padding: 4px 4px 12px; margin: 0 -4px; scrollbar-width: thin; scroll-snap-type: x proximity; }
+.look { flex: none; width: 112px; border: 0; background: none; padding: 0; text-align: left; display: flex; flex-direction: column; gap: 7px; scroll-snap-align: start; }
+.look .pic { width: 112px; height: 112px; border-radius: 14px; overflow: hidden; position: relative; background: #000; box-shadow: 0 0 0 1px var(--line); transition: box-shadow .15s; }
+.look > span { font-size: 13.5px; line-height: 1.3; color: var(--muted); padding: 0 2px; overflow-wrap: anywhere; }
+.look:hover .pic { box-shadow: 0 0 0 2px var(--signal-line); }
+.look.on .pic { box-shadow: 0 0 0 3px var(--signal); }
+.look.on > span { color: var(--text); font-weight: 600; }
+.look:disabled { opacity: .45; cursor: default; }
+.look .chk { position: absolute; right: 7px; top: 7px; width: 24px; height: 24px; border-radius: 12px; background: var(--signal); color: #101114; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+.look .chk .mdi { --mdc-icon-size: 16px; }
+.art, .art svg { width: 100%; height: 100%; display: block; }
+.swatches { display: flex; gap: 10px; flex-wrap: wrap; }
+.sw { width: 34px; height: 34px; border-radius: 50%; border: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.15); position: relative; padding: 0; flex: none; }
+.sw.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--signal); }
+.sw.wood { border-radius: 10px; width: 52px; height: 34px; }
+.sw.panel { background: conic-gradient(#FF4A1C, #FFB020, #3CCB7F, #2E9BFF, #B06CFF, #FF4A1C); }
+.sw-lab { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); border: 0; background: none; padding: 0; max-width: 72px; text-align: center; }
+.sw-lab.on { color: var(--text); font-weight: 600; }
+
+/* page list */
+.plist { display: flex; flex-direction: column; }
+.prow { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; background: var(--surface); position: relative; }
+.prow:first-child { border-top: 0; }
+.prow.dragging { z-index: 5; box-shadow: var(--shadow-lg); border-radius: 14px; border-top-color: transparent; opacity: .96; }
+.prow .handle { width: 28px; height: 44px; display: grid; place-items: center; color: var(--faint); cursor: grab; touch-action: none; flex: none; border: 0; background: none; margin-left: -8px; padding: 0; }
+.prow .handle.fixed { cursor: default; opacity: .35; }
+.prow .pthumb { width: 54px; height: 54px; border-radius: 10px; overflow: hidden; flex: none; background: #000; position: relative; box-shadow: 0 0 0 1px var(--line); cursor: pointer; }
+.prow .ptxt { flex: 1; min-width: 0; display: flex; flex-direction: column; cursor: pointer; overflow-wrap: anywhere; }
+.prow .ptxt b { font-weight: 600; }
+.prow .ptxt small { color: var(--muted); font-size: 13px; }
+.prow.hidden-page .pthumb, .prow.hidden-page .ptxt { opacity: .45; }
+.prow .chev { color: var(--faint); cursor: pointer; }
+:host([size=narrow]) .prow { gap: 10px; }
+:host([size=narrow]) .prow .pthumb { width: 46px; height: 46px; }
+:host([size=narrow]) .prow .chev { display: none; }
+
+/* catalogue */
+.cat { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.cat-item { border: 1px solid var(--line); background: var(--surface); border-radius: 16px; padding: 10px; display: flex; flex-direction: column; gap: 8px; text-align: left; position: relative; min-width: 0; }
+.cat-item:hover:not(:disabled) { border-color: var(--signal-line); }
+.cat-item .pic { aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #000; }
+.cat-item .pic.wicon { display: grid; place-items: center; background: var(--raised); color: var(--muted); aspect-ratio: 2; }
+.cat-item .pic.wicon .mdi { --mdc-icon-size: 34px; }
+.cat-item > b { font-weight: 600; font-size: 14.5px; overflow-wrap: anywhere; }
+.cat-item > small { color: var(--muted); font-size: 12.5px; line-height: 1.35; overflow-wrap: anywhere; }
+.cat-item:disabled { opacity: .5; cursor: default; }
+.cat-item .tag { position: absolute; top: 16px; left: 16px; background: var(--surface); }
+
+/* overview */
+.glance { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; padding: 4px 0 14px; }
+.gl { background: var(--raised); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.gl small { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.gl small .mdi { --mdc-icon-size: 16px; }
+.gl b { font-family: "PanelOS Heading", sans-serif; font-weight: 500; font-size: 22px; font-variant-numeric: tabular-nums; line-height: 1.15; overflow-wrap: anywhere; }
+.gl em { font-style: normal; font-size: 12.5px; color: var(--faint); overflow-wrap: anywhere; }
+.bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; }
+.bars i { width: 4px; background: var(--faint); border-radius: 1px; opacity: .45; }
+.bars i.on { background: var(--ok); opacity: 1; }
+
+/* all panels */
+.pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.pcard { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; padding: 14px; display: flex; flex-direction: column; gap: 12px; box-shadow: var(--shadow); min-width: 0; cursor: pointer; text-align: left; }
+.pcard:hover { border-color: var(--signal-line); }
+.pcard .stage { height: 190px; display: grid; place-items: center; background: var(--raised); border-radius: 12px; }
+.pcard .name { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pcard .name b { font-size: 17px; font-family: "PanelOS Heading", sans-serif; font-weight: 500; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pcard .meta { font-size: 13px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.pcard.add { border-style: dashed; box-shadow: none; display: grid; place-items: center; min-height: 300px; color: var(--muted); background: none; }
+.pcard.add .mdi { --mdc-icon-size: 34px; }
+.matrix { width: 100%; border-collapse: collapse; font-size: 14px; }
+.matrix th, .matrix td { padding: 9px 8px; border-top: 1px solid var(--line); text-align: center; overflow-wrap: anywhere; }
+.matrix th:first-child, .matrix td:first-child { text-align: left; padding-left: 0; }
+.matrix thead th { border-top: 0; font-weight: 600; font-size: 13px; color: var(--muted); }
+.matrix .mdi { --mdc-icon-size: 18px; }
+.matrix .y { color: var(--ok); } .matrix .n { color: var(--faint); }
+.scroll-x { overflow-x: auto; }
+
+/* device frame */
+.device { position: relative; flex: none; }
+.device .bezel { position: absolute; inset: 0; border-radius: 22px; background: linear-gradient(160deg, color-mix(in srgb, var(--bezel) 100%, #fff 6%), var(--bezel)); box-shadow: 0 0 0 1px var(--bezel-edge), 0 18px 40px rgba(0,0,0,.18), inset 0 1px 0 rgba(255,255,255,.18); }
+.device .glass { position: absolute; overflow: hidden; background: #000; border-radius: 6px; cursor: pointer; display: grid; place-items: center; }
+.device .glass img { width: 100%; height: 100%; display: block; object-fit: contain; }
+.device .glass .off { color: #8a877f; font-size: 13px; text-align: center; padding: 8px; }
+.device .glass::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(125deg, rgba(255,255,255,.07), transparent 38%); }
+.pv { display: flex; flex-direction: column; align-items: center; gap: 12px; width: 100%; }
+.pv-title { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; text-align: center; }
+.pv-acts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+
+/* weather page layout editor */
+.editor-wrap { display: flex; justify-content: center; padding: 6px 0 14px; }
+.hcanvas { position: relative; border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); touch-action: none; user-select: none; -webkit-user-select: none; flex: none; }
+.hcanvas > .art { position: absolute; inset: 0; }
+.hcanvas .gridline { position: absolute; pointer-events: none; border-color: rgba(255,255,255,.45); border-style: dashed; border-width: 0; }
+.wbox { position: absolute; z-index: 3; border-radius: 12px; background: rgba(16,17,20,.42); backdrop-filter: blur(3px); color: #F5F3EE; outline: 1.5px solid rgba(255,255,255,.55); outline-offset: -1px; cursor: grab; touch-action: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; text-align: center; font-size: 12px; line-height: 1.2; overflow: hidden; }
+.wbox .mdi { --mdc-icon-size: 20px; }
+.wbox span { overflow-wrap: anywhere; }
+.wbox:hover { outline-color: #fff; }
+.wbox.sel { outline: 2.5px solid var(--signal); box-shadow: 0 0 0 4px rgba(255,74,28,.28); z-index: 4; }
+.wbox.bad { outline-color: #ff2a2a; background: rgba(255,0,0,.25); }
+.wbox .rs { position: absolute; right: 0; bottom: 0; width: 30px; height: 30px; cursor: nwse-resize; touch-action: none; }
+.wbox .rs::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 14px; height: 14px; border-right: 3px solid #fff; border-bottom: 3px solid #fff; border-bottom-right-radius: 6px; }
+.wbox.sel .rs::after { border-color: var(--signal); }
+.wbar { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; padding-bottom: 12px; min-height: 48px; align-items: center; }
+
+/* sheets */
+.layer { position: fixed; inset: 0; z-index: 60; display: flex; justify-content: flex-end; }
+.layer .scrim { position: absolute; inset: 0; background: var(--scrim); animation: fadein .2s; }
+@keyframes fadein { from { opacity: 0; } }
+/* drawers are as tall as what they hold (the page shows below a short one) */
+.sheet { position: relative; z-index: 1; width: min(560px, 100%); max-height: 100%; height: auto; align-self: flex-start; border-bottom-left-radius: 22px; background: var(--ground); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); animation: slidein .25s cubic-bezier(.2,.8,.2,1); }
+.sheet.wide { width: min(880px, 100%); }
+@keyframes slidein { from { transform: translateX(40px); opacity: 0; } }
+.sheet-head { display: flex; align-items: center; gap: 8px; padding: 14px 14px 12px 22px; border-bottom: 1px solid var(--line); min-height: 64px; position: relative; flex: none; }
+.sheet-head h2 { font-size: 20px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sheet-body { flex: 0 1 auto; overflow-y: auto; padding: 18px 22px 24px; display: flex; flex-direction: column; gap: 16px; overscroll-behavior: contain; min-height: 0; }
+.sheet-foot { display: flex; gap: 10px; padding: 12px 22px calc(12px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--line); justify-content: flex-end; align-items: center; flex-wrap: wrap; flex: none; }
+.sheet-foot .grow { flex: 1; }
+.sheet .grab { display: none; }
+.layer.center { justify-content: center; align-items: center; }
+.layer.center .sheet { height: auto; align-self: center; max-height: min(86vh, 760px); border-radius: 22px; width: min(520px, calc(100% - 32px)); animation: popin .22s cubic-bezier(.2,.8,.2,1); }
+@keyframes popin { from { transform: scale(.96); opacity: 0; } }
+:host([size=narrow]) .layer, :host([size=narrow]) .layer.center { align-items: flex-end; justify-content: stretch; }
+:host([size=narrow]) .sheet, :host([size=narrow]) .sheet.wide, :host([size=narrow]) .layer.center .sheet { width: 100%; height: auto; max-height: calc(100% - 28px); border-radius: 22px 22px 0 0; animation: slideup .28s cubic-bezier(.2,.8,.2,1); align-self: auto; }
+@keyframes slideup { from { transform: translateY(60px); opacity: 0; } }
+:host([size=narrow]) .sheet .grab { display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--line); position: absolute; top: 7px; left: 50%; margin-left: -20px; }
+:host([size=narrow]) .sheet-head { padding: 16px 10px 10px 18px; min-height: 60px; }
+:host([size=narrow]) .sheet-body { padding: 14px 16px 22px; }
+:host([size=narrow]) .sheet-foot { padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); }
+.layer.noanim .sheet, .layer.noanim .scrim { animation: none; }
+.sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sec > h3 { font-size: 15px; font-family: "PanelOS Text", sans-serif; font-weight: 600; color: var(--text); letter-spacing: 0; display: flex; align-items: center; gap: 6px; position: relative; flex-wrap: wrap; }
+.group { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 2px 16px; min-width: 0; }
+.group > .row:first-child { border-top: 0; }
+.opt { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); cursor: pointer; min-width: 0; }
+.opt:first-child { border-top: 0; }
+.opt input[type=checkbox], .opt input[type=radio] { width: 20px; height: 20px; accent-color: var(--signal); flex: none; margin: 0; cursor: pointer; }
+.opt .t { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.opt .t small { color: var(--muted); font-size: 12.5px; }
+.opt.disabled { cursor: default; opacity: .6; }
+
+/* menus */
+.menu { position: fixed; z-index: 80; min-width: 230px; max-width: calc(100vw - 24px); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 6px; animation: popin .14s ease-out; max-height: calc(100vh - 24px); overflow-y: auto; }
+.menu button { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; background: none; border-radius: 9px; padding: 9px 12px; text-align: left; font-size: 14px; color: var(--text); overflow-wrap: anywhere; }
+.menu button:hover { background: var(--raised); }
+.menu button .mdi { --mdc-icon-size: 19px; color: var(--muted); }
+.menu button.danger, .menu button.danger .mdi { color: var(--bad); }
+.menu button:disabled { opacity: .45; cursor: default; }
+.menu hr { border: 0; border-top: 1px solid var(--line); margin: 5px 4px; }
+
+/* toast */
+.toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; width: max-content; max-width: calc(100vw - 32px); }
+:host([size=narrow]) .toasts { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
+.toast { background: #101114; color: #F5F3EE; border-radius: 14px; padding: 11px 16px; font-size: 14px; display: flex; align-items: center; gap: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.3); animation: toastin .25s ease-out; pointer-events: auto; max-width: 100%; overflow-wrap: anywhere; }
+:host([dark]) .toast { background: #2A2C30; }
+.toast .mdi { color: var(--signal); --mdc-icon-size: 19px; }
+.toast.err .mdi { color: #FF6A4D; }
+.toast button { border: 0; background: none; color: #F5F3EE; font-weight: 600; padding: 0 0 0 6px; text-decoration: underline; }
+@keyframes toastin { from { transform: translateY(12px); opacity: 0; } }
+
+.syncline { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--faint); }
+.syncline .mdi { --mdc-icon-size: 15px; }
+.syncline.busy .mdi { color: var(--signal); animation: spin 1s linear infinite; }
+.syncline.err { color: var(--bad); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.fab { display: none; }
+:host([size=narrow]) .fab { display: flex; position: absolute; right: 14px; bottom: calc(84px + env(safe-area-inset-bottom, 0px)); z-index: 24; border: 0; padding: 0; border-radius: 14px; overflow: hidden; box-shadow: 0 10px 28px rgba(0,0,0,.35), 0 0 0 1px var(--bezel-edge); background: #000; width: 64px; height: 64px; }
+.fab img { width: 100%; height: 100%; object-fit: cover; }
+.fab .mdi { color: #8a877f; margin: auto; }
+.empty { color: var(--muted); font-size: 14px; padding: 6px 0 16px; }
+.blank { padding: 64px 24px; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.steps { display: flex; gap: 6px; }
+.steps i { height: 4px; flex: 1; border-radius: 2px; background: var(--line); }
+.steps i.on { background: var(--signal); }
+.result { display: flex; gap: 10px; align-items: flex-start; font-size: 14px; padding: 7px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.result:first-child { border-top: 0; }
+.result .mdi { --mdc-icon-size: 18px; margin-top: 1px; }
+.result .y { color: var(--ok); } .result .a { color: var(--warn); } .result .n { color: var(--faint); }
+.result small { color: var(--muted); display: block; font-size: 12.5px; }
+.catgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+.catbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 14px; padding: 8px 6px; display: flex; flex-direction: column; align-items: center; gap: 6px; font-size: 12px; text-align: center; line-height: 1.25; min-width: 0; color: var(--muted); overflow-wrap: anywhere; }
+.catbtn .pc { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; }
+.catbtn .pc img { width: 30px; height: 30px; }
+.catbtn.on { border-color: var(--signal); background: var(--signal-soft); color: var(--text); }
+.catbtn:hover { border-color: var(--signal-line); }
+.stlead { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none; color: #fff; }
+.stlead img { width: 28px; height: 28px; }
+.picto { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; border: 0; padding: 0; color: #fff; }
+.picto img { width: 34px; height: 34px; }
+.picto .mdi { --mdc-icon-size: 26px; }
+.picto.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--signal); }
+.pchips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.pchip { font-size: 11.5px; border-radius: 6px; padding: 1px 6px; background: var(--raised); color: var(--muted); overflow-wrap: anywhere; }
+.pchip.on { background: var(--signal-soft); color: var(--text); }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 22px; align-items: start; }
+.split .stick { position: sticky; top: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+:host([size=narrow]) .split { grid-template-columns: minmax(0, 1fr); }
+:host([size=narrow]) .split .stick { position: static; order: -1; }
+.stpv { width: 220px; aspect-ratio: 1; border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: #fff; padding: 16px; text-align: center; box-shadow: 0 0 0 1px var(--line); }
+.stpv img { width: 72px; height: 72px; }
+.stpv .mdi { --mdc-icon-size: 64px; }
+.stpv b { font-family: "PanelOS Heading", sans-serif; font-weight: 500; font-size: 19px; line-height: 1.2; overflow-wrap: anywhere; }
+.stpv small { font-size: 13px; opacity: .85; overflow-wrap: anywhere; }
+.stpv .bt { margin-top: 4px; border: 1.5px solid rgba(255,255,255,.7); border-radius: 999px; padding: 4px 14px; font-size: 12.5px; }
+.note { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.yaml { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 12.5px; background: var(--sunken); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
+.tilegrid { display: grid; gap: 8px; padding: 4px 0 12px; }
+.tslot { border: 1px dashed var(--line); background: none; border-radius: 14px; min-height: 64px; display: flex; align-items: center; gap: 10px; padding: 8px 10px; text-align: left; min-width: 0; color: var(--muted); font-size: 13px; }
+.tslot.full { border-style: solid; background: var(--raised); color: var(--text); }
+.tslot:hover { border-color: var(--signal-line); }
+.tslot .t { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.tslot .t b { font-weight: 600; font-size: 13.5px; }
+.tslot .t small { color: var(--muted); font-size: 12px; }
+.tape { font-family: "PanelOS Heading", sans-serif; font-size: 11px; letter-spacing: .08em; background: #111; color: #f2f2f2; border-radius: 3px; padding: 1px 5px; text-transform: uppercase; align-self: flex-start; overflow-wrap: anywhere; }
+.picker-list { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.picker-list > button { display: flex; align-items: center; gap: 12px; border: 0; border-top: 1px solid var(--line); background: none; padding: 10px 14px; text-align: left; min-width: 0; }
+.picker-list > button:first-child { border-top: 0; }
+.picker-list > button:hover { background: var(--raised); }
+.picker-list > button.on { background: var(--signal-soft); }
+.picker-list .t { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; }
+.picker-list .t span { font-size: 14px; }
+.picker-list .t small { color: var(--muted); font-size: 12px; }
+.picker-list .empty { padding: 14px; }
+.res { display: flex; flex-direction: column; }
+.res .item { display: flex; align-items: center; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.res .item:first-child { border-top: 0; }
+.res .name { flex: 1 1 160px; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
+.res .name small { color: var(--muted); margin-left: 8px; }
+.res .size { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+.only-narrow { display: none; }
+:host([size=narrow]) .only-narrow { display: flex; }
+:host([size=narrow]) .only-wide { display: none !important; }
+:host(:not([size=wide])) .only-xl { display: none !important; }
+.pv-card { flex-direction: column; align-items: center; gap: 12px; padding: 16px 12px 14px; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 `;
 
-function el(tag, attrs = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [key, value] of Object.entries(attrs)) {
-    if (key === "class") node.className = value;
-    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else if (value === true) node.setAttribute(key, "");
-    else if (value !== false && value != null) node.setAttribute(key, value);
-  }
-  for (const child of children.flat()) {
-    if (child != null && child !== false) node.append(child.nodeType ? child : document.createTextNode(String(child)));
-  }
-  return node;
-}
-
-function svg(paths, cls) {
-  const ns = "http://www.w3.org/2000/svg";
-  const s = document.createElementNS(ns, "svg");
-  s.setAttribute("viewBox", "0 0 24 24");
-  if (cls) s.setAttribute("class", cls);
-  for (const [d, fill] of Array.isArray(paths) ? paths : [[paths]]) {
-    const p = document.createElementNS(ns, "path");
-    p.setAttribute("d", d);
-    if (fill) p.setAttribute("fill", fill);
-    s.append(p);
-  }
-  return s;
-}
-
-const mb = (bytes) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+// ---------------------------------------------------------------- the page
 
 class PanelOSPage extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
     this._data = null;
-    this._selected = null;
-    this._controls = [];
-    this._built = null;
-    this._showAllResources = false;
-    this._section = "panel";
-    this._picture = { timer: null, busy: false, url: null, due: 0 };
+    this._reg = null; // registries from the websocket API when hass has none
+    this._path = "";
+    this._routed = false;
+    this._prefix = "/panelos";
+    this._static = "/panelos_static";
+    this._ui = { info: null, more: {}, sheet: null, armed: null, sel: null, allMore: false };
+    this._sync = {};
+    this._pics = {};
+    this._pic = { timer: null, busy: false, due: 0, allAt: 0 };
+    this._menu = null;
+    this._pending = false;
+    this._dragging = false;
+    this._toastBox = h("div", { class: "toasts", "aria-live": "polite" });
+    this._layer = h("div");
     this._onVisibility = () => this._schedulePicture(0);
     this._resize = new ResizeObserver(() => this._fit());
-    this._closePops = (ev) => {
-      if (!ev.composedPath().some((n) => n.classList && (n.classList.contains("pop") || n.classList.contains("ib")))) {
-        this.shadowRoot.querySelectorAll(".pop").forEach((p) => p.remove());
-        this.shadowRoot.querySelectorAll(".ib[aria-expanded=true]").forEach((b) => b.setAttribute("aria-expanded", "false"));
+    this._onClick = (ev) => {
+      const path = ev.composedPath();
+      if (this._menu && !path.includes(this._menu)) this._closeMenu();
+      if (this._ui.info && !path.some((n) => n.classList && (n.classList.contains("pop") || n.classList.contains("info")))) {
+        this._ui.info = null;
+        this._render();
       }
     };
+    this._onKey = (ev) => {
+      if (ev.key !== "Escape") return;
+      if (this._menu) this._closeMenu();
+      else if (this._ui.sheet) this._closeSheet();
+    };
+    this._onFocusOut = () => setTimeout(() => this._flush(), 0);
   }
+
+  // -- Home Assistant's properties -------------------------------------------
 
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
-    this.toggleAttribute("dark", Boolean(hass?.themes?.darkMode));
-    if (first && this.isConnected) this._subscribe();
+    const dark = Boolean(hass?.themes?.darkMode);
+    if (dark !== this.hasAttribute("dark")) {
+      this.toggleAttribute("dark", dark);
+      if (!first) this._requestRender(); // the brand pattern follows the theme
+    }
+    if (first && this.isConnected) this._start();
+    this._liveSoon();
   }
 
   get hass() {
@@ -288,29 +938,39 @@ class PanelOSPage extends HTMLElement {
   }
 
   set narrow(value) {
-    this.toggleAttribute("narrow", Boolean(value));
+    this.toggleAttribute("ha-narrow", Boolean(value));
   }
 
   set panel(value) {
     this._static = value?.config?.static_url || "/panelos_static";
+    if (value?.url_path) this._prefix = `/${value.url_path}`;
   }
 
-  set route(_value) {}
+  set route(route) {
+    if (route?.prefix) this._prefix = route.prefix;
+    this._setPath(route?.path || "");
+  }
 
   connectedCallback() {
+    if (!document.getElementById("panelos-fonts")) {
+      document.head.append(h("style", { id: "panelos-fonts" }, FONTS.replaceAll("{STATIC}", this._static)));
+    }
     document.addEventListener("visibilitychange", this._onVisibility);
-    this.shadowRoot.addEventListener("click", this._closePops);
+    this.shadowRoot.addEventListener("click", this._onClick);
+    this.shadowRoot.addEventListener("focusout", this._onFocusOut);
+    window.addEventListener("keydown", this._onKey);
     this._resize.observe(this);
-    if (this._hass && !this._unsub) this._subscribe();
+    if (this._hass && !this._unsub) this._start();
     this._fit();
     this._render();
   }
 
   disconnectedCallback() {
     document.removeEventListener("visibilitychange", this._onVisibility);
+    window.removeEventListener("keydown", this._onKey);
     this._resize.disconnect();
-    clearTimeout(this._picture.timer);
-    this._picture.timer = null;
+    clearTimeout(this._pic.timer);
+    this._pic.timer = null;
     if (this._unsub) {
       this._unsub.then((unsub) => unsub()).catch(() => {});
       this._unsub = null;
@@ -319,609 +979,2317 @@ class PanelOSPage extends HTMLElement {
 
   _fit() {
     const w = this.clientWidth || window.innerWidth;
-    const size = w >= 1180 ? "wide" : w >= 860 ? "medium" : "narrow";
-    const before = this.getAttribute("size");
-    if (before === size) return;
+    const size = w >= 1160 ? "wide" : w >= 861 ? "medium" : "narrow";
+    if (this.getAttribute("size") === size) {
+      if (this._lastH !== this.clientHeight) {
+        this._lastH = this.clientHeight;
+        this._requestRender();
+      }
+      return;
+    }
+    this._lastH = this.clientHeight;
     this.setAttribute("size", size);
-    // The preview moves between its column and the top of the page.
-    if (this._built && (before === "narrow") !== (size === "narrow")) this._render();
+    this._render();
   }
 
-  _subscribe() {
+  _start() {
     this._unsub = this._hass.connection.subscribeMessage((data) => this._receive(data), { type: "panelos/page/subscribe" });
-    this._unsub.catch((err) => this._toast(`PanelOS: ${err.message || err}`));
+    this._unsub.catch((err) => this._toast(`PanelOS: ${err.message || err}`, null, true));
+    this._loadRegistries();
+  }
+
+  async _loadRegistries() {
+    if (this._hass.devices && this._hass.areas && this._hass.entities) return;
+    try {
+      const [areas, devices, entities] = await Promise.all([
+        this._hass.callWS({ type: "config/area_registry/list" }),
+        this._hass.callWS({ type: "config/device_registry/list" }),
+        this._hass.callWS({ type: "config/entity_registry/list" }),
+      ]);
+      this._reg = {
+        areas: Object.fromEntries(areas.map((a) => [a.area_id, a])),
+        devices: Object.fromEntries(devices.map((d) => [d.id, d])),
+        entities: Object.fromEntries(entities.map((e) => [e.entity_id, e])),
+      };
+      this._requestRender();
+    } catch (_err) {
+      // names and areas then come from the states only
+    }
   }
 
   _receive(data) {
+    const first = !this._data;
     this._data = data;
-    const ids = data.panels.map((p) => p.entry_id);
-    if (!ids.includes(this._selected)) this._selected = ids[0] || null;
-    if (this._built !== this._structureKey()) this._render();
-    else this._update();
-    this._schedulePicture(this._picture.url ? PICTURE_EVERY_MS : 0);
-  }
-
-  get _current() {
-    return this._data?.panels.find((p) => p.entry_id === this._selected) || null;
-  }
-
-  _structureKey() {
-    return `${this._selected}|${(this._data?.panels || []).map((p) => p.entry_id).join(",")}`;
-  }
-
-  // -- websocket ------------------------------------------------------------
-
-  async _command(key, value) {
-    try {
-      await this._hass.callWS({ type: "panelos/page/command", entry_id: this._selected, key, value });
-      this._schedulePicture(PICTURE_AFTER_CHANGE_MS);
-    } catch (err) {
-      this._toast(err.message || String(err));
+    for (const [id, s] of Object.entries(this._sync)) {
+      if (s.state === "wait") this._syncDone(id);
     }
+    if (first && !this._routed) this._routed = true;
+    this._requestRender();
+    if (first) this._schedulePicture(0);
   }
 
-  async _options(options) {
-    try {
-      await this._hass.callWS({ type: "panelos/page/options", entry_id: this._selected, options });
-      this._schedulePicture(PICTURE_AFTER_CHANGE_MS);
-    } catch (err) {
-      this._toast(err.message || String(err));
-    }
+  // -- registries, names, entities ----------------------------------------------
+
+  get _areas() {
+    return this._hass?.areas || this._reg?.areas || {};
   }
 
-  // A picture is due after `delay` ms, or earlier if one is already due sooner.
-  _schedulePicture(delay) {
-    if (!this.isConnected || document.visibilityState !== "visible") return;
-    const due = Date.now() + delay;
-    if (this._picture.timer && this._picture.due <= due) return;
-    clearTimeout(this._picture.timer);
-    this._picture.due = due;
-    this._picture.timer = setTimeout(() => {
-      this._picture.timer = null;
-      this._fetchPicture();
-    }, delay);
+  get _devices() {
+    return this._hass?.devices || this._reg?.devices || {};
   }
 
-  async _fetchPicture() {
-    const panel = this._current;
-    if (!panel || !panel.connected || this._picture.busy) {
-      this._schedulePicture(PICTURE_EVERY_MS);
-      return;
-    }
-    this._picture.busy = true;
-    try {
-      const result = await this._hass.callWS({ type: "panelos/page/screen", entry_id: panel.entry_id });
-      const bytes = Uint8Array.from(atob(result.png), (c) => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
-      if (this._picture.url) URL.revokeObjectURL(this._picture.url);
-      this._picture.url = url;
-    } catch (_err) {
-      // keeps the last picture; the next try comes on schedule
-    } finally {
-      this._picture.busy = false;
-      this._showPicture();
-      this._schedulePicture(PICTURE_EVERY_MS);
-    }
+  get _entityReg() {
+    return this._hass?.entities || this._reg?.entities || {};
   }
 
-  _showPicture() {
-    const screen = this.shadowRoot.querySelector(".screen");
-    if (!screen) return;
-    const panel = this._current;
-    if (panel?.connected && this._picture.url) {
-      let img = screen.querySelector("img");
-      if (!img) {
-        screen.replaceChildren();
-        img = el("img", { alt: "The panel's screen" });
-        screen.append(img);
-      }
-      if (img.src !== this._picture.url) img.src = this._picture.url;
-    } else {
-      screen.replaceChildren(el("div", { class: "off" }, panel?.connected ? "Waiting for a picture…" : "Offline"));
-    }
+  _device(p) {
+    return (p?.device_id && this._devices[p.device_id]) || null;
   }
 
-  _toast(text) {
-    this.shadowRoot.querySelector(".toast")?.remove();
-    const toast = el("div", { class: "toast", role: "status" }, text);
-    this.shadowRoot.append(toast);
-    setTimeout(() => toast.remove(), 4000);
+  _pname(p) {
+    if (!p) return "Panel";
+    const d = this._device(p);
+    return (d && (d.name_by_user || d.name)) || p.device?.name || p.title || "Panel";
   }
 
-  // -- building blocks -----------------------------------------------------
-
-  _info(key, label) {
-    const button = el("button", { class: "ib", "aria-label": `About ${label}`, "aria-expanded": "false" }, svg(ICON.info));
-    button.addEventListener("click", () => {
-      const host = button.parentElement;
-      const open = host.querySelector(".pop");
-      this.shadowRoot.querySelectorAll(".pop").forEach((p) => p.remove());
-      this.shadowRoot.querySelectorAll(".ib[aria-expanded=true]").forEach((b) => b.setAttribute("aria-expanded", "false"));
-      if (!open) {
-        host.append(el("div", { class: "pop", role: "note" }, INFO[key]));
-        button.setAttribute("aria-expanded", "true");
-      }
-    });
-    return button;
+  _parea(p) {
+    const d = this._device(p);
+    return (d?.area_id && this._areas[d.area_id]?.name) || "";
   }
 
-  _card(id, title, rows, infoKey = id) {
-    return el(
-      "section",
-      { class: "card", id: `s-${id}` },
-      el("div", { class: "card-head" }, el("h2", {}, title), INFO[infoKey] ? this._info(infoKey, title) : null),
-      ...rows
-    );
+  _pareaId(p) {
+    return this._device(p)?.area_id || null;
   }
 
-  _row(label, control, stack = false) {
-    return el("div", { class: stack ? "row stack" : "row" }, el("div", { class: "label", title: label }, label), el("div", { class: "control" }, control));
+  _pmodel(p) {
+    const d = p?.device || {};
+    return [d.manufacturer, d.model].filter(Boolean).join(" ") || "PanelOS panel";
   }
 
-  _segmented(label, choices, get, set) {
-    const group = el("div", { class: "seg", role: "radiogroup", "aria-label": label });
-    let built = "";
-    this._controls.push(() => {
-      const list = choices();
-      const key = JSON.stringify(list);
-      if (key !== built) {
-        group.replaceChildren(...list.map((c) => el("button", { role: "radio", onclick: () => set(c.value) }, c.label)));
-        built = key;
-      }
-      const current = get();
-      [...group.children].forEach((b, i) => {
-        const on = list[i]?.value === current;
-        b.classList.toggle("on", on);
-        b.setAttribute("aria-checked", String(on));
-      });
-    });
-    return group;
+  _caps(p) {
+    return Array.isArray(p?.caps) && p.caps.length ? p.caps : DEFAULT_CAPS;
   }
 
-  _switch(label, get, set, disabled = () => false) {
-    const input = el("input", { type: "checkbox", role: "switch", "aria-label": label, onchange: () => set(input.checked) });
-    this._controls.push(() => {
-      input.checked = Boolean(get());
-      input.disabled = disabled();
-    });
-    return el("label", { class: "switch" }, input, el("span"));
+  _has(p, cap) {
+    return this._caps(p).includes(cap);
   }
 
-  _select(label, choices, get, set) {
-    const select = el("select", { "aria-label": label, onchange: () => set(select.value) });
-    let built = "";
-    this._controls.push(() => {
-      if (this.shadowRoot.activeElement === select) return;
-      const list = choices();
-      const current = get() ?? "";
-      if (current !== "" && !list.some((c) => c.value === current)) list.push({ value: current, label: current });
-      const key = JSON.stringify(list);
-      if (key !== built) {
-        select.replaceChildren(...list.map((c) => el("option", { value: c.value }, c.label)));
-        built = key;
-      }
-      select.value = current;
-      select.title = list.find((c) => c.value === current)?.label || "";
-    });
-    return el("div", { class: "sel" }, select, svg(ICON.chevron));
+  _reason(p, need) {
+    return (NEEDS_REASON[need] || "Not on {p}.").replace("{p}", this._pname(p));
   }
 
-  _slider(label, { min, max, step }, get, set, format, disabled = () => false) {
-    const value = el("span", { class: "value" });
-    const input = el("input", { type: "range", min, max, step, "aria-label": label });
-    const paint = () => input.style.setProperty("--fill", `${((input.value - min) / (max - min)) * 100}%`);
-    input.addEventListener("input", () => {
-      value.textContent = format(Number(input.value));
-      paint();
-    });
-    input.addEventListener("change", () => set(Number(input.value)));
-    let dragging = false;
-    input.addEventListener("pointerdown", () => (dragging = true));
-    input.addEventListener("pointerup", () => (dragging = false));
-    this._controls.push(() => {
-      input.disabled = disabled();
-      if (dragging || this.shadowRoot.activeElement === input) return;
-      const v = get();
-      if (v == null) return;
-      input.value = v;
-      value.textContent = format(Number(v));
-      paint();
-    });
-    return el("div", { class: "slider" }, input, value);
+  _pageSupported(p, kind) {
+    const t = PAGE_TYPES[kind];
+    if (!t) return { ok: false, why: "Unknown page type." };
+    for (const need of t.needs) if (!this._has(p, need)) return { ok: false, why: this._reason(p, need) };
+    return { ok: true };
   }
 
-  _entities(prefixes) {
+  _lookSupported(p, kind, variant) {
+    if (variant > 0 && LOOK_NEEDS_IMAGES.has(kind) && !this._has(p, "images")) return { ok: false, why: this._reason(p, "images") };
+    return { ok: true };
+  }
+
+  _sections(p) {
+    return SECTIONS.filter((s) => !s.needs || this._has(p, s.needs));
+  }
+
+  _earea(id) {
+    const e = this._entityReg[id];
+    if (!e) return null;
+    if (e.area_id) return e.area_id;
+    return (e.device_id && this._devices[e.device_id]?.area_id) || null;
+  }
+
+  _ename(id) {
+    const st = this._hass?.states?.[id];
+    return st?.attributes?.friendly_name || this._entityReg[id]?.name || id;
+  }
+
+  _eicon(id) {
+    const st = this._hass?.states?.[id];
+    const reg = this._entityReg[id];
+    if (st?.attributes?.icon) return st.attributes.icon;
+    if (reg?.icon) return reg.icon;
+    const domain = id.split(".")[0];
+    const dc = st?.attributes?.device_class;
+    if (domain === "sensor" && SENSOR_ICONS[dc]) return SENSOR_ICONS[dc];
+    if (domain === "binary_sensor" && SAFETY[dc]) return SAFETY[dc].icon;
+    return DOMAIN_ICONS[domain] || "circle-outline";
+  }
+
+  // Entities of some domains, the panel's area first, then by name. Same name
+  // twice: the integration (or the area) in brackets.
+  _ents(domains, { p = null, filter = null } = {}) {
     const states = this._hass?.states || {};
+    const area = p ? this._pareaId(p) : null;
     const list = Object.keys(states)
-      .filter((id) => prefixes.some((p) => id.startsWith(`${p}.`)))
-      .map((id) => ({ value: id, label: states[id].attributes.friendly_name || id }));
-    // Same name twice (e.g. two "Home" weathers): the integration in brackets.
+      .filter((id) => domains.includes(id.split(".")[0]) && (!filter || filter(states[id])))
+      .map((id) => ({ id, name: this._ename(id), area: this._earea(id) }));
     const seen = {};
-    for (const c of list) seen[c.label] = (seen[c.label] || 0) + 1;
-    for (const c of list) {
-      if (seen[c.label] > 1) c.label = `${c.label} (${platformName(this._hass.entities?.[c.value]?.platform) || c.value})`;
-    }
-    return list.sort((a, b) => a.label.localeCompare(b.label));
-  }
-
-  _name(entityId) {
-    return this._hass?.states[entityId]?.attributes.friendly_name || entityId;
-  }
-
-  // -- sections ------------------------------------------------------------
-
-  _hero() {
-    const title = el("h1");
-    const meta = el("div", { class: "meta" });
-    this._controls.push(() => {
-      const p = this._current || {};
-      const d = p.device || {};
-      title.textContent = d.name || p.title || "Panel";
-      title.title = title.textContent;
-      meta.replaceChildren(
-        el("span", { class: p.connected ? "state on" : "state" }, el("b"), p.connected ? "Connected" : "Offline"),
-        d.model ? el("span", {}, [d.manufacturer, d.model].filter(Boolean).join(" ")) : null,
-        (p.states?.app_version || d.sw_version) ? el("span", {}, `Version ${p.states?.app_version || d.sw_version}`) : null
-      );
-    });
-    return el("section", { class: "hero", id: "s-panel" }, title, meta);
-  }
-
-  _display() {
-    const st = () => this._current?.states || {};
-    const opts = (key) => (this._current?.select_options[key] || []).map((o) => ({ value: o, label: o }));
-    return this._card("display", "Display", [
-      this._row("Display mode", this._segmented("Display mode", () => opts("display_mode"), () => st().display_mode, (v) => this._command("display_mode", v))),
-      this._row("Theme", this._segmented("Theme", () => opts("theme"), () => st().theme, (v) => this._command("theme", v))),
-      this._row("Brightness", this._slider("Brightness", { min: 1, max: 100, step: 1 }, () => st().brightness, (v) => this._command("brightness", v), (v) => `${v} %`, () => Boolean(st().auto_brightness))),
-      this._row("Automatic brightness", this._switch("Automatic brightness", () => st().auto_brightness, (v) => this._command("auto_brightness", v))),
-      this._row("Screensaver after", this._select("Screensaver after", () => opts("screensaver"), () => st().screensaver, (v) => this._command("screensaver", v))),
-      this._row("Screensaver", this._segmented("Screensaver", () => opts("screensaver_style"), () => st().screensaver_style, (v) => this._command("screensaver_style", v))),
-      this._row("Wake on approach", this._switch("Wake on approach", () => st().proximity_wake, (v) => this._command("proximity_wake", v))),
-    ]);
-  }
-
-  _resourcesRow() {
-    const head = el("div", { class: "res-head" });
-    const list = el("div", { class: "res" });
-    const p = () => this._current || {};
-    const settings = () => p().settings || {};
-    const keep = () => new Set(settings().keep_resources || []);
-    const loaded = (r) => r.needed || !settings().skip_unused || keep().has(r.url);
-    const auto = this._switch("Leave out unused card resources", () => settings().skip_unused, (v) => this._options({ skip_unused_resources: v }));
-    this._controls.push(() => {
-      const res = p().resources || [];
-      if (!res.length) {
-        head.replaceChildren(el("span", { class: "sum" }, p().web_dashboard ? "…" : "–"), auto);
-        list.replaceChildren();
-        return;
+    for (const e of list) seen[e.name] = (seen[e.name] || 0) + 1;
+    for (const e of list) {
+      if (seen[e.name] > 1) {
+        const extra = (e.area && this._areas[e.area]?.name) || platformName(this._entityReg[e.id]?.platform) || e.id;
+        e.name = `${e.name} (${extra})`;
       }
-      const out = res.filter((r) => !loaded(r));
-      const saved = out.reduce((sum, r) => sum + (r.size || 0), 0);
-      const toggleAll = el("button", { class: "btn", onclick: () => { this._showAllResources = !this._showAllResources; this._update(); } }, this._showAllResources ? "Hide the list" : "Show all");
-      head.replaceChildren(
-        el("span", { class: "sum" }, `${res.length - out.length} of ${res.length} loaded${saved ? ` · ${mb(saved)} left out` : ""}`),
-        el("span", { class: "chips" }, toggleAll, auto)
-      );
-      if (!this._showAllResources) {
-        list.replaceChildren();
-        return;
-      }
-      list.replaceChildren(
-        ...res.map((r) => {
-          const path = r.url.split("?")[0];
-          const parts = path.split("/").filter(Boolean);
-          const file = parts.pop() || path;
-          const folder = parts.length ? parts[parts.length - 1] : "";
-          const input = el("input", { type: "checkbox", role: "switch", "aria-label": `Always load ${file}` });
-          input.checked = loaded(r);
-          // Used ones always load; with leaving out off everything loads.
-          input.disabled = r.needed || !settings().skip_unused;
-          input.addEventListener("change", () => {
-            const now = keep();
-            if (input.checked) now.add(r.url);
-            else now.delete(r.url);
-            this._options({ keep_resources: [...now] });
-          });
-          return el(
-            "div",
-            { class: "item" },
-            el("div", { class: "name", title: path }, folder && folder !== "local" ? folder : file, folder && folder !== file.replace(/\.js$/, "") ? el("small", {}, file) : null),
-            r.needed ? el("span", { class: "tag" }, "Used") : null,
-            el("span", { class: "size" }, r.size ? mb(r.size) : "–"),
-            el("label", { class: "switch" }, input, el("span"))
-          );
-        })
-      );
-    });
-    const label = el("div", { class: "label" }, "Card resources");
-    return el("div", { class: "row stack" }, el("div", { class: "card-head", style: "min-height:auto" }, label, this._info("resources", "card resources")), head, list);
-  }
-
-  _dashboardMode() {
-    const settings = () => this._current?.settings || {};
-    return this._card("dashboard", "Dashboard", [
-      this._row("Dashboard", this._select("Dashboard", () => [...(this._data?.dashboards || [])], () => settings().dashboard, (v) => this._options({ dashboard: v }))),
-      this._row("Header", this._switch("Header", () => settings().show_header, (v) => this._options({ show_header: v }))),
-      this._row("Sidebar", this._switch("Sidebar", () => settings().show_sidebar, (v) => this._options({ show_sidebar: v }))),
-      this._row("Size", this._slider("Size", { min: 50, max: 150, step: 5 }, () => settings().zoom ?? 100, (v) => this._options({ zoom: v }), (v) => `${v} %`)),
-      this._row("Loading screen", this._switch("Loading screen", () => settings().loading_screen ?? true, (v) => this._options({ loading_screen: v }))),
-      this._resourcesRow(),
-    ]);
-  }
-
-  _assistantMode() {
-    const settings = () => this._current?.settings || {};
-    const none = { value: "", label: "None" };
-    const chips = el("div", { class: "chips" });
-    const add = this._select(
-      "Add a quick tile",
-      () => [{ value: "", label: "Add a tile…" }, ...this._entities(this._data?.tile_domains || []).filter((c) => !(settings().tile_entities || []).includes(c.value))],
-      () => "",
-      (v) => v && this._options({ tile_entities: [...(settings().tile_entities || []), v] })
-    );
-    this._controls.push(() => {
-      const tiles = settings().tile_entities || [];
-      chips.replaceChildren(
-        ...tiles.map((id) =>
-          el("span", { class: "chip" }, el("span", { title: id }, this._name(id)),
-            el("button", { "aria-label": `Remove ${this._name(id)}`, onclick: () => this._options({ tile_entities: tiles.filter((t) => t !== id) }) }, svg(ICON.close)))
-        ),
-        el("span", { class: "add" }, add)
-      );
-    });
-    return this._card("assistant", "Assistant", [
-      this._row("Weather", this._select("Weather", () => [none, ...this._entities(["weather"])], () => settings().weather_entity, (v) => this._options({ weather_entity: v }))),
-      this._row("Media player", this._select("Media player", () => [none, ...this._entities(["media_player"])], () => settings().media_player_entity, (v) => this._options({ media_player_entity: v }))),
-      this._row("Quick tiles", chips, true),
-      this._row("Full-screen conversation", this._switch("Full-screen conversation", () => settings().show_conversation, (v) => this._options({ show_conversation: v }))),
-      this._row("Voice feedback", this._select("Voice feedback", () => NAMES.voice.map((n, i) => ({ value: String(i), label: n })), () => String(settings().voice_look ?? 0), (v) => this._options({ voice_look: Number(v) }))),
-    ]);
-  }
-
-  // The page list: what the panel swipes through, in this order; each page's
-  // look and the entities it shows.
-  _pages() {
-    const settings = () => this._current?.settings || {};
-    const kinds = () => this._data?.page_kinds || {};
-    const pages = () => settings().pages || [];
-    const list = el("div", { class: "pages" });
-    const save = (next) => this._options({ pages: next });
-    const add = this._select(
-      "Add a page",
-      () => [{ value: "", label: "Add a page…" }, ...Object.keys(kinds()).map((k) => ({ value: k, label: PAGE_NAMES[k] || k }))],
-      () => "",
-      (v) => v && save([...pages(), { kind: v }])
-    );
-    let built = "";
-    this._controls.push(() => {
-      const now = pages();
-      const key = JSON.stringify([now, Object.keys(this._hass?.states || {}).length]);
-      if (key === built) return;
-      built = key;
-      list.replaceChildren(
-        ...now.map((page, i) => {
-          const kind = kinds()[page.kind] || { looks: 1, domains: [], most: 0 };
-          const change = (patch) => save(now.map((p, j) => (j === i ? { ...p, ...patch } : p)));
-          const move = (d) => {
-            const next = [...now];
-            [next[i], next[i + d]] = [next[i + d], next[i]];
-            save(next);
-          };
-          const head = el(
-            "div",
-            { class: "page-head" },
-            el("span", { class: "page-name" }, `${i + 1}. ${PAGE_NAMES[page.kind] || page.kind}`),
-            el(
-              "span",
-              { class: "chips" },
-              el("button", { class: "btn", "aria-label": "Earlier", disabled: i === 0, onclick: () => move(-1) }, "↑"),
-              el("button", { class: "btn", "aria-label": "Later", disabled: i === now.length - 1, onclick: () => move(1) }, "↓"),
-              el("button", { class: "btn", "aria-label": `Remove ${PAGE_NAMES[page.kind] || page.kind}`, disabled: now.length === 1, onclick: () => save(now.filter((_, j) => j !== i)) }, svg(ICON.close))
-            )
-          );
-          const rows = [head];
-          if (kind.looks > 1) {
-            const names = LOOKS[page.kind] || [];
-            const looks = Array.from({ length: kind.looks }, (_, v) => ({ value: String(v), label: names[v] || `Look ${v + 1}` }));
-            const look = el("select", { "aria-label": "Look", onchange: (e) => change({ variant: Number(e.target.value) }) },
-              ...looks.map((c) => el("option", { value: c.value }, c.label)));
-            look.value = String(page.variant || 0);
-            rows.push(el("div", { class: "row" }, el("div", { class: "label" }, "Look"), el("div", { class: "control" }, el("div", { class: "sel" }, look, svg(ICON.chevron)))));
-          }
-          // the home page's background (and the synthwave scene)
-          if (page.kind === "home") {
-            const opts = page.options || {};
-            const pick = (label, list, key, fallback) => {
-              const sel = el("select", { "aria-label": label, onchange: (e) => change({ options: { ...opts, [key]: Number(e.target.value) } }) },
-                ...list.map((name, v) => el("option", { value: String(v) }, name)));
-              sel.value = String(opts[key] ?? fallback);
-              return el("div", { class: "row" }, el("div", { class: "label" }, label), el("div", { class: "control" }, el("div", { class: "sel" }, sel, svg(ICON.chevron))));
-            };
-            rows.push(pick("Background", NAMES.bg, "theme", 0));
-            if ((opts.theme ?? 0) === 8) rows.push(pick("Scene", NAMES.scene, "scene", 0));
-          }
-          if (kind.most > 0) {
-            const ents = page.entities || [];
-            const chips = el("div", { class: "chips" },
-              ...ents.map((id) => el("span", { class: "chip" }, el("span", { title: id }, this._name(id)),
-                el("button", { "aria-label": `Remove ${this._name(id)}`, onclick: () => change({ entities: ents.filter((e) => e !== id) }) }, svg(ICON.close)))));
-            if (ents.length < kind.most) {
-              const choices = this._entities(kind.domains).filter((c) => !ents.includes(c.value));
-              const pick = el("select", { "aria-label": "Add", onchange: (e) => e.target.value && change({ entities: [...ents, e.target.value] }) },
-                el("option", { value: "" }, kind.most === 1 ? "Choose…" : "Add…"), ...choices.map((c) => el("option", { value: c.value }, c.label)));
-              chips.append(el("span", { class: "add" }, el("div", { class: "sel" }, pick, svg(ICON.chevron))));
-            }
-            rows.push(el("div", { class: "row stack" }, el("div", { class: "label" }, kind.most === 1 ? "Shows" : "Shows these"), el("div", { class: "control" }, chips)));
-          }
-          return el("div", { class: "page-item" }, ...rows);
-        })
-      );
-    });
-    return this._card("pages", "Pages", [list, this._row("Add", add)]);
-  }
-
-  _sensors() {
-    const settings = () => this._current?.settings || {};
-    const limits = this._data?.reporting || {};
-    return this._card(
-      "sensors",
-      "Sensor reporting",
-      Object.entries(limits).map(([key, lim]) => {
-        const meta = REPORTING[key] || { label: key };
-        const now = el("span", { class: "now" });
-        this._controls.push(() => {
-          const v = this._current?.states?.[meta.now];
-          now.textContent = typeof v === "number" ? `now ${v} ${meta.nowUnit}` : "";
-        });
-        const label = el("div", { class: "label" }, meta.label, el("div", {}, now));
-        const control = this._slider(meta.label, lim, () => settings()[key], (v) => this._options({ [key]: v }), (v) => `${lim.step < 1 ? v.toFixed(1) : Math.round(v)} ${lim.unit}`);
-        return el("div", { class: "row" }, label, el("div", { class: "control" }, control));
-      }),
-      "sensors"
-    );
-  }
-
-  _device() {
-    const facts = el("dl", { class: "facts" });
-    const fmt = (v, unit, digits = 0) => (typeof v === "number" ? `${v.toFixed(digits)} ${unit}` : "–");
-    this._controls.push(() => {
-      const p = this._current || {};
-      const s = p.states || {};
-      const d = p.device || {};
-      const rows = [
-        ["Model", [d.manufacturer, d.model].filter(Boolean).join(" ") || "–"],
-        ["Version", s.app_version || d.sw_version || "–"],
-        ["IP address", s.ip_address || "–"],
-        ["Wi-Fi signal", fmt(s.wifi_signal, "dBm")],
-        ["SoC temperature", fmt(s.soc_temperature, "°C", 1)],
-        ["Illuminance", fmt(s.illuminance, "lx")],
-        ["Someone in front", s.presence == null ? "–" : s.presence ? "Yes" : "No"],
-      ];
-      facts.replaceChildren(...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", { title: v }, v)]));
-    });
-    const armed = (label, key) => {
-      let timer = null;
-      const button = el("button", { class: "btn" }, label);
-      button.addEventListener("click", () => {
-        if (button.classList.contains("armed")) {
-          clearTimeout(timer);
-          button.classList.remove("armed");
-          button.textContent = label;
-          this._command(key, null);
-          return;
-        }
-        button.classList.add("armed");
-        button.textContent = `Tap again: ${label.toLowerCase()}`;
-        timer = setTimeout(() => {
-          button.classList.remove("armed");
-          button.textContent = label;
-        }, 3000);
-      });
-      this._controls.push(() => (button.disabled = !this._current?.connected));
-      return button;
-    };
-    return this._card("device", "Device", [facts, el("div", { class: "actions" }, armed("Restart app", "restart_app"), armed("Reboot", "reboot"))]);
-  }
-
-  _preview() {
-    const foot = el("div", { class: "pv-foot" });
-    this._controls.push(() => {
-      const p = this._current || {};
-      foot.replaceChildren(
-        el("span", { class: p.connected ? "state on" : "state" }, el("b"), p.connected ? "Live" : "Offline"),
-        this._info("preview", "the picture")
-      );
-    });
-    return el(
-      "aside",
-      { class: "preview" },
-      el("div", { class: "bezel", title: "Wake the screen", onclick: () => this._current?.connected && this._command("screen", true) }, el("div", { class: "screen" })),
-      foot
-    );
-  }
-
-  // -- navigation --------------------------------------------------------------
-
-  _go(id) {
-    this._section = id;
-    this.shadowRoot.getElementById(`s-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    this._markSection();
-  }
-
-  _markSection() {
-    this.shadowRoot.querySelectorAll("[data-section]").forEach((b) => b.classList.toggle("on", b.dataset.section === this._section));
-  }
-
-  _watchSections(root) {
-    this._io?.disconnect();
-    // Which sections touch the band near the top of the view; the first of
-    // them (in page order) is the current one.
-    const inBand = new Map();
-    this._io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) inBand.set(e.target.id.slice(2), e.isIntersecting);
-        const first = SECTIONS.find((s) => inBand.get(s.id));
-        if (first && first.id !== this._section) {
-          this._section = first.id;
-          this._markSection();
-        }
-      },
-      { rootMargin: "-15% 0px -70% 0px" }
-    );
-    SECTIONS.forEach((s) => {
-      const node = root.querySelector(`#s-${s.id}`);
-      if (node) this._io.observe(node);
-    });
-  }
-
-  // -- render ----------------------------------------------------------------
-
-  _render() {
-    const root = this.shadowRoot;
-    this._controls = [];
-    const style = el("style", {}, STYLE.replaceAll("{STATIC}", this._static || "/panelos_static"));
-    const menu = el("button", { class: "menu", "aria-label": "Menu", onclick: () => this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true })) }, svg(ICON.menu));
-    if (!this._data || !this._data.panels.length) {
-      root.replaceChildren(
-        style,
-        el("div", { class: "top", style: "display:block" }, el("div", { class: "top-row" }, menu, el("i"))),
-        el("div", { class: "empty" }, !this._data ? "Loading…" : "No panel is set up yet: Settings → Devices & services → Add integration → PanelOS.")
-      );
-      this._built = this._data ? this._structureKey() : null;
-      return;
     }
-    const navLinks = SECTIONS.map((s) => el("button", { "data-section": s.id, onclick: () => this._go(s.id) }, svg(ICON[s.icon]), s.title));
-    const panels = this._data.panels.length > 1
-      ? el("div", { class: "panels" }, this._data.panels.map((p) => el("button", { class: p.entry_id === this._selected ? "on" : "", onclick: () => this._pick(p.entry_id) }, p.device?.name || p.title)))
-      : null;
-    const nav = el("nav", { class: "nav" }, el("div", { class: "brand" }, el("i", { role: "img", "aria-label": "PanelOS" })), panels, el("div", { class: "links" }, navLinks));
-    const tabs = el("div", { class: "tabs" },
-      this._data.panels.length > 1 ? this._data.panels.map((p) => el("button", { class: p.entry_id === this._selected ? "on" : "", onclick: () => this._pick(p.entry_id) }, p.device?.name || p.title)) : SECTIONS.map((s) => el("button", { "data-section": s.id, onclick: () => this._go(s.id) }, s.title)));
-    const top = el("div", { class: "top" }, el("div", { class: "top-row" }, menu, el("i", { role: "img", "aria-label": "PanelOS" })), tabs);
-    const content = el("div", { class: "content" }, this._hero(), this._pages(), this._display(), this._dashboardMode(), this._assistantMode(), this._sensors(), this._device());
-    const preview = this._preview();
-    const main = el("main", {}, top, this.getAttribute("size") === "narrow" ? preview : null, content);
-    const shell = el("div", { class: "shell" }, nav, main, this.getAttribute("size") === "narrow" ? null : preview);
-    root.replaceChildren(style, shell);
-    this._built = this._structureKey();
-
-    this._update();
-    this._showPicture();
-    this._markSection();
-    this._watchSections(root);
+    return list.sort((a, b) => (b.area === area && area ? 1 : 0) - (a.area === area && area ? 1 : 0) || a.name.localeCompare(b.name));
   }
 
-  _pick(id) {
-    this._selected = id;
-    if (this._picture.url) URL.revokeObjectURL(this._picture.url);
-    this._picture.url = null;
+  _areaName(id) {
+    return (id && this._areas[id]?.name) || "";
+  }
+
+  // -- routing ---------------------------------------------------------------------
+
+  _route() {
+    const parts = (this._path || "").split("/").filter(Boolean);
+    if (parts[0] === "all") return { view: "all" };
+    if (parts[0] === "p" && parts[1]) {
+      if (parts[2] === "pages" && parts[3] != null) return { view: "page", panel: decodeURIComponent(parts[1]), page: Number(parts[3]) };
+      return { view: parts[2] || "overview", panel: decodeURIComponent(parts[1]) };
+    }
+    return { view: "overview", panel: null };
+  }
+
+  _setPath(path) {
+    if (this._routed && path === this._path) return;
+    const before = this._route();
+    this._path = path;
+    this._routed = true;
+    const now = this._route();
+    this._ui.info = null;
+    this._ui.sel = null;
+    if (this._ui.sheet && !this._ui.sheet.keep) this._ui.sheet = null;
     this._render();
+    if (before.view !== now.view || before.panel !== now.panel || before.page !== now.page) {
+      const main = this.shadowRoot.querySelector(".main");
+      if (main) main.scrollTop = 0;
+    }
     this._schedulePicture(0);
   }
 
-  _update() {
-    for (const update of this._controls) update();
+  _go(path, replace = false) {
+    const url = this._prefix + path;
+    if (replace) history.replaceState(null, "", url);
+    else history.pushState(null, "", url);
+    window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace } }));
+    this._setPath(path);
+  }
+
+  _panelPath(p, section) {
+    return `/p/${encodeURIComponent(p.entry_id)}${section && section !== "overview" ? `/${section}` : ""}`;
+  }
+
+  get _panels() {
+    return this._data?.panels || [];
+  }
+
+  _panelById(id) {
+    return this._panels.find((p) => p.entry_id === id) || null;
+  }
+
+  _cur() {
+    const r = this._route();
+    return this._panelById(r.panel) || this._panels[0] || null;
+  }
+
+  // -- saving, with the sync line ------------------------------------------------------
+
+  _busy(ids) {
+    for (const id of ids) {
+      clearTimeout(this._sync[id]?.timer);
+      this._sync[id] = { state: "busy" };
+    }
+    this._refreshSync();
+  }
+
+  _settle(ids, ok) {
+    for (const id of ids) {
+      clearTimeout(this._sync[id]?.timer);
+      if (!ok) this._sync[id] = { state: "err", timer: setTimeout(() => this._syncDone(id), 6000) };
+      // saved: the panel has it once the next update of this page arrives
+      // (the integration sends the new settings to the panel first)
+      else this._sync[id] = { state: "wait", timer: setTimeout(() => this._syncDone(id), SYNC_FALLBACK_MS) };
+    }
+    this._refreshSync();
+  }
+
+  _syncDone(id) {
+    clearTimeout(this._sync[id]?.timer);
+    delete this._sync[id];
+    this._refreshSync();
+  }
+
+  _syncText(p) {
+    const s = this._sync[p.entry_id]?.state;
+    if (s === "busy" || s === "wait") return ["busy", "sync", "Sending to the panel…"];
+    if (s === "err") return ["err", "alert-circle-outline", "Not saved"];
+    return p.connected ? ["", "check", "Up to date on the panel"] : ["", "cloud-off-outline", "Saved · the panel is offline"];
+  }
+
+  _syncLine(p) {
+    const [cls, ic, text] = this._syncText(p);
+    return h("span", { class: `syncline ${cls}`, "data-sync": p.entry_id, role: "status" }, icon(ic), text);
+  }
+
+  _refreshSync() {
+    this.shadowRoot.querySelectorAll("[data-sync]").forEach((e) => {
+      const p = this._panelById(e.dataset.sync);
+      if (!p) return;
+      const [cls, ic, text] = this._syncText(p);
+      e.className = `syncline ${cls}`;
+      e.replaceChildren(icon(ic), text);
+    });
+  }
+
+  async _options(p, changes, { optimistic = null, toast = null, undo = null } = {}) {
+    const before = clone(p.settings);
+    if (optimistic) {
+      optimistic(p.settings);
+      this._render();
+    }
+    this._busy([p.entry_id]);
+    try {
+      await this._hass.callWS({ type: "panelos/page/options", entry_id: p.entry_id, options: changes });
+      this._settle([p.entry_id], true);
+      if (toast) this._toast(toast, undo);
+      this._schedulePicture(PICTURE_AFTER_CHANGE_MS);
+      return true;
+    } catch (err) {
+      p.settings = before;
+      this._settle([p.entry_id], false);
+      this._toast(err.message || String(err), null, true);
+      this._render();
+      return false;
+    }
+  }
+
+  // The stored page list (hidden pages too).
+  _pages(p) {
+    return p?.settings?.all_pages || [];
+  }
+
+  _savePages(p, pages, opts = {}) {
+    const clean = pages.map((pg) => ({
+      kind: pg.kind,
+      variant: pg.variant || 0,
+      entities: [...(pg.entities || [])],
+      options: clone(pg.options || {}),
+      hidden: Boolean(pg.hidden),
+    }));
+    return this._options(p, { pages: clean }, { ...opts, optimistic: (s) => { s.all_pages = clean; } });
+  }
+
+  _setPage(p, index, patch, opts) {
+    const pages = clone(this._pages(p));
+    pages[index] = { ...pages[index], ...patch };
+    return this._savePages(p, pages, opts);
+  }
+
+  _setPageOption(p, index, key, value, opts) {
+    const pages = clone(this._pages(p));
+    const options = { ...(pages[index].options || {}) };
+    if (value === undefined) delete options[key];
+    else options[key] = value;
+    pages[index].options = options;
+    return this._savePages(p, pages, opts);
+  }
+
+  _house() {
+    const hs = this._data?.house || {};
+    return { critical: clone(hs.critical || []), dismissed: clone(hs.dismissed || []), status: clone(hs.status || []) };
+  }
+
+  async _saveHouse(mutate, { toast = null, undo = null } = {}) {
+    const house = this._house();
+    mutate(house);
+    const before = this._data.house;
+    this._data.house = { ...house, active: before?.active || { critical: [], status: [] } };
+    this._render();
+    const ids = this._panels.map((p) => p.entry_id);
+    this._busy(ids);
+    try {
+      await this._hass.callWS({ type: "panelos/page/house", house });
+      this._settle(ids, true);
+      if (toast) this._toast(toast, undo);
+      return true;
+    } catch (err) {
+      this._data.house = before;
+      this._settle(ids, false);
+      this._toast(err.message || String(err), null, true);
+      this._render();
+      return false;
+    }
+  }
+
+  async _command(p, key, value) {
+    try {
+      await this._hass.callWS({ type: "panelos/page/command", entry_id: p.entry_id, key, value });
+      this._schedulePicture(PICTURE_AFTER_CHANGE_MS);
+      return true;
+    } catch (err) {
+      this._toast(err.message || String(err), null, true);
+      return false;
+    }
+  }
+
+  async _test(p, kind, item) {
+    try {
+      await this._hass.callWS({ type: "panelos/page/test", entry_id: p.entry_id, kind, item, seconds: 10 });
+      this._toast(`Showing on ${this._pname(p)} for 10 seconds`);
+      this._schedulePicture(900);
+      this._previewSheetIfNarrow(p);
+    } catch (err) {
+      this._toast(err.message || String(err), null, true);
+    }
+  }
+
+  // -- the panel's screen -----------------------------------------------------------
+
+  _schedulePicture(delay) {
+    if (!this.isConnected || document.visibilityState !== "visible" || !this._hass) return;
+    const due = Date.now() + delay;
+    if (this._pic.timer && this._pic.due <= due) return;
+    clearTimeout(this._pic.timer);
+    this._pic.due = due;
+    this._pic.timer = setTimeout(() => {
+      this._pic.timer = null;
+      this._fetchPictures();
+    }, delay);
+  }
+
+  async _fetchPictures() {
+    if (this._pic.busy) return;
+    const all = this._route().view === "all";
+    const p = this._cur();
+    const targets = all ? this._panels.filter((x) => x.connected) : p && p.connected ? [p] : [];
+    if (!targets.length || (all && Date.now() - this._pic.allAt < ALL_PICTURES_EVERY_MS - 100)) {
+      this._schedulePicture(all ? ALL_PICTURES_EVERY_MS - (Date.now() - this._pic.allAt) : PICTURE_EVERY_MS);
+      return;
+    }
+    this._pic.busy = true;
+    try {
+      for (const t of targets) await this._fetchPicture(t);
+      if (all) this._pic.allAt = Date.now();
+    } finally {
+      this._pic.busy = false;
+      this._schedulePicture(all ? ALL_PICTURES_EVERY_MS : PICTURE_EVERY_MS);
+    }
+  }
+
+  async _fetchPicture(p) {
+    try {
+      const result = await this._hass.callWS({ type: "panelos/page/screen", entry_id: p.entry_id });
+      const bytes = Uint8Array.from(atob(result.png), (c) => c.charCodeAt(0));
+      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      const img = new Image();
+      await new Promise((resolve) => {
+        img.onload = img.onerror = resolve;
+        img.src = url;
+      });
+      const old = this._pics[p.entry_id];
+      const shape = old && (old.w !== img.naturalWidth || old.h !== img.naturalHeight);
+      this._pics[p.entry_id] = { url, w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
+      if (old) setTimeout(() => URL.revokeObjectURL(old.url), 2000);
+      if (!old || shape) this._requestRender();
+      else this._showPictures(p.entry_id);
+    } catch (_err) {
+      // keeps the last picture; the next try comes on schedule
+    }
+  }
+
+  _showPictures(id) {
+    const pic = this._pics[id];
+    if (!pic) return;
+    this.shadowRoot.querySelectorAll(`img[data-pic="${CSS.escape(id)}"]`).forEach((img) => {
+      if (img.src !== pic.url) img.src = pic.url;
+    });
+  }
+
+  // The live picture of a panel (an img), or a placeholder.
+  _picture(p, { placeholder = true } = {}) {
+    const pic = this._pics[p.entry_id];
+    if (p.connected && pic) return h("img", { src: pic.url, alt: `What ${this._pname(p)} shows now`, "data-pic": p.entry_id, draggable: "false" });
+    if (!placeholder) return icon(p.connected ? "monitor" : "monitor-off");
+    return h("div", { class: "off" }, p.connected ? "Waiting for a picture…" : "Offline");
+  }
+
+  // -- live values -------------------------------------------------------------------
+
+  _liveSoon() {
+    if (this._liveTimer) return;
+    this._liveTimer = setTimeout(() => {
+      this._liveTimer = null;
+      this._updateLive();
+    }, 1000);
+  }
+
+  _updateLive() {
+    this.shadowRoot.querySelectorAll("[data-live]").forEach((e) => {
+      const v = this._liveValue(e.dataset.live);
+      if (v != null && e.textContent !== v) e.textContent = v;
+    });
+  }
+
+  // "ha:<entity>" = an entity's state with its unit; "lux:<entry>" = the screensaver's light reading.
+  _liveValue(key) {
+    const [kind, id] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+    if (kind === "ha") {
+      const st = this._hass?.states?.[id];
+      if (!st) return "–";
+      const unit = st.attributes?.unit_of_measurement;
+      return unit ? `${st.state} ${unit}` : st.state;
+    }
+    if (kind === "lux") {
+      const p = this._panelById(id);
+      if (!p) return "";
+      const s = p.settings.screensaver || DEFAULT_SCREENSAVER;
+      let v = null;
+      if (s.light_entity) {
+        const st = this._hass?.states?.[s.light_entity];
+        v = st ? Number(st.state) : null;
+      } else if (typeof p.states?.illuminance === "number") v = p.states.illuminance;
+      if (v == null || Number.isNaN(v)) return "No reading yet";
+      return `Now ${Math.round(v)} lx · ${v < s.lux ? "dark enough" : "too bright"}`;
+    }
+    return null;
+  }
+
+  // -- rendering ---------------------------------------------------------------------
+
+  _interacting() {
+    const a = this.shadowRoot.activeElement;
+    return this._dragging || Boolean(this._menu) || Boolean(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== "checkbox" && a.type !== "radio");
+  }
+
+  _requestRender() {
+    if (this._interacting()) {
+      this._pending = true;
+      return;
+    }
+    this._render();
+  }
+
+  _flush() {
+    if (this._pending && !this._interacting()) {
+      this._pending = false;
+      this._render();
+    }
+  }
+
+  _toast(text, undo = null, error = false) {
+    const t = h("div", { class: `toast${error ? " err" : ""}` }, icon(error ? "alert-circle-outline" : "check"), h("span", null, text),
+      undo ? h("button", { onclick: () => { undo(); t.remove(); } }, "Undo") : null);
+    this._toastBox.append(t);
+    setTimeout(() => t.remove(), undo ? 6000 : error ? 6000 : 3200);
+  }
+
+  _render() {
+    const root = this.shadowRoot;
+    if (!root) return;
+    this._pending = false;
+    if (!this._styleEl || this._styleStatic !== this._static) {
+      this._styleEl = h("style", null, STYLE.replaceAll("{STATIC}", this._static));
+      this._styleStatic = this._static;
+    }
+    const main0 = root.querySelector(".main");
+    const scroll = main0 ? main0.scrollTop : 0;
+    const sb = root.querySelector(".sheet-body");
+    const sheetScroll = sb ? sb.scrollTop : 0;
+    const lists = [...root.querySelectorAll(".looks")].map((e) => e.scrollLeft);
+    this._closeMenu(true);
+    const brandBg = this._brandBg();
+
+    if (!this._data || !this._panels.length) {
+      const menu = h("button", { class: "ib", "aria-label": "Home Assistant menu", onclick: () => this._toggleHaMenu() }, icon("menu"));
+      root.replaceChildren(
+        this._styleEl,
+        h("div", { class: "app no-preview" },
+          h("nav", { class: "nav", "aria-label": "PanelOS" }, h("div", { class: "brand", style: brandBg }, h("span", { class: "brand-box" }, h("i", { role: "img", "aria-label": "PanelOS" })))),
+          h("header", { class: "top" }, h("div", { class: "top-row" }, this.hasAttribute("ha-narrow") ? menu : null, h("i", { class: "logo", role: "img", "aria-label": "PanelOS" }))),
+          h("main", { class: "main" }, h("div", { class: "blank" },
+            !this._data ? "Loading…" : [h("span", null, "No panel is set up yet."), this._btn("Add a panel", () => this._startAdd(), { cls: "primary", icon: "plus" })]))),
+        this._layer, this._toastBox);
+      this._renderLayer();
+      return;
+    }
+
+    const r = this._route();
+    const all = r.view === "all";
+    const p = this._cur();
+    if (!all && r.panel && !this._panelById(r.panel)) {
+      setTimeout(() => this._go(this._panelPath(p), true));
+    }
+    const secs = all ? [] : this._sections(p);
+    const section = r.view === "page" ? "pages" : r.view;
+    const goSec = (s) => this._go(this._panelPath(p, s.id));
+
+    const nav = h("nav", { class: "nav", "aria-label": "PanelOS" },
+      h("div", { class: "brand", style: brandBg }, h("span", { class: "brand-box" }, h("i", { role: "img", "aria-label": "PanelOS" }))),
+      h("div", { class: "nav-scroll" },
+        this._switcher(p, all),
+        all ? null : h("div", { class: "links" }, secs.map((s) => h("button", { class: s.id === section ? "on" : "", onclick: () => goSec(s), "aria-current": s.id === section ? "page" : null },
+          icon(s.icon), s.long || s.name,
+          s.id === "pages" ? h("span", { class: "badge" }, this._pages(p).filter((x, i) => i === 0 || !x.hidden).length) : null)))),
+      h("div", { class: "nav-foot links" },
+        h("button", { class: all ? "on" : "", onclick: () => this._go("/all") }, icon("view-grid-outline"), "All panels", h("span", { class: "badge" }, this._panels.length)),
+        h("button", { onclick: () => this._startAdd() }, icon("plus"), "Add a panel")));
+
+    const top = h("header", { class: "top" },
+      h("div", { class: "top-row" },
+        this.hasAttribute("ha-narrow") ? h("button", { class: "ib", "aria-label": "Home Assistant menu", onclick: () => this._toggleHaMenu() }, icon("menu")) : null,
+        this._switcher(p, all),
+        h("button", { class: "ib", "aria-label": "More", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); this._moreMenu(e.currentTarget); } }, icon("dots-vertical"))),
+      all ? null : h("div", { class: "tabs" }, secs.map((s) => h("button", { class: s.id === section ? "on" : "", onclick: () => goSec(s) }, icon(s.icon), s.name))));
+
+    const content = h("div", { class: `content${all ? " wide" : ""}` }, this._view(p, r));
+    const narrow = this.getAttribute("size") === "narrow";
+    const pv = all || narrow ? null : h("aside", { class: "preview-col", "aria-label": "The panel's screen" }, this._previewBlock(p));
+    let bnav = null;
+    if (narrow) {
+      const items = all ? [] : ["overview", "pages", "alerts", "display"].map((id) => secs.find((s) => s.id === id)).filter(Boolean);
+      const inMore = !all && !items.some((s) => s.id === section);
+      bnav = h("nav", { class: "bnav", "aria-label": "Sections" },
+        all ? [h("button", { class: "on" }, icon("view-grid-outline"), "Panels"), h("button", { onclick: () => this._startAdd() }, icon("plus"), "Add")]
+          : [...items.map((s) => h("button", { class: s.id === section ? "on" : "", onclick: () => goSec(s) }, icon(s.icon), s.name)),
+            h("button", { class: inMore ? "on" : "", onclick: () => this._openSheet({ kind: "more" }) }, icon("dots-horizontal"), inMore ? (secs.find((s) => s.id === section) || {}).name || "More" : "More")]);
+    }
+    const fab = narrow && !all && ["page", "display", "voice", "alerts", "pages"].includes(r.view)
+      ? h("button", { class: "fab", "aria-label": "Show the panel's screen", onclick: () => this._openSheet({ kind: "preview", panel: p.entry_id }) }, this._picture(p, { placeholder: false }))
+      : null;
+
+    const app = h("div", { class: `app${pv ? "" : " no-preview"}` }, nav, top, h("main", { class: "main" }, content), pv, bnav, fab);
+    root.replaceChildren(this._styleEl, app, this._layer, this._toastBox);
+    this._renderLayer();
+    const main = root.querySelector(".main");
+    if (main && scroll) main.scrollTop = scroll;
+    const nsb = root.querySelector(".sheet-body");
+    if (nsb && sheetScroll) nsb.scrollTop = sheetScroll;
+    const sameView = this._looksPath === this._path;
+    this._looksPath = this._path;
+    root.querySelectorAll(".looks").forEach((e, i) => {
+      if (sameView && lists[i] != null) e.scrollLeft = lists[i];
+      else {
+        const on = e.querySelector(".look.on");
+        if (on && on.offsetLeft + on.offsetWidth > e.clientWidth) e.scrollLeft = on.offsetLeft - (e.clientWidth - on.offsetWidth) / 2;
+      }
+    });
+    this._afterRender();
+  }
+
+  _brandBg() {
+    const dark = this.hasAttribute("dark");
+    if (this._patternDark !== dark) {
+      this._patternDark = dark;
+      this._patternCss = patternUrl(dark);
+    }
+    return { backgroundImage: this._patternCss, backgroundSize: `${(576 * PATTERN_SCALE).toFixed(2)}px ${(1497.6 * PATTERN_SCALE).toFixed(2)}px` };
+  }
+
+  _toggleHaMenu() {
+    this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
+  }
+
+  _afterRender() {
+    // keep the explanations inside the window
+    this.shadowRoot.querySelectorAll(".pop").forEach((pop) => {
+      const r = pop.getBoundingClientRect();
+      let dx = 0;
+      if (r.right > window.innerWidth - 12) dx = window.innerWidth - 12 - r.right;
+      if (r.left + dx < 12) dx = 12 - r.left;
+      if (dx) pop.style.transform = `translateX(${dx}px)`;
+    });
+  }
+
+  _view(p, r) {
+    if (r.view === "all") return this._viewAll();
+    if (r.view === "page") return this._viewPage(p, r.page);
+    const fn = { overview: this._viewOverview, pages: this._viewPages, alerts: this._viewAlerts, voice: this._viewVoice, display: this._viewDisplay, device: this._viewDevice }[r.view];
+    if (!fn || !this._sections(p).some((s) => s.id === r.view)) return this._viewOverview(p);
+    return fn.call(this, p);
+  }
+
+  _switcher(p, all) {
+    const b = h("button", { class: "switcher", "aria-haspopup": "menu", "aria-label": "Choose a panel", onclick: (e) => { e.stopPropagation(); this._panelPicker(b); } },
+      all ? h("span", { class: "thumb" }, icon("view-grid-outline")) : h("span", { class: "thumb" }, this._picture(p, { placeholder: false })),
+      h("span", { class: "txt" },
+        h("b", null, all ? "All panels" : this._pname(p)),
+        h("small", null, all ? plural(this._panels.length, "panel", "panels") : [this._pmodel(p), this._parea(p)].filter(Boolean).join(" · "))),
+      icon("chevron-down"));
+    return b;
+  }
+
+  _panelPicker(anchor) {
+    if (this.getAttribute("size") === "narrow") {
+      this._openSheet({ kind: "panels" });
+      return;
+    }
+    const r = this._route();
+    this._openMenu(anchor, [
+      ...this._panels.map((x) => ({
+        icon: x.connected ? "monitor-dashboard" : "monitor-off",
+        label: this._pname(x),
+        run: () => this._go(this._panelPath(x, r.view !== "all" && r.view !== "page" && this._sections(x).some((s) => s.id === r.view) ? r.view : "")),
+      })),
+      "-",
+      { icon: "view-grid-outline", label: "All panels", run: () => this._go("/all") },
+      { icon: "plus", label: "Add a panel", run: () => this._startAdd() },
+    ]);
+  }
+
+  _moreMenu(anchor) {
+    const p = this._cur();
+    const all = this._route().view === "all";
+    this._openMenu(anchor, [
+      ...(all ? [] : [
+        { icon: "pencil-outline", label: `Rename ${this._pname(p)}`, run: () => this._openSheet({ kind: "rename", panel: p.entry_id }), disabled: !p.device_id },
+        { icon: "content-copy", label: "Copy settings to other panels…", run: () => this._openCopy(p), disabled: this._panels.length < 2 },
+        { icon: "restart", label: "Restart the app on the panel", run: () => this._command(p, "restart_app", null).then((ok) => ok && this._toast(`Restarting the app on ${this._pname(p)}…`)), disabled: !p.connected },
+        "-"]),
+      { icon: "view-grid-outline", label: "All panels", run: () => this._go("/all") },
+      { icon: "plus", label: "Add a panel", run: () => this._startAdd() },
+    ]);
+  }
+
+  // -- controls ----------------------------------------------------------------------
+
+  _toggle(checked, onchange, { label = "On", disabled = false } = {}) {
+    return h("label", { class: "switch" }, h("input", { type: "checkbox", role: "switch", checked, disabled, "aria-label": label, onchange: (e) => onchange(e.target.checked) }), h("span"));
+  }
+
+  _seg(options, value, onchange, { label = null } = {}) {
+    return h("div", { class: "seg", role: "radiogroup", "aria-label": label },
+      options.map(([v, text, dis]) => h("button", {
+        class: v === value ? "on" : "", role: "radio", "aria-checked": v === value ? "true" : "false",
+        disabled: Boolean(dis), title: typeof dis === "string" ? dis : null, onclick: () => v !== value && onchange(v),
+      }, text)));
+  }
+
+  _select(options, value, onchange, { label = "Choose", full = false } = {}) {
+    const list = options.map((o) => (Array.isArray(o) ? o : [o, o]));
+    if (value != null && value !== "" && !list.some(([v]) => v === value)) list.push([value, value]);
+    return h("div", { class: `sel${full ? " full" : ""}` },
+      h("select", { "aria-label": label, onchange: (e) => onchange(e.target.value) }, list.map(([v, l, dis]) => h("option", { value: v, selected: v === value, disabled: Boolean(dis) }, l))),
+      icon("chevron-down"));
+  }
+
+  _slider(value, min, max, step, onchange, fmt = (v) => String(v), { disabled = false, label = null } = {}) {
+    const out = h("span", { class: "value" }, fmt(value));
+    const fill = (v) => `${((v - min) / (max - min)) * 100}%`;
+    const inp = h("input", {
+      type: "range", min, max, step, value, disabled, "aria-label": label, style: { "--fill": fill(value) },
+      oninput: (e) => { const v = +e.target.value; out.textContent = fmt(v); e.target.style.setProperty("--fill", fill(v)); },
+      onchange: (e) => onchange(+e.target.value),
+    });
+    inp.value = value;
+    return h("div", { class: "slider" }, inp, out);
+  }
+
+  _text(value, onchange, { placeholder = "", max = 40, label = null, cls = "", type = "text" } = {}) {
+    return h("input", {
+      class: `inp ${cls}`, type, value: value || "", placeholder, maxlength: max, "aria-label": label || placeholder || "Text",
+      onchange: (e) => onchange(e.target.value), onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); },
+    });
+  }
+
+  // One entity to choose: its name on a button (long names wrap), the picker on a tap.
+  _entityButton(current, { title, domains, none = null, onPick, p = null, filter = null, back = null }) {
+    const name = current ? this._ename(current) : none || "Choose";
+    return h("button", { class: "btn small pickbtn", "aria-label": `${title}: ${name}`, onclick: () => this._openSheet({ kind: "pick", title, domains, current, none, filter, panel: p?.entry_id, onPick, back }) },
+      current ? icon(this._eicon(current)) : null, h("span", null, name), icon("chevron-down"));
+  }
+
+  // One of a few choices as chips that wrap (panels, rooms, screens).
+  _radioChips(options, value, onchange) {
+    return h("div", { class: "chips", role: "radiogroup" }, options.map(([v, label]) =>
+      h("button", { class: `chip${v === value ? " on" : ""}`, role: "radio", "aria-checked": v === value ? "true" : "false", onclick: () => v !== value && onchange(v) }, v === value ? icon("check") : null, h("span", null, label))));
+  }
+
+  _times(from, to, onchange) {
+    return h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } },
+      this._text(from, (v) => v && onchange(v, to), { type: "time", cls: "time", label: "From" }), "–",
+      this._text(to, (v) => v && onchange(from, v), { type: "time", cls: "time", label: "To" }));
+  }
+
+  _infoBtn(key, text) {
+    const open = this._ui.info === key || this._ui.allInfo;
+    return [
+      h("button", { class: "ib info", "aria-label": "More about this", "aria-expanded": open ? "true" : "false", onclick: (e) => { e.stopPropagation(); this._ui.info = open ? null : key; this._render(); } }, icon("information-outline")),
+      open && this._ui.info === key ? h("div", { class: "pop", role: "note", onclick: (e) => e.stopPropagation() }, text) : null,
+    ];
+  }
+
+  _card(title, opts, ...body) {
+    return h("section", { class: `card${opts.cls ? ` ${opts.cls}` : ""}` },
+      title != null ? h("div", { class: "card-head" }, opts.lead || null,
+        h("h2", null, title, opts.sub ? h("div", { class: "sub" }, opts.sub) : null),
+        opts.acts || opts.info ? h("div", { class: "acts" }, opts.acts || null, opts.info ? this._infoBtn(opts.infoKey || `c:${title}`, opts.info) : null) : null) : null,
+      ...body);
+  }
+
+  _row(label, control, opts = {}) {
+    const cls = ["row", opts.stack && "stack", opts.click && "click", opts.dim && "dim", opts.keep && "keep", opts.cls].filter(Boolean).join(" ");
+    return h("div", { class: cls, onclick: opts.click || null },
+      opts.lead || null,
+      h("div", { class: "lw" },
+        h("div", { class: "label" }, h("span", null, label), opts.sub ? h("small", null, opts.sub) : null, opts.extra || null),
+        opts.info ? h("span", { class: "rinfo", onclick: (e) => e.stopPropagation() }, this._infoBtn(opts.infoKey || `r:${label}`, opts.info)) : null),
+      control != null ? h("div", { class: "control", onclick: opts.click ? (e) => e.stopPropagation() : null }, control) : null);
+  }
+
+  _more(key, ...rows) {
+    const open = Boolean(this._ui.more[key]) || this._ui.allMore;
+    const body = rows.flat().filter(Boolean);
+    if (!body.length) return null;
+    return h("div", { class: `more${open ? " open" : ""}` },
+      h("button", { onclick: () => { this._ui.more[key] = !open; this._render(); }, "aria-expanded": open ? "true" : "false" }, icon("chevron-down"), open ? "Fewer options" : "More options"),
+      open ? h("div", { class: "body" }, ...body) : null);
+  }
+
+  _btn(label, onclick, opts = {}) {
+    return h("button", { class: `btn${opts.cls ? ` ${opts.cls}` : ""}`, onclick, disabled: Boolean(opts.disabled), title: opts.title || null, "aria-label": opts.aria || null },
+      opts.icon ? icon(opts.icon) : null, h("span", null, label));
+  }
+
+  // A button that needs a second tap (restart, remove).
+  _armed(key, label, armedLabel, action, opts = {}) {
+    const armed = this._ui.armed === key;
+    return this._btn(armed ? armedLabel : label, () => {
+      if (armed) {
+        this._ui.armed = null;
+        action();
+        this._render();
+        return;
+      }
+      this._ui.armed = key;
+      this._render();
+      setTimeout(() => { if (this._ui.armed === key) { this._ui.armed = null; this._render(); } }, 4000);
+    }, { ...opts, cls: `${armed ? "armed " : ""}${opts.cls || ""}` });
+  }
+
+  // Looks to pick from; the ones this panel cannot show are greyed, with the reason once below.
+  _lookPicker(items, value, onpick) {
+    const why = [...new Set(items.filter((it) => it.disabled && it.why).map((it) => it.why))];
+    return [
+      h("div", { class: "looks", role: "radiogroup" }, items.map((it) =>
+        h("button", { class: `look${it.id === value ? " on" : ""}`, disabled: Boolean(it.disabled), title: it.why || null, role: "radio", "aria-checked": it.id === value ? "true" : "false", onclick: () => it.id !== value && onpick(it.id) },
+          h("div", { class: "pic" }, it.pic, it.id === value ? h("span", { class: "chk" }, icon("check")) : null),
+          h("span", null, it.name)))),
+      why.length ? h("p", { class: "note", style: { margin: "0 0 14px" } }, `Greyed looks are not available: ${why.join(" ")}`) : null,
+    ];
+  }
+
+  _swatches(items, value, onpick, { wood = false } = {}) {
+    return h("div", { class: "swatches" }, items.map((it) =>
+      h("button", { class: `sw-lab${it.id === value ? " on" : ""}`, onclick: () => onpick(it.id), "aria-pressed": it.id === value ? "true" : "false" },
+        h("span", { class: `sw${wood ? " wood" : ""}${it.id === value ? " on" : ""}`, style: { background: it.c } }), it.name)));
+  }
+
+  _chipToggle(on, label, onclick, extra = null) {
+    return h("button", { class: `chip${on ? " on" : ""}`, onclick, "aria-pressed": on ? "true" : "false" }, on ? icon("check") : extra, h("span", null, label));
+  }
+
+  // -- menus ---------------------------------------------------------------------------
+
+  _openMenu(anchor, items) {
+    this._closeMenu(true);
+    const m = h("div", { class: "menu", role: "menu" }, items.map((it) => (it === "-" ? h("hr") :
+      h("button", { role: "menuitem", class: it.danger ? "danger" : "", disabled: Boolean(it.disabled), title: it.title || null, onclick: (e) => { e.stopPropagation(); this._closeMenu(); it.run(); } }, icon(it.icon || "chevron-right"), it.label))));
+    this.shadowRoot.append(m);
+    const r = anchor.getBoundingClientRect();
+    const mw = m.offsetWidth;
+    const mh = m.offsetHeight;
+    let x = Math.min(r.right - mw, window.innerWidth - mw - 12);
+    x = Math.max(12, x);
+    let y = r.bottom + 6;
+    if (y + mh > window.innerHeight - 12) y = Math.max(12, r.top - mh - 6);
+    m.style.left = `${x}px`;
+    m.style.top = `${y}px`;
+    this._menu = m;
+    this._menuAnchor = anchor;
+    anchor.setAttribute("aria-expanded", "true");
+  }
+
+  _closeMenu(quiet = false) {
+    if (!this._menu) return;
+    this._menu.remove();
+    this._menu = null;
+    this._menuAnchor?.setAttribute("aria-expanded", "false");
+    if (!quiet) this._flush();
+  }
+
+  // -- sheets ---------------------------------------------------------------------------
+
+  _openSheet(sheet) {
+    this._ui.sheet = sheet;
+    this._ui.sheetFresh = true;
+    this._ui.info = null;
+    this._renderLayer();
+  }
+
+  _closeSheet() {
+    this._ui.sheet = null;
+    this._renderLayer();
+    this._flush();
+  }
+
+  _renderLayer() {
+    const sh = this._ui.sheet;
+    let node = null;
+    if (sh && this._data) {
+      const fn = this[`_sheet_${sh.kind}`];
+      try {
+        node = fn ? fn.call(this, sh, (sh.panel && this._panelById(sh.panel)) || this._cur()) : null;
+      } catch (err) {
+        console.error("PanelOS sheet", sh.kind, err);
+        node = null;
+      }
+    }
+    if (node && !this._ui.sheetFresh) node.classList.add("noanim");
+    this._ui.sheetFresh = false;
+    this._layer.replaceChildren(node || "");
+  }
+
+  _sheetFrame(title, body, foot, opts = {}) {
+    return h("div", { class: `layer${opts.center ? " center" : ""}` },
+      h("div", { class: "scrim", onclick: () => this._closeSheet() }),
+      h("div", { class: `sheet${opts.wide ? " wide" : ""}`, role: "dialog", "aria-modal": "true", "aria-label": title },
+        h("i", { class: "grab" }),
+        h("div", { class: "sheet-head" },
+          opts.back ? h("button", { class: "ib", "aria-label": "Back", onclick: opts.back }, icon("chevron-left")) : null,
+          h("h2", null, title),
+          opts.info ? h("span", { class: "rinfo" }, this._infoBtn(`s:${title}`, opts.info)) : null,
+          h("button", { class: "ib", "aria-label": "Close", onclick: () => this._closeSheet() }, icon("close"))),
+        h("div", { class: "sheet-body" }, body),
+        foot ? h("div", { class: "sheet-foot" }, foot) : null));
+  }
+
+  // On a phone the preview column is hidden: show the screen in a sheet while a test runs.
+  _previewSheetIfNarrow(p) {
+    if (this.getAttribute("size") === "narrow" && this._ui.sheet?.kind !== "preview") this._openSheet({ kind: "preview", panel: p.entry_id });
+  }
+
+  // -- the device frame with the live picture ---------------------------------------------
+
+  _deviceNode(p, size) {
+    const pic = this._pics[p.entry_id];
+    const ar = pic ? pic.w / pic.h : 1;
+    let W = size;
+    let H = size;
+    let gw = size * 0.76;
+    let gh = gw / ar;
+    if (ar < 0.9) { H = size; W = size * Math.max(0.55, ar + 0.12); gh = H * 0.86; gw = gh * ar; }
+    else if (ar > 1.1) { W = size; H = size * Math.max(0.55, 1 / ar + 0.16); gw = W * 0.86; gh = gw / ar; }
+    const gx = (W - gw) / 2;
+    const gy = (H - gh) / 2;
+    return h("div", { class: "device", style: { width: `${W}px`, height: `${H}px` } },
+      h("div", { class: "bezel", style: { borderRadius: `${Math.max(10, size * 0.06)}px` } }),
+      h("div", {
+        class: "glass", title: p.connected ? "Tap to wake the screen" : null,
+        style: { left: `${gx}px`, top: `${gy}px`, width: `${gw}px`, height: `${gh}px`, borderRadius: `${Math.max(3, size * 0.012)}px` },
+        onclick: () => p.connected && this._command(p, "screen", true),
+      }, this._picture(p)));
+  }
+
+  _previewBlock(p, { width = null, height = null } = {}) {
+    const colW = width || (this.getAttribute("size") === "wide" ? 348 : 300);
+    const avH = height || Math.max(240, (this.clientHeight || window.innerHeight) - (this.getAttribute("size") === "wide" ? 240 : 330));
+    const size = Math.max(180, Math.min(colW, avH));
+    return h("div", { class: "pv" },
+      h("div", { class: "pv-title" }, h("span", { class: `state${p.connected ? " on" : ""}` }, h("b")), p.connected ? "Live" : "Offline",
+        h("span", { class: "rinfo" }, this._infoBtn("pv", "What the panel's screen shows now, refreshed every few seconds while this page is open. Tap the screen to wake it."))),
+      this._deviceNode(p, size),
+      h("div", { class: "pv-acts" },
+        this._btn("Wake", () => this._command(p, "screen", true), { cls: "small", icon: "gesture-tap", disabled: !p.connected }),
+        this._btn("Screensaver", () => this._command(p, "screen", false), { cls: "small", icon: "sleep", disabled: !p.connected })),
+      this._syncLine(p));
+  }
+
+  // ================================================================ views
+
+  _hero(title, meta, acts = null, menu = true) {
+    return h("div", { class: "hero" },
+      h("div", { class: "t" }, h("h1", null, title), meta ? h("div", { class: "meta" }, meta) : null),
+      acts ? h("div", { class: "acts" }, acts) : null,
+      menu ? h("button", { class: "ib only-xl", "aria-label": "More", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); this._moreMenu(e.currentTarget); } }, icon("dots-vertical")) : null);
+  }
+
+  _state(p) {
+    return h("span", { class: `state${p.connected ? " on" : ""}` }, h("b"), p.connected ? "Online" : "Offline");
+  }
+
+  _gl(ic, label, value, sub, live = null) {
+    return h("div", { class: "gl" }, h("small", null, icon(ic), label), h("b", { "data-live": live }, value), sub ? h("em", null, sub) : null);
+  }
+
+  // -- overview -----------------------------------------------------------------
+
+  _viewOverview(p) {
+    const s = p.states || {};
+    const shown = this._pages(p).filter((x, i) => i === 0 || !x.hidden);
+    const version = s.app_version || p.device?.sw_version;
+    const num = (v) => typeof v === "number" && !Number.isNaN(v);
+    const tiles = [
+      this._has(p, "light") ? this._gl("brightness-6", "Light", num(s.illuminance) ? `${Math.round(s.illuminance)} lx` : "–", "Built-in sensor") : null,
+      this._has(p, "proximity") ? this._gl("motion-sensor", "Presence", s.presence == null ? "–" : s.presence ? "Someone" : "Nobody", "In front of the panel") : null,
+      this._gl("monitor", "Screen", s.screen == null ? "–" : s.screen ? "On" : "Screensaver",
+        s.auto_brightness ? "Automatic brightness" : num(s.brightness) ? `Brightness ${s.brightness} %` : null),
+      this._gl("wifi", "Wi-Fi", num(s.wifi_signal) ? `${s.wifi_signal} dBm` : "–", s.ip_address || null),
+      this._gl("chip", "Chip temperature", num(s.soc_temperature) ? `${s.soc_temperature.toFixed(1)} °C` : "–", null),
+      this._gl("view-grid-outline", "Pages", String(shown.length), "to swipe through"),
+    ];
+    const house = this._data.house || {};
+    const active = house.active || { critical: [], status: [] };
+    const crit = (house.critical || []).filter((c) => active.critical.includes(c.entity_id) && !c.off.includes(p.entry_id));
+    const stat = (house.status || []).filter((x) => active.status.includes(x.id) && x.panels.includes(p.entry_id));
+    const hero = this._hero(this._pname(p), [this._state(p), h("span", null, this._pmodel(p)), this._parea(p) ? h("span", null, this._parea(p)) : null,
+      version ? h("span", null, `Version ${version}`) : null, this._syncLine(p)]);
+    hero.classList.add("ov-hero");
+    return [
+      hero,
+      h("section", { class: "card only-narrow pv-card" }, this._previewBlock(p, { width: Math.min((this.clientWidth || 360) - 64, 330), height: 330 })),
+      p.loaded ? null : this._card(null, {}, this._row("This panel's entry is not loaded", null, { sub: "Check it in Settings → Devices and services.", lead: h("span", { class: "lead" }, icon("alert-outline")), cls: "first", keep: true })),
+      this._card("Right now", { info: "Live values from the panel. In Home Assistant they are entities of the panel's device, so automations can use them." },
+        h("div", { class: "glance" }, tiles)),
+      this._card("Alerts and status now", { info: "Critical alerts and status screens that are on at this moment on this panel. They are set in Alerts." },
+        crit.length || stat.length
+          ? h("div", { class: "below" }, [
+            ...crit.map((c) => this._row(this._ename(c.entity_id), null, { lead: h("span", { class: "lead on" }, icon(this._eicon(c.entity_id))), sub: "Critical alert", keep: true })),
+            ...stat.map((x) => this._row(this._statusName(x), null, { lead: this._stLead(x), sub: this._trigText(x), keep: true })),
+          ])
+          : h("div", { class: "empty" }, "Nothing is on right now.")),
+    ];
+  }
+
+  // -- pages ------------------------------------------------------------------------
+
+  _pageSub(p, page, i) {
+    const bits = [];
+    if (i === 0) bits.push("Start page");
+    if (page.hidden && i > 0) bits.push("Hidden");
+    const ents = page.entities || [];
+    const names = (domain) => ents.filter((e) => e.startsWith(`${domain}.`));
+    if (page.kind === "home") {
+      bits.push((BACKGROUNDS[bgIndex(page)] || {}).name);
+      bits.push(plural((page.options?.items || DEFAULT_ITEMS).length, "widget", "widgets"));
+    } else {
+      const looks = LOOKS[page.kind] || [];
+      if (looks.length > 1) bits.push(looks[page.variant || 0] || looks[0]);
+      if (page.kind === "music") bits.push(ents[0] ? this._ename(ents[0]) : "The panel's player");
+      if (page.kind === "weather") bits.push(ents[0] ? this._ename(ents[0]) : "The panel's weather");
+      if (page.kind === "thermostat") bits.push(ents.length ? this._ename(ents[0]) + (ents.length > 1 ? ` and ${ents.length - 1} more` : "") : "No thermostat yet");
+      if (page.kind === "quick") bits.push(plural(ents.length, "tile", "tiles"));
+      if (page.kind === "camera") bits.push(plural(ents.length, "camera", "cameras"));
+      if (page.kind === "calendar") bits.push(plural(names("calendar").length, "calendar", "calendars"));
+      if (page.kind === "todo") bits.push(ents.length ? ents.map((e) => this._ename(e)).join(", ") : "No list yet");
+      if (page.kind === "info" && (page.variant || 0) === 2) bits.push((PAGER_FINISH.find((f) => f.id === page.options?.finish) || PAGER_FINISH[0]).name);
+    }
+    return bits.filter(Boolean).join(" · ");
+  }
+
+  _viewPages(p) {
+    const pages = this._pages(p);
+    const shown = pages.filter((x, i) => i === 0 || !x.hidden).length;
+    const max = this._data.max_pages || 12;
+    const st = this._settings(p);
+    return [
+      this._hero("Pages", [h("span", null, this._pname(p)), h("span", null, `${shown} of ${pages.length} shown`), this._syncLine(p)]),
+      this._card("Swipe order", {
+        info: "The panel shows these pages in this order; swipe left and right between them. After the last page the first comes again, in both directions. The first page is the start page: it stays first and the panel returns to it. A page type can be added more than once, for example two Weather pages with different backgrounds. A hidden page keeps its settings.",
+        acts: this._btn("Add a page", () => this._openSheet({ kind: "catalogue", panel: p.entry_id }), { cls: "small", icon: "plus", disabled: pages.length >= max, title: pages.length >= max ? `At most ${max} pages` : null }),
+      },
+      h("div", { class: "plist" }, pages.map((page, i) => {
+        const t = PAGE_TYPES[page.kind] || { name: page.kind };
+        const open = () => this._go(`${this._panelPath(p, "pages")}/${i}`);
+        return h("div", { class: `prow${page.hidden && i > 0 ? " hidden-page" : ""}`, "data-i": i },
+          h("button", { class: `handle${i === 0 ? " fixed" : ""}`, "aria-label": i === 0 ? "The start page stays first" : `Drag to reorder ${t.name}`, onpointerdown: i === 0 ? null : (e) => this._startPageDrag(e, p) }, icon("drag-vertical")),
+          h("div", { class: "pthumb", onclick: open }, lookArt(page.kind, page.variant || 0, page)),
+          h("div", { class: "ptxt", onclick: open }, h("b", null, t.name), h("small", null, this._pageSub(p, page, i))),
+          i === 0 ? null : this._toggle(!page.hidden, (v) => this._setPage(p, i, { hidden: !v }), { label: `Show ${t.name}` }),
+          h("button", { class: "ib", "aria-label": "Page options", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); this._pageMenu(e.currentTarget, p, i); } }, icon("dots-vertical")),
+          h("span", { class: "chev", onclick: open }, icon("chevron-right")));
+      }))),
+      this._card("Used by every page", { info: "Pages and widgets that do not choose their own weather or player use these." },
+        this._row("Weather", this._entityButton(st.weather_entity || "", { title: "Weather", domains: ["weather"], none: "None", p, onPick: (v) => this._options(p, { weather_entity: v }, { optimistic: (s) => { s.weather_entity = v; } }) })),
+        this._row("Player", this._entityButton(st.media_player_entity || "", { title: "Player", domains: ["media_player"], none: "None", p, onPick: (v) => this._options(p, { media_player_entity: v }, { optimistic: (s) => { s.media_player_entity = v; } }) }))),
+      this._has(p, "web") ? this._dashboardCard(p) : null,
+    ];
+  }
+
+  _settings(p) {
+    return p.settings || {};
+  }
+
+  _dashboardCard(p) {
+    const st = this._settings(p);
+    const s = p.states || {};
+    const modes = p.select_options?.display_mode || [];
+    return this._card("Dashboard", {
+      sub: "A Home Assistant dashboard in the web view",
+      info: "The panel can show a Home Assistant dashboard instead of its own pages, custom cards included. It is logged in as its own Home Assistant user: dashboards for administrators only, or views shown only to some users, stay empty on it. \"Chosen on the panel\" leaves the choice to the panel's own setting.",
+    },
+    modes.length ? this._row("The panel shows", this._seg(modes.map((m) => [m, m]), s.display_mode, (v) => this._command(p, "display_mode", v), { label: "Display mode" })) : null,
+    this._row("Dashboard", this._radioChips((this._data.dashboards || []).map((d) => [d.value, d.label]), st.dashboard || "", (v) => this._options(p, { dashboard: v }, { optimistic: (x) => { x.dashboard = v; } })), { stack: true }),
+    this._row("Header", this._toggle(st.show_header, (v) => this._options(p, { show_header: v }, { optimistic: (x) => { x.show_header = v; } }), { label: "Header" })),
+    this._row("Sidebar", this._toggle(st.show_sidebar, (v) => this._options(p, { show_sidebar: v }, { optimistic: (x) => { x.show_sidebar = v; } }), { label: "Sidebar" })),
+    this._more(`dash:${p.entry_id}`,
+      this._row("Size", this._slider(st.zoom ?? 100, 50, 150, 5, (v) => this._options(p, { zoom: v }, { optimistic: (x) => { x.zoom = v; } }), (v) => `${v} %`, { label: "Size" })),
+      this._row("Loading screen", this._toggle(st.loading_screen ?? true, (v) => this._options(p, { loading_screen: v }, { optimistic: (x) => { x.loading_screen = v; } }), { label: "Loading screen" })),
+      this._resourcesRows(p)));
+  }
+
+  _resourcesRows(p) {
+    const st = this._settings(p);
+    const res = p.resources || [];
+    const keep = new Set(st.keep_resources || []);
+    const loaded = (r) => r.needed || !st.skip_unused || keep.has(r.url);
+    const out = res.filter((r) => !loaded(r));
+    const saved = out.reduce((sum, r) => sum + (r.size || 0), 0);
+    const rows = [this._row("Load only the cards it uses", this._toggle(st.skip_unused, (v) => this._options(p, { skip_unused_resources: v }, { optimistic: (x) => { x.skip_unused = v; } }), { label: "Load only the cards it uses" }), {
+      sub: res.length ? `${res.length - out.length} of ${res.length} card resources load${saved ? ` · ${mb(saved)} left out` : ""}` : null,
+      info: "Home Assistant loads every card resource on every dashboard, used or not; on the panel each one costs load time. The panel leaves out the ones the dashboard it shows does not use, worked out again whenever the dashboard changes: a resource counts as used when its name matches a card type or a setting of the dashboard. Switch one on to always load it.",
+    })];
+    if (res.length) {
+      rows.push(h("div", { class: "row stack" }, h("div", { class: "res" }, res.map((r) => {
+        const path = r.url.split("?")[0];
+        const parts = path.split("/").filter(Boolean);
+        const file = parts.pop() || path;
+        const folder = parts.length ? parts[parts.length - 1] : "";
+        return h("div", { class: "item" },
+          h("div", { class: "name" }, folder && folder !== "local" ? folder : file, folder && folder !== file.replace(/\.js$/, "") ? h("small", null, file) : null),
+          r.needed ? h("span", { class: "tag sig" }, "Used") : null,
+          h("span", { class: "size" }, r.size ? mb(r.size) : "–"),
+          this._toggle(loaded(r), (v) => {
+            const now = new Set(keep);
+            if (v) now.add(r.url);
+            else now.delete(r.url);
+            this._options(p, { keep_resources: [...now] }, { optimistic: (x) => { x.keep_resources = [...now]; } });
+          }, { label: `Always load ${file}`, disabled: r.needed || !st.skip_unused }));
+      }))));
+    }
+    return rows;
+  }
+
+  _pageMenu(anchor, p, i) {
+    const pages = this._pages(p);
+    const page = pages[i];
+    const t = PAGE_TYPES[page.kind] || { name: page.kind };
+    const max = this._data.max_pages || 12;
+    const move = (d) => {
+      const next = clone(pages);
+      next.splice(i + d, 0, next.splice(i, 1)[0]);
+      this._savePages(p, next);
+    };
+    this._openMenu(anchor, [
+      { icon: "pencil-outline", label: "Edit", run: () => this._go(`${this._panelPath(p, "pages")}/${i}`) },
+      { icon: "arrow-up", label: "Move up", disabled: i <= 1, run: () => move(-1) },
+      { icon: "arrow-down", label: "Move down", disabled: i === 0 || i >= pages.length - 1, run: () => move(1) },
+      "-",
+      { icon: "content-copy", label: "Copy to other panels…", disabled: this._panels.length < 2, run: () => this._openCopy(p, i) },
+      { icon: "plus-box-multiple-outline", label: "Duplicate", disabled: pages.length >= max, run: () => {
+        const next = clone(pages);
+        const copy = { ...clone(page), hidden: false };
+        next.splice(i + 1, 0, copy);
+        this._savePages(p, next, { toast: `${t.name} duplicated` });
+      } },
+      { icon: "delete-outline", label: "Remove", danger: true, disabled: i === 0, run: () => this._removePage(p, i) },
+    ]);
+  }
+
+  _removePage(p, i) {
+    const pages = clone(this._pages(p));
+    const [gone] = pages.splice(i, 1);
+    const t = PAGE_TYPES[gone.kind] || { name: gone.kind };
+    this._savePages(p, pages, {
+      toast: `${t.name} removed from ${this._pname(p)}`,
+      undo: () => { const back = clone(this._pages(p)); back.splice(i, 0, gone); this._savePages(p, back); },
+    });
+    if (this._route().view === "page") this._go(this._panelPath(p, "pages"));
+  }
+
+  // Drag a page row by its handle (mouse and touch); the start page stays first.
+  _startPageDrag(e, p) {
+    e.preventDefault();
+    const rowEl = e.currentTarget.closest(".prow");
+    const list = rowEl.parentElement;
+    let startY = e.clientY;
+    this._dragging = true;
+    rowEl.classList.add("dragging");
+    const move = (ev) => {
+      ev.preventDefault();
+      const r = rowEl.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      const prev = rowEl.previousElementSibling;
+      const next = rowEl.nextElementSibling;
+      if (prev && prev.dataset.i !== "0") {
+        const pr = prev.getBoundingClientRect();
+        if (mid < pr.top + pr.height / 2) { const before = rowEl.offsetTop; list.insertBefore(rowEl, prev); startY += rowEl.offsetTop - before; }
+      }
+      if (next) {
+        const nr = next.getBoundingClientRect();
+        if (mid > nr.top + nr.height / 2) { const before = rowEl.offsetTop; list.insertBefore(next, rowEl); startY += rowEl.offsetTop - before; }
+      }
+      rowEl.style.transform = `translateY(${ev.clientY - startY}px)`;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      this._dragging = false;
+      rowEl.classList.remove("dragging");
+      rowEl.style.transform = "";
+      const order = [...list.children].map((c) => Number(c.dataset.i));
+      if (order.some((v, k) => v !== k)) {
+        const pages = this._pages(p);
+        this._savePages(p, order.map((k) => clone(pages[k])), { toast: `New order sent to ${this._pname(p)}` });
+      } else this._render();
+    };
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  // -- page editor ------------------------------------------------------------------
+
+  _viewPage(p, i) {
+    const pages = this._pages(p);
+    const page = pages[i];
+    if (!page) {
+      setTimeout(() => this._go(this._panelPath(p, "pages"), true));
+      return [];
+    }
+    const t = PAGE_TYPES[page.kind] || { name: page.kind };
+    const editor = { home: this._editHome, weather: this._editWeather, music: this._editMusic, timers: this._editTimers, thermostat: this._editThermostat, quick: this._editQuick, camera: this._editCamera, calendar: this._editCalendar, todo: this._editTodo, info: this._editInfo }[page.kind];
+    return [
+      h("button", { class: "back", onclick: () => this._go(this._panelPath(p, "pages")) }, icon("chevron-left"), "Pages"),
+      this._hero(t.name, [h("span", null, this._pname(p)), h("span", null, `Page ${i + 1} of ${pages.length}`), i === 0 ? h("span", { class: "tag" }, "Start page") : page.hidden ? h("span", { class: "tag" }, "Hidden") : null, this._syncLine(p)],
+        [i === 0 ? null : this._toggle(!page.hidden, (v) => this._setPage(p, i, { hidden: !v }), { label: "Shown on the panel" }),
+          h("button", { class: "ib", "aria-label": "Page options", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); this._pageMenu(e.currentTarget, p, i); } }, icon("dots-vertical"))], false),
+      this._lookCard(p, page, i),
+      ...(editor ? editor.call(this, p, page, i) : []),
+    ];
+  }
+
+  _lookCard(p, page, i) {
+    const o = page.options || {};
+    if (page.kind === "home") {
+      const cur = bgIndex(page);
+      const sw = cur >= 8;
+      const items = BACKGROUNDS.map((b, k) => ({ id: k, name: b.name, pic: svgNode(bgArt(k)), disabled: !this._has(p, "images"), why: this._has(p, "images") ? null : this._reason(p, "images") }));
+      return this._card("Background", { info: "The backgrounds follow the real weather and the time of day." },
+        this._lookPicker(items, cur, (k) => {
+          const b = BACKGROUNDS[k];
+          const next = { ...o, theme: b.theme };
+          if (b.theme === 8) next.scene = b.scene;
+          else delete next.scene;
+          this._setPage(p, i, { options: next });
+        }),
+        sw ? this._row("Cars", this._toggle(o.cars !== false, (v) => this._setPageOption(p, i, "cars", v), { label: "Cars" })) : null,
+        sw ? this._row("Neon letters", this._toggle(o.neon !== false, (v) => this._setPageOption(p, i, "neon", v), { label: "Neon letters" })) : null,
+        sw ? null : this._more(`bg:${p.entry_id}:${i}`, this._row("Real sun and moon", this._toggle(o.real_sun !== false, (v) => this._setPageOption(p, i, "real_sun", v), { label: "Real sun and moon" }),
+          { info: "On: the sun and the moon stand where they really are in the sky. Off: they keep a fixed place." })));
+    }
+    const looks = LOOKS[page.kind] || [];
+    if (looks.length < 2) return null;
+    const items = looks.map((name, v) => {
+      const sup = this._lookSupported(p, page.kind, v);
+      return { id: v, name, pic: lookArt(page.kind, v, page), disabled: !sup.ok, why: sup.ok ? null : sup.why };
+    });
+    return this._card("Look", {}, this._lookPicker(items, page.variant || 0, (v) => this._setPage(p, i, { variant: v })));
+  }
+
+  // One entity of a page (or none = the panel's default).
+  _pageEntityRow(p, i, label, domain, noneLabel) {
+    const page = this._pages(p)[i];
+    const cur = (page.entities || []).find((e) => e.startsWith(`${domain}.`)) || "";
+    return this._row(label, this._entityButton(cur, { title: label, domains: [domain], none: noneLabel, p, onPick: (v) => {
+      const fresh = this._pages(p)[i];
+      const rest = (fresh.entities || []).filter((e) => !e.startsWith(`${domain}.`));
+      this._setPage(p, i, { entities: v ? [v, ...rest] : rest });
+    } }));
+  }
+
+  // An ordered list of entities of a page, with add (picker), move up and remove.
+  _entityList(p, i, domains, { most = 8, addLabel = "Add", leadIcon = null } = {}) {
+    const page = this._pages(p)[i];
+    const ents = (page.entities || []).filter((e) => domains.includes(e.split(".")[0]));
+    const others = (page.entities || []).filter((e) => !domains.includes(e.split(".")[0]));
+    const save = (list) => this._setPage(p, i, { entities: [...list, ...others] });
+    return [
+      ents.length ? h("div", null, ents.map((id, k) => this._row(this._ename(id), h("div", { style: { display: "flex", gap: "2px" } },
+        h("button", { class: "ib", "aria-label": "Move up", disabled: k === 0, onclick: () => { const n = [...ents]; n.splice(k - 1, 0, n.splice(k, 1)[0]); save(n); } }, icon("arrow-up")),
+        h("button", { class: "ib", "aria-label": `Remove ${this._ename(id)}`, onclick: () => save(ents.filter((x) => x !== id)) }, icon("close"))),
+      { lead: h("span", { class: "lead" }, icon(leadIcon || this._eicon(id))), keep: true, cls: k === 0 ? "first" : "" }))) : h("div", { class: "empty" }, "Nothing chosen yet."),
+      ents.length < most ? h("div", { class: "below" }, h("button", { class: "chip add", onclick: () => this._openSheet({
+        kind: "pick", title: addLabel, domains, exclude: ents, panel: p.entry_id,
+        onPick: (id) => { const fresh = this._pages(p)[i]; const cur = (fresh.entities || []).filter((e) => domains.includes(e.split(".")[0])); save([...cur, id]); },
+      }) }, icon("plus"), addLabel)) : null,
+    ];
+  }
+
+  _editWeather(p, page, i) {
+    return [this._card("Options", {}, this._pageEntityRow(p, i, "Weather from", "weather", "The panel's weather"))];
+  }
+
+  _editMusic(p, page, i) {
+    const o = page.options || {};
+    return [this._card("Options", {},
+      this._pageEntityRow(p, i, "Player", "media_player", "The panel's player"),
+      (page.variant || 0) === 2 ? this._row("Wood", null, { stack: true }) : null,
+      (page.variant || 0) === 2 ? h("div", { class: "below" }, this._swatches(WOODS, o.wood || "walnut", (v) => this._setPageOption(p, i, "wood", v), { wood: true })) : null)];
+  }
+
+  _editTimers(p, page, i) {
+    const o = page.options || {};
+    const fns = Array.isArray(o.functions) && o.functions.length ? o.functions : TIMER_FUNCTIONS.map(([k]) => k);
+    return [this._card("Options", {},
+      this._row("On the panel", null, { stack: true, info: "Which tabs the page has. At least one stays." }),
+      h("div", { class: "chips below" }, TIMER_FUNCTIONS.map(([k, l]) => this._chipToggle(fns.includes(k), l, () => {
+        const next = fns.includes(k) ? fns.filter((x) => x !== k) : [...fns, k];
+        if (!next.length) { this._toast("At least one stays"); return; }
+        this._setPageOption(p, i, "functions", TIMER_FUNCTIONS.map(([x]) => x).filter((x) => next.includes(x)));
+      }))),
+      (page.variant || 0) === 3 ? this._row("Scene", this._seg(SW_SCENES.map((n, k) => [k, n]), Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", v), { label: "Scene" })) : null,
+      this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null }))];
+  }
+
+  _editThermostat(p, page, i) {
+    return [this._card("Thermostats", { info: "The first one opens on the page; a swipe up shows every one of them as rooms." },
+      this._entityList(p, i, ["climate"], { most: 8, addLabel: "Add a thermostat" }))];
+  }
+
+  _editQuick(p, page, i) {
+    const ents = page.entities || [];
+    const o = page.options || {};
+    const tapes = Array.isArray(o.tapes) ? o.tapes : [];
+    const desk = (page.variant || 0) === 1;
+    const cols = (page.variant || 0) === 0 ? 2 : 4;
+    const slots = [];
+    const max = 16;
+    for (let k = 0; k < Math.min(max, ents.length + 1); k++) {
+      const id = ents[k];
+      slots.push(h("button", { class: `tslot${id ? " full" : ""}`, onclick: () => this._openSheet({ kind: "tile", panel: p.entry_id, page: i, slot: k }) },
+        id ? [icon(this._eicon(id)), h("span", { class: "t" }, h("b", null, this._ename(id)), desk && tapes[k] ? h("span", { class: "tape" }, tapes[k]) : null)] : [icon("plus"), "Add"]));
+    }
+    return [this._card("Tiles", {
+      info: `Tap a tile to choose what it controls${desk ? " and the text on its label" : ""}. A long press on the panel opens the details (brightness, colour, position).`,
+      acts: this._btn("Fill from the room", () => this._fillTiles(p, i), { cls: "small", icon: "home-outline", disabled: !this._pareaId(p) || ents.length >= max, title: this._pareaId(p) ? null : "The panel has no area in Home Assistant" }),
+    }, h("div", { class: "tilegrid", style: { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` } }, slots))];
+  }
+
+  _fillTiles(p, i) {
+    const area = this._pareaId(p);
+    const page = this._pages(p)[i];
+    const ents = [...(page.entities || [])];
+    const cands = this._ents(["light", "cover", "climate", "switch", "fan", "scene"], { p }).filter((e) => e.area === area && !ents.includes(e.id));
+    const room = Math.max(0, 16 - ents.length);
+    const add = cands.slice(0, room).map((e) => e.id);
+    if (!add.length) { this._toast(`Nothing more to add from ${this._areaName(area)}`); return; }
+    this._setPage(p, i, { entities: [...ents, ...add] }, { toast: `${plural(add.length, "tile", "tiles")} added from ${this._areaName(area)}` });
+  }
+
+  _editCamera(p, page, i) {
+    const o = page.options || {};
+    return [
+      this._card("Cameras", { info: "The order here is the order on the panel." }, this._entityList(p, i, ["camera"], { most: 8, addLabel: "Add a camera" })),
+      this._card("Picture", {},
+        this._row("Opens on", this._seg([["one", "One camera"], ["all", "All cameras"]], o.view === "all" ? "all" : "one", (v) => this._setPageOption(p, i, "view", v), { label: "Opens on" })),
+        this._row("Fit", this._seg([["whole", "Whole picture"], ["fill", "Fill the screen"]], o.fit === "whole" ? "whole" : "fill", (v) => this._setPageOption(p, i, "fit", v), { label: "Fit" }))),
+      this._card("Visitor alert", { info: "When this sensor turns on, the first camera's picture opens over any page and the panel rings (also in do not disturb, if the doorbell is allowed to come through there)." },
+        this._row("Opens when", this._entityButton(o.ring || "", { title: "Opens when", domains: ["binary_sensor"], none: "Never", p, onPick: (v) => this._setPageOption(p, i, "ring", v || undefined) }))),
+    ];
+  }
+
+  _editCalendar(p, page, i) {
+    const o = page.options || {};
+    const ents = page.entities || [];
+    const all = this._ents(["calendar"], { p });
+    const wall = Array.isArray(o.wall_calendars) ? o.wall_calendars : ents;
+    return [this._card("Calendars", { info: "The calendars the page shows." },
+      all.length ? h("div", { class: "chips below", style: { paddingTop: "10px" } }, all.map((e) => this._chipToggle(ents.includes(e.id), e.name, () => {
+        const next = ents.includes(e.id) ? ents.filter((x) => x !== e.id) : [...ents, e.id];
+        if (next.length > 8) { this._toast("At most 8 calendars"); return; }
+        const opts = { ...o };
+        if (Array.isArray(opts.wall_calendars)) opts.wall_calendars = opts.wall_calendars.filter((x) => next.includes(x));
+        this._setPage(p, i, { entities: next, options: opts });
+      }))) : h("div", { class: "empty" }, "No calendars in Home Assistant."),
+      (page.variant || 0) === 3 && ents.length ? this._row("Written on the wall calendar", null, { stack: true, info: "Calendars with many daily entries (routines) would fill every day; leave them off here." }) : null,
+      (page.variant || 0) === 3 && ents.length ? h("div", { class: "chips below" }, ents.map((id) => this._chipToggle(wall.includes(id), this._ename(id), () => {
+        const next = wall.includes(id) ? wall.filter((x) => x !== id) : [...wall, id];
+        this._setPageOption(p, i, "wall_calendars", ents.filter((x) => next.includes(x)));
+      }))) : null)];
+  }
+
+  _editTodo(p, page, i) {
+    return [this._card("Lists", { info: "Only the lists chosen here appear on the panel; the first one opens." }, this._entityList(p, i, ["todo"], { most: 8, addLabel: "Add a list" }))];
+  }
+
+  _editInfo(p, page, i) {
+    const o = page.options || {};
+    if ((page.variant || 0) !== 2) return [];
+    return [this._card("Options", {}, this._row("Finish", null, { stack: true }),
+      h("div", { class: "below" }, this._swatches(PAGER_FINISH, o.finish || "graphite", (v) => this._setPageOption(p, i, "finish", v))))];
+  }
+
+  // -- weather page: layout editor ------------------------------------------------------
+
+  _items(page) {
+    return clone(Array.isArray(page.options?.items) ? page.options.items : DEFAULT_ITEMS);
+  }
+
+  _saveItems(p, i, items, opts) {
+    const page = this._pages(p)[i];
+    const clean = items.map((w) => ({
+      kind: w.kind, col: w.col, row: w.row, w: w.w, h: w.h,
+      style: w.kind === 0 || w.kind === 7 ? w.style || 0 : 0,
+      accent: w.accent || "", weight: w.weight || 600, tap: w.tap !== false, opts: w.opts || 0,
+    }));
+    return this._setPage(p, i, { options: { ...(page.options || {}), items: clean } }, opts);
+  }
+
+  _fits(items, self, x, y, w, hh) {
+    if (x < 0 || y < 0 || x + w > 4 || y + hh > 4) return false;
+    return !items.some((o, k) => k !== self && x < o.col + o.w && o.col < x + w && y < o.row + o.h && o.row < y + hh);
+  }
+
+  _freeSpot(items, w, hh) {
+    for (let y = 0; y <= 4 - hh; y++) for (let x = 0; x <= 4 - w; x++) if (this._fits(items, -1, x, y, w, hh)) return { x, y };
+    return null;
+  }
+
+  _contentWidth() {
+    const W = this.clientWidth || window.innerWidth;
+    const size = this.getAttribute("size");
+    if (size === "wide") return Math.min(820, W - 248 - 392) - 68;
+    if (size === "medium") return Math.min(820, W - 336) - 48;
+    return W - 32;
+  }
+
+  _editHome(p, page, i) {
+    const items = this._items(page);
+    const size = Math.max(220, Math.min(400, this._contentWidth() - 46));
+    const cell = size / 4;
+    const sel = this._ui.sel;
+    const canvas = h("div", { class: "hcanvas", style: { width: `${size}px`, height: `${size}px` } }, svgNode(bgArt(bgIndex(page))));
+    for (let k = 1; k < 4; k++) {
+      canvas.append(h("i", { class: "gridline", style: { left: `${k * cell}px`, top: 0, bottom: 0, borderLeftWidth: "1px" } }));
+      canvas.append(h("i", { class: "gridline", style: { top: `${k * cell}px`, left: 0, right: 0, borderTopWidth: "1px" } }));
+    }
+    items.forEach((w, k) => {
+      const meta = WIDGETS[w.kind] || WIDGETS[0];
+      const label = w.kind === 0 ? `${meta.name} · ${CLOCK_STYLES[w.style || 0] || CLOCK_STYLES[0]}` : meta.name;
+      const box = h("div", {
+        class: `wbox${k === sel ? " sel" : ""}`, role: "button", tabindex: "0", "aria-label": label,
+        style: { left: `${w.col * cell + 3}px`, top: `${w.row * cell + 3}px`, width: `${w.w * cell - 6}px`, height: `${w.h * cell - 6}px` },
+        onpointerdown: (e) => this._startWidgetDrag(e, p, i, k, cell, "move"),
+        onkeydown: (e) => { if (e.key === "Enter") this._openSheet({ kind: "widget", panel: p.entry_id, page: i, item: k }); },
+      }, icon(meta.icon), w.h * cell > 56 || w.w > 1 ? h("span", null, label) : null,
+      h("div", { class: "rs", onpointerdown: (e) => { e.stopPropagation(); this._startWidgetDrag(e, p, i, k, cell, "size"); } }));
+      canvas.append(box);
+    });
+    canvas.addEventListener("pointerdown", (e) => { if (e.target === canvas || e.target.closest(".art")) { if (this._ui.sel != null) { this._ui.sel = null; this._render(); } } });
+    const sw = sel != null ? items[sel] : null;
+    const hasKind = (kind) => items.some((w) => w.kind === kind);
+    const ents = page.entities || [];
+    const cals = this._ents(["calendar"], { p });
+    return [
+      this._card("Layout", {
+        info: "Drag a widget to move it and its corner to resize it; tap it for its settings. Widgets snap to the 4 × 4 grid and cannot overlap. The panel shows the new layout at once.",
+        acts: this._btn("Add a widget", () => this._openSheet({ kind: "addWidget", panel: p.entry_id, page: i }), { cls: "small", icon: "plus" }),
+      },
+      h("div", { class: "wbar" }, sw
+        ? [h("span", { class: "tag sig" }, (WIDGETS[sw.kind] || WIDGETS[0]).name),
+          this._btn("Settings", () => this._openSheet({ kind: "widget", panel: p.entry_id, page: i, item: sel }), { cls: "small", icon: "tune-variant" }),
+          this._btn("Remove", () => this._removeWidget(p, i, sel), { cls: "small ghost", icon: "delete-outline" })]
+        : h("span", { class: "note" }, `${plural(items.length, "widget", "widgets")} · grid 4 × 4`)),
+      h("div", { class: "editor-wrap" }, canvas),
+      Array.isArray(page.options?.items) ? null : h("p", { class: "note", style: { margin: "0 0 14px" } }, "The panel's own layout. Any change here saves it for this page.")),
+      this._card("Data", { info: "Where the widgets of this page get their data. Without a choice here they use the panel's weather and player." },
+        this._pageEntityRow(p, i, "Weather from", "weather", "The panel's weather"),
+        hasKind(7) ? this._pageEntityRow(p, i, "Player", "media_player", "The panel's player") : null,
+        hasKind(3) ? this._row("Calendars for the next event", null, { stack: true }) : null,
+        hasKind(3) ? (cals.length ? h("div", { class: "chips below" }, cals.map((e) => this._chipToggle(ents.includes(e.id), e.name, () => {
+          const next = ents.includes(e.id) ? ents.filter((x) => x !== e.id) : [...ents, e.id];
+          this._setPage(p, i, { entities: next.slice(0, 16) });
+        }))) : h("div", { class: "empty" }, "No calendars in Home Assistant.")) : null),
+    ];
+  }
+
+  _removeWidget(p, i, k) {
+    const items = this._items(this._pages(p)[i]);
+    const [gone] = items.splice(k, 1);
+    this._ui.sel = null;
+    this._saveItems(p, i, items, {
+      toast: `${(WIDGETS[gone.kind] || WIDGETS[0]).name} removed`,
+      undo: () => { const back = this._items(this._pages(p)[i]); if (this._fits(back, -1, gone.col, gone.row, gone.w, gone.h)) { back.splice(k, 0, gone); this._saveItems(p, i, back); } },
+    });
+  }
+
+  _startWidgetDrag(e, p, i, k, cell, mode) {
+    e.preventDefault();
+    const items = this._items(this._pages(p)[i]);
+    const wd = items[k];
+    const box = e.currentTarget.closest(".wbox");
+    const sx = e.clientX;
+    const sy = e.clientY;
+    let nx = wd.col;
+    let ny = wd.row;
+    let nw = wd.w;
+    let nh = wd.h;
+    let moved = false;
+    const min = (WIDGETS[wd.kind] || WIDGETS[0]).min;
+    this._dragging = true;
+    const place = (ok) => {
+      box.classList.toggle("bad", !ok);
+      Object.assign(box.style, { left: `${nx * cell + 3}px`, top: `${ny * cell + 3}px`, width: `${nw * cell - 6}px`, height: `${nh * cell - 6}px` });
+    };
+    const move = (ev) => {
+      const dx = ev.clientX - sx;
+      const dy = ev.clientY - sy;
+      if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+      if (mode === "move") { nx = Math.round(wd.col + dx / cell); ny = Math.round(wd.row + dy / cell); }
+      else { nw = Math.max(min[0], Math.round(wd.w + dx / cell)); nh = Math.max(min[1], Math.round(wd.h + dy / cell)); }
+      nx = Math.max(0, Math.min(4 - nw, nx));
+      ny = Math.max(0, Math.min(4 - nh, ny));
+      nw = Math.min(nw, 4 - nx);
+      nh = Math.min(nh, 4 - ny);
+      place(this._fits(items, k, nx, ny, nw, nh));
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      this._dragging = false;
+      this._ui.sel = k;
+      if (!moved) { this._render(); return; }
+      if (this._fits(items, k, nx, ny, nw, nh) && (nx !== wd.col || ny !== wd.row || nw !== wd.w || nh !== wd.h)) {
+        Object.assign(wd, { col: nx, row: ny, w: nw, h: nh });
+        this._saveItems(p, i, items);
+      } else {
+        this._render();
+        if (!this._fits(items, k, nx, ny, nw, nh)) this._toast("It does not fit there");
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  }
+
+  // -- alerts -----------------------------------------------------------------------
+
+  _statusName(x) {
+    return (x.own || x.cat === "custom") && x.headline ? x.headline : (STATUS_CAT[x.cat] || STATUS_CAT.custom).name;
+  }
+
+  _stLead(x) {
+    const cat = STATUS_CAT[x.cat] || STATUS_CAT.custom;
+    const picto = x.picto || cat.pictos[0];
+    return h("span", { class: "stlead", style: { background: x.colour || cat.c } },
+      picto.startsWith("mdi:") ? icon(picto) : h("img", { src: `${this._static}/picto/${picto}-144.png`, alt: "" }));
+  }
+
+  _trigText(x) {
+    const t = x.trigger || {};
+    if (t.kind === "after") {
+      const o = (this._data.house.status || []).find((s) => s.id === t.after);
+      return `After “${o ? this._statusName(o) : "another screen"}” ends · ${x.countdown || 10} min`;
+    }
+    if (t.kind === "service") return `From an automation · ID ${x.id}`;
+    if (!t.entity) return "No device chosen yet";
+    const ops = { on: "is on", off: "is off", above: `above ${t.value}`, below: `below ${t.value}`, equals: `is ${t.value}` };
+    return `${this._ename(t.entity)} ${ops[t.op] || ""}${x.countdown ? ` · closes after ${x.countdown} min` : ""}`;
+  }
+
+  _safetyClass(id) {
+    return this._hass?.states?.[id]?.attributes?.device_class || "";
+  }
+
+  _suggestions() {
+    const house = this._data.house || {};
+    const listed = new Set((house.critical || []).map((c) => c.entity_id));
+    const dismissed = new Set(house.dismissed || []);
+    return this._ents(["binary_sensor"], { filter: (st) => Boolean(SAFETY[st.attributes?.device_class]) }).filter((e) => !listed.has(e.id) && !dismissed.has(e.id));
+  }
+
+  _viewAlerts(p) {
+    const house = this._data.house || {};
+    const active = house.active || { critical: [], status: [] };
+    const sugg = this._suggestions();
+    const crit = (house.critical || []).map((c) => {
+      const cls = SAFETY[this._safetyClass(c.entity_id)];
+      const hidden = c.off.includes(p.entry_id);
+      const on = active.critical.includes(c.entity_id);
+      const sub = [cls ? cls.name : "Sensor", this._areaName(this._earea(c.entity_id)), hidden ? `not on ${this._pname(p)}` : null, on ? "on now" : null].filter(Boolean).join(" · ");
+      return this._row(this._ename(c.entity_id), this._toggle(c.on, (v) => this._saveHouse((hs) => { hs.critical.find((x) => x.entity_id === c.entity_id).on = v; }), { label: "Counts as critical" }),
+        { lead: h("span", { class: `lead${on ? " on" : ""}` }, icon(this._eicon(c.entity_id))), sub, click: () => this._openSheet({ kind: "crit", id: c.entity_id, panel: p.entry_id }), keep: true });
+    });
+    const rules = (house.status || []).map((x) => {
+      const here = x.panels.includes(p.entry_id);
+      return this._row(this._statusName(x), this._toggle(here, (v) => this._saveHouse((hs) => {
+        const r = hs.status.find((s) => s.id === x.id);
+        r.panels = v ? [...new Set([...r.panels, p.entry_id])] : r.panels.filter((e) => e !== p.entry_id);
+      }, { toast: `${v ? "Shown on" : "No longer on"} ${this._pname(p)}` }), { label: "On this panel" }), {
+        lead: this._stLead(x),
+        sub: [this._trigText(x), active.status.includes(x.id) ? "on now" : null, x.on ? null : "switched off"].filter(Boolean).join(" · "),
+        extra: this._panels.length > 1 ? h("span", { class: "pchips" }, this._panels.map((q) => h("span", { class: `pchip${x.panels.includes(q.entry_id) ? " on" : ""}` }, this._pname(q)))) : null,
+        click: () => this._openSheet({ kind: "status", id: x.id, panel: p.entry_id, pv: p.entry_id }), dim: !here, keep: true,
+      });
+    });
+    const dnd = { ...DEFAULT_DND, ...(this._settings(p).dnd || {}) };
+    dnd.allow = { ...DND_DEFAULT_ALLOW, ...(dnd.allow || {}) };
+    const changed = Object.keys(DND_DEFAULT_ALLOW).some((k) => dnd.allow[k] !== DND_DEFAULT_ALLOW[k]);
+    const setDnd = (patch) => this._options(p, { dnd: patch }, { optimistic: (s) => { s.dnd = { ...dnd, ...patch, allow: { ...dnd.allow, ...(patch.allow || {}) } }; } });
+    const pops = { ...DEFAULT_POPUPS, ...(this._settings(p).popups || {}) };
+    const setPops = (patch) => this._options(p, { popups: patch }, { optimistic: (s) => { s.popups = { ...pops, ...patch }; } });
+    const first = (house.critical || []).find((c) => c.on && !c.off.includes(p.entry_id));
+    return [
+      this._hero("Alerts and status", [h("span", null, this._pname(p)), this._syncLine(p)]),
+      this._card("Critical alerts", {
+        sub: "Shared by every panel",
+        info: "Sensors that count as critical take over the screen of every panel they are shown on, with sound, even in do not disturb, until they clear. Suggested by the sensors' device class (smoke, gas, water leak…); only the ones in this list count.",
+        acts: [sugg.length ? this._btn(`${sugg.length} suggested`, () => this._openSheet({ kind: "critSuggest", panel: p.entry_id }), { cls: "small", icon: "shield-alert-outline" }) : null,
+          this._btn("Add", () => this._openSheet({ kind: "pick", title: "Add a critical sensor", domains: ["binary_sensor"], exclude: (house.critical || []).map((c) => c.entity_id), panel: p.entry_id,
+            onPick: (id) => this._saveHouse((hs) => { hs.critical.push({ entity_id: id, on: true, hold: true, off: [] }); }, { toast: `${this._ename(id)} is critical now` }) }), { cls: "small", icon: "plus" })],
+      }, crit.length ? crit : h("div", { class: "empty" }, "No critical sensors yet."),
+      h("div", { class: "below", style: { display: "flex", gap: "8px", flexWrap: "wrap", paddingTop: "6px" } },
+        this._btn("Test on this panel", () => this._test(p, "critical", first.entity_id), { cls: "small", icon: "alert-octagon-outline", disabled: !first || !p.connected }))),
+      this._card("Status screens", {
+        sub: "Shared · on or off for this panel",
+        info: `A status screen covers the panel while something is going on (toilet occupied, someone sleeping, robot vacuum at work). Each one lists the panels it appears on.${this._has(p, "images") ? "" : ` ${this._pname(p)} shows the text and the colour, without the picture.`}`,
+        acts: this._btn("Add", () => this._newStatus(p), { cls: "small", icon: "plus" }),
+      }, rules.length ? rules : h("div", { class: "empty" }, "No status screens yet."), h("div", { style: { height: "8px" } })),
+      this._card("Do not disturb", { info: "Critical alerts always come through. What is not ticked here waits quietly; new notifications go into the list without a sound." },
+        this._row("When", this._seg([["off", "Off"], ["on", "On"], ["schedule", "On a schedule"]], dnd.mode, (v) => setDnd({ mode: v }), { label: "Do not disturb" })),
+        dnd.mode === "schedule" ? this._row("From – to", this._times(dnd.from, dnd.to, (f, t) => setDnd({ from: f, to: t }))) : null,
+        this._row("Comes through", null, { stack: true, sub: changed ? "Changed from the default" : "The default" }),
+        h("div", { class: "group", style: { marginBottom: "12px" } }, DND_ITEMS.map((it) => h("label", { class: `opt${it.locked ? " disabled" : ""}` },
+          h("input", { type: "checkbox", checked: it.locked ? true : dnd.allow[it.id], disabled: Boolean(it.locked), onchange: (e) => setDnd({ allow: { [it.id]: e.target.checked } }) }),
+          h("span", { class: "t" }, h("span", null, it.name), it.locked ? h("small", null, "Always") : null)))),
+        changed ? h("div", { class: "below" }, this._btn("Back to the default", () => setDnd({ allow: { ...DND_DEFAULT_ALLOW } }), { cls: "small ghost", icon: "restore" })) : null),
+      this._card("New notifications", {},
+        this._row("Show", this._seg([["strip", "Strip at the top"], ["card", "Card"], ["off", "Only in the list"]], pops.kind, (v) => setPops({ kind: v }), { label: "New notifications" })),
+        this._has(p, "speaker") ? this._row("Sound", this._toggle(pops.sound, (v) => setPops({ sound: v }), { label: "Sound" })) : null,
+        pops.kind !== "off" ? this._more(`pop:${p.entry_id}`, this._row("Stays for", this._select([["5", "5 s"], ["10", "10 s"], ["30", "30 s"], ["60", "1 min"]], String(pops.seconds), (v) => setPops({ seconds: Number(v) }), { label: "Stays for" }))) : null),
+    ];
+  }
+
+  _newStatus(p) {
+    const id = `s${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`;
+    this._saveHouse((hs) => {
+      hs.status.push({ id, cat: "custom", trigger: { kind: "entity", entity: "", op: "on", value: "", after: "" }, own: true, headline: "", line: "", picto: "zip-face", colour: "#0b7285", button: true, button_label: "", countdown: 0, panels: [p.entry_id], on: true });
+    });
+    this._openSheet({ kind: "status", id, panel: p.entry_id, pv: p.entry_id, fresh: true });
+  }
+
+  // -- voice ----------------------------------------------------------------------------
+
+  // The voice satellite's device (ESPHome), shown as connected via the panel's device.
+  _voiceDevices(p) {
+    if (!p.device_id) return [];
+    return Object.values(this._devices).filter((d) => d.via_device_id === p.device_id);
+  }
+
+  _viewVoice(p) {
+    const st = this._settings(p);
+    const devices = this._voiceDevices(p);
+    const ids = new Set(devices.map((d) => d.id));
+    const ents = Object.values(this._entityReg).filter((e) => ids.has(e.device_id) && !e.hidden && !e.hidden_by && !e.disabled_by && /^(select|switch|number)\./.test(e.entity_id) && this._hass.states[e.entity_id]);
+    const control = (e) => {
+      const id = e.entity_id;
+      const s = this._hass.states[id];
+      const domain = id.split(".")[0];
+      const call = (service, data) => this._hass.callService(domain, service, { entity_id: id, ...data }).catch((err) => this._toast(err.message || String(err), null, true));
+      if (domain === "switch") return this._toggle(s.state === "on", (v) => call(v ? "turn_on" : "turn_off", {}), { label: this._ename(id), disabled: s.state === "unavailable" });
+      if (domain === "select") return this._radioChips((s.attributes.options || []).map((o) => [o, o]), s.state, (v) => call("select_option", { option: v }));
+      const a = s.attributes;
+      const v = Number(s.state);
+      return this._slider(Number.isNaN(v) ? a.min || 0 : v, a.min ?? 0, a.max ?? 100, a.step ?? 1, (x) => call("set_value", { value: x }), (x) => `${x}${a.unit_of_measurement ? ` ${a.unit_of_measurement}` : ""}`, { label: this._ename(id), disabled: s.state === "unavailable" });
+    };
+    const short = (id) => {
+      const name = this._ename(id);
+      const dev = devices.find((d) => d.id === this._entityReg[id]?.device_id);
+      const dn = dev && (dev.name_by_user || dev.name);
+      return dn && name.startsWith(`${dn} `) ? name.slice(dn.length + 1) : name;
+    };
+    return [
+      this._hero("Voice", [h("span", null, this._pname(p)), this._syncLine(p)]),
+      this._card("On the screen", { info: "While you talk to it, the assistant fills the screen in this look; when it is done, the panel goes back to the page it was on." },
+        this._lookPicker(VOICE_LOOKS.map((name, k) => ({ id: k, name, pic: svgNode(ART.voice[k]()) })), st.voice_look || 0, (v) => this._options(p, { voice_look: v }, { optimistic: (s) => { s.voice_look = v; } }))),
+      this._card("Voice assistant", { info: "The panel's voice satellite is its own ESPHome device in Home Assistant, shown as connected via this panel. Its settings (assistant, wake word, volume, microphone) are its entities." },
+        ents.length ? ents.map((e, k) => this._row(short(e.entity_id), control(e), { cls: k === 0 ? "first" : "", stack: e.entity_id.startsWith("select.") }))
+          : h("div", { class: "empty" }, "No voice satellite is connected via this panel yet."),
+        devices.length ? h("div", { class: "below", style: { paddingTop: "8px" } }, devices.map((d) => this._btn(`Open ${d.name_by_user || d.name}`, () => this._go2(`/config/devices/device/${d.id}`), { cls: "small", icon: "open-in-new" }))) : null),
+    ];
+  }
+
+  // Another page of Home Assistant.
+  _go2(path) {
+    history.pushState(null, "", path);
+    window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+  }
+
+  // -- display ----------------------------------------------------------------------------
+
+  _viewDisplay(p) {
+    const s = p.states || {};
+    const opts = p.select_options || {};
+    const light = this._has(p, "light");
+    const saver = { ...DEFAULT_SCREENSAVER, ...(this._settings(p).screensaver || {}) };
+    const setSaver = (patch) => this._options(p, { screensaver: patch }, { optimistic: (x) => { x.screensaver = { ...saver, ...patch }; } });
+    const never = s.screensaver === "Never";
+    const luxFilter = (st) => st.attributes?.device_class === "illuminance";
+    const whenInfo = {
+      dark: "The screensaver starts only while the room is darker than the level below. In daylight the panel keeps showing its pages.",
+      window: "Outside these hours the panel keeps showing its pages.",
+      night: "From sunset to sunrise at your Home Assistant location. In daytime the panel keeps showing its pages.",
+      any: "The screensaver starts whenever nobody has used the panel for the time above.",
+    }[saver.when];
+    const whenRows = [this._row("When", this._select([["dark", "When the room is dark"], ["window", "Between two times"], ["night", "Sunset to sunrise"], ["any", "Any time"]], saver.when, (v) => setSaver({ when: v }), { label: "When the screensaver may start" }), { info: whenInfo, infoKey: `r:when:${saver.when}` })];
+    if (saver.when === "dark") {
+      whenRows.push(this._row("Darker than", this._slider(saver.lux, 1, 60, 1, (v) => setSaver({ lux: v }), (v) => `${v} lx`, { label: "Darker than" }), { sub: h("span", { "data-live": `lux:${p.entry_id}` }, this._liveValue(`lux:${p.entry_id}`)) }));
+      if (!light) {
+        whenRows.push(this._row("Light from", this._entityButton(saver.light_entity, { title: "Light from", domains: ["sensor"], filter: luxFilter, none: "Choose a light sensor", p, onPick: (v) => setSaver({ light_entity: v }) }),
+          { info: `${this._reason(p, "light")} A light sensor from Home Assistant measures the room instead.` }));
+      }
+    }
+    if (saver.when === "window") whenRows.push(this._row("From – to", this._times(saver.from, saver.to, (f, t) => setSaver({ from: f, to: t }))));
+    const styles = opts.screensaver_style || [];
+    return [
+      this._hero("Display", [h("span", null, this._pname(p)), this._syncLine(p)]),
+      this._card("Screen", {},
+        (opts.theme || []).length ? this._row("Theme", this._seg(opts.theme.map((t) => [t, t]), s.theme, (v) => this._command(p, "theme", v), { label: "Theme" }), { info: "Auto switches between dark and light with the light in the room." }) : null,
+        light ? this._row("Automatic brightness", this._toggle(s.auto_brightness, (v) => this._command(p, "auto_brightness", v), { label: "Automatic brightness" }), { sub: s.auto_brightness ? "Follows the light in the room" : null }) : null,
+        !s.auto_brightness || !light ? this._row("Brightness", this._slider(typeof s.brightness === "number" ? s.brightness : 70, 1, 100, 1, (v) => this._command(p, "brightness", v), (v) => `${v} %`, { label: "Brightness" })) : null,
+        p.connected ? null : h("p", { class: "note", style: { margin: "0 0 14px" } }, "These are the panel's own settings: they change while it is online.")),
+      this._card("Screensaver", {},
+        (opts.screensaver || []).length ? this._row("Starts after", this._select(opts.screensaver, s.screensaver, (v) => this._command(p, "screensaver", v), { label: "Screensaver starts after" }), { info: "How long nobody has to touch the panel before the screensaver comes." }) : null,
+        never ? null : whenRows,
+        never || !styles.length ? null : this._row("Style", null, { stack: true }),
+        never || !styles.length ? null : h("div", { class: "chips below" }, styles.map((x) => this._chipToggle(s.screensaver_style === x, x, () => this._command(p, "screensaver_style", x)))),
+        never || !light || saver.when !== "dark" ? null : this._more(`saver:${p.entry_id}`, this._row("Light from", this._entityButton(saver.light_entity, { title: "Light from", domains: ["sensor"], filter: luxFilter, none: "This panel's sensor", p, onPick: (v) => setSaver({ light_entity: v }) })))),
+      this._has(p, "proximity") ? this._card("Waking", {},
+        this._row("Wake when someone comes close", this._toggle(s.proximity_wake, (v) => this._command(p, "proximity_wake", v), { label: "Wake when someone comes close" }))) : null,
+    ];
+  }
+
+  // -- device ------------------------------------------------------------------------------
+
+  _viewDevice(p) {
+    const s = p.states || {};
+    const d = p.device || {};
+    const rssi = s.wifi_signal;
+    const nbars = typeof rssi === "number" ? (rssi > -55 ? 4 : rssi > -63 ? 3 : rssi > -72 ? 2 : 1) : 0;
+    const bars = h("span", { class: "bars", "aria-hidden": "true" }, [6, 9, 12, 14].map((hh, k) => h("i", { class: k < nbars ? "on" : "", style: { height: `${hh}px` } })));
+    const limits = this._data.reporting || {};
+    const st = this._settings(p);
+    return [
+      this._hero("Device", [h("span", null, this._pname(p)), this._syncLine(p)]),
+      this._card("About", {},
+        this._row("Model", h("span", { class: "muted wrap" }, this._pmodel(p))),
+        this._row("Software", h("span", { class: "muted wrap" }, s.app_version || d.sw_version || "–")),
+        this._row("In Home Assistant", p.device_id ? this._btn("Open the device", () => this._go2(`/config/devices/device/${p.device_id}`), { cls: "small", icon: "open-in-new" }) : null, { sub: "Entities, automations, logbook" }),
+        this._row("Room", this._btn(this._parea(p) || "None", () => this._openSheet({ kind: "rename", panel: p.entry_id }), { cls: "small", icon: "pencil-outline", disabled: !p.device_id }), { info: "The panel's area in Home Assistant. Quick controls use it." }),
+        this._row("Address", h("span", { class: "muted num wrap" }, s.ip_address || "–")),
+        this._row("Panel ID", h("span", { class: "muted wrap" }, st.panel_id || "–")),
+        this._row("What it can do", null, { stack: true, sub: p.caps_reported ? "As the panel reports it" : "Not reported yet: treated as an NSPanel Pro" }),
+        h("div", { class: "chips below" }, this._caps(p).map((c) => h("span", { class: "chip" }, CAP_NAMES[c] || c)))),
+      this._card("Wi-Fi", { info: "When the panel is idle it checks about every half hour whether an access point of the same network is at least 10 dB stronger, and moves to it. It is never tied to one access point." },
+        this._row("Signal", h("span", { style: { display: "inline-flex", gap: "10px", alignItems: "center" } }, bars, h("span", { class: "muted num" }, typeof rssi === "number" ? `${rssi} dBm` : "–")))),
+      this._card("Sensors", { info: "Every value the panel sends is a row in the recorder's database. The panel sends a sensor only when it has changed by at least this much since the value it sent last. Lower: finer history, more writes." },
+        this._more(`sens:${p.entry_id}`, Object.entries(limits).map(([key, lim]) => {
+          const meta = REPORTING[key] || { label: key };
+          const now = p.states?.[meta.now];
+          return this._row(meta.label, this._slider(st[key] ?? lim.default, lim.min, lim.max, lim.step, (v) => this._options(p, { [key]: v }, { optimistic: (x) => { x[key] = v; } }), (v) => `${lim.step < 1 ? Number(v).toFixed(1) : Math.round(v)} ${lim.unit}`, { label: meta.label }),
+            { sub: typeof now === "number" ? `Now ${now} ${meta.unit}` : null });
+        }))),
+      this._card("Actions", {},
+        h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", padding: "10px 0 14px" } },
+          this._has(p, "touch") ? this._btn("Calibrate touch", () => this._touchTest(p), { icon: "gesture-tap", disabled: !p.connected }) : null,
+          this._armed(`restart:${p.entry_id}`, "Restart the app", "Tap again to restart", () => this._command(p, "restart_app", null).then((ok) => ok && this._toast(`Restarting the app on ${this._pname(p)}…`)), { icon: "restart", disabled: !p.connected }),
+          this._armed(`reboot:${p.entry_id}`, "Reboot", "Tap again to reboot", () => this._command(p, "reboot", null).then((ok) => ok && this._toast(`Rebooting ${this._pname(p)}…`)), { icon: "power", disabled: !p.connected })),
+        this._more(`dev:${p.entry_id}`,
+          this._row(`Remove ${this._pname(p)}`, this._armed(`remove:${p.entry_id}`, "Remove", "Tap again to remove", () => this._removePanel(p), { cls: "danger small", icon: "delete-outline" }), { sub: "Its settings are deleted from Home Assistant" }))),
+    ];
+  }
+
+  async _touchTest(p) {
+    try {
+      await this._hass.callWS({ type: "panelos/page/touch_test", entry_id: p.entry_id });
+      this._toast(`The touch test is on ${this._pname(p)}: tap the points it shows`);
+      this._schedulePicture(900);
+      this._previewSheetIfNarrow(p);
+    } catch (err) {
+      this._toast(err.message || String(err), null, true);
+    }
+  }
+
+  async _removePanel(p) {
+    try {
+      await this._hass.callApi("DELETE", `config/config_entries/entry/${p.entry_id}`);
+      this._toast(`${this._pname(p)} removed`);
+      this._go("/all");
+    } catch (err) {
+      this._toast(err.message || String(err), null, true);
+    }
+  }
+
+  // -- all panels ---------------------------------------------------------------------------
+
+  _viewAll() {
+    const panels = this._panels;
+    const house = this._data.house || {};
+    const feats = ["images", "video", "web", "mic", "speaker", "proximity", "light", "temp", "humidity"];
+    const firstAlerts = panels[0] ? `${this._panelPath(panels[0], "alerts")}` : "/all";
+    return [
+      h("div", { class: "hero" }, h("div", { class: "t" }, h("h1", null, "Panels"), h("div", { class: "meta" }, `${plural(panels.length, "panel", "panels")} · ${panels.filter((x) => x.connected).length} online`)),
+        h("div", { class: "acts" }, this._btn("Add a panel", () => this._startAdd(), { cls: "primary", icon: "plus" }))),
+      h("div", { class: "pgrid" }, panels.map((x) => {
+        const version = x.states?.app_version || x.device?.sw_version;
+        return h("div", { class: "pcard", role: "button", tabindex: "0", onclick: () => this._go(this._panelPath(x)), onkeydown: (e) => { if (e.key === "Enter") this._go(this._panelPath(x)); } },
+          h("div", { class: "stage" }, this._deviceNode(x, 164)),
+          h("div", { class: "name" }, h("b", null, this._pname(x)), h("span", { class: `state${x.connected ? " on" : ""}` }, h("b"), x.connected ? "Online" : "Offline")),
+          h("div", { class: "meta" }, h("span", null, [this._pmodel(x), this._parea(x)].filter(Boolean).join(" · ")), version ? h("span", null, `Version ${version}`) : null,
+            h("span", null, plural(this._pages(x).filter((pg, k) => k === 0 || !pg.hidden).length, "page", "pages"))));
+      }), h("button", { class: "pcard add", onclick: () => this._startAdd() }, h("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" } }, icon("plus"), "Add a panel"))),
+      this._card("Shared by every panel", {},
+        this._row("Critical alerts", this._btn("Edit", () => this._go(firstAlerts), { cls: "small" }), { sub: plural((house.critical || []).filter((c) => c.on).length, "sensor", "sensors"), lead: h("span", { class: "lead" }, icon("alert-octagon-outline")), keep: true, cls: "first" }),
+        this._row("Status screens", this._btn("Edit", () => this._go(firstAlerts), { cls: "small" }), { sub: `${plural((house.status || []).length, "screen", "screens")}, each on the panels you choose`, lead: h("span", { class: "lead" }, icon("card-text-outline")), keep: true }),
+        panels.length > 1 ? this._row("Copy settings between panels", this._btn("Copy…", () => this._openCopy(panels[0]), { cls: "small", icon: "content-copy" }), { sub: "Pages, display, voice, do not disturb", lead: h("span", { class: "lead" }, icon("content-copy")), keep: true }) : null),
+      this._card("What each panel can do", { info: "As each panel reports it. Settings a panel cannot use are left out of its pages; when copying, they are skipped with the reason." },
+        h("div", { class: "scroll-x" }, h("table", { class: "matrix" },
+          h("thead", null, h("tr", null, h("th", null, ""), panels.map((x) => h("th", null, this._pname(x))))),
+          h("tbody", null, feats.map((c) => h("tr", null, h("td", null, CAP_NAMES[c]), panels.map((x) => h("td", null, this._has(x, c) ? icon("check", "y") : icon("close", "n")))))))),
+        h("div", { style: { height: "10px" } })),
+    ];
+  }
+
+  // ================================================================ sheets
+
+  _sheet_preview(sh, p) {
+    return this._sheetFrame(this._pname(p), h("div", { style: { display: "flex", justifyContent: "center", paddingTop: "4px" } },
+      this._previewBlock(p, { width: Math.min((this.clientWidth || 360) - 40, 360), height: Math.min((this.clientHeight || 700) * 0.55, 420) })), null);
+  }
+
+  _sheet_more(sh, p) {
+    const secs = this._sections(p).filter((s) => !["overview", "pages", "alerts", "display"].includes(s.id));
+    const item = (ic, label, run, sub) => h("button", { onclick: run }, h("span", { class: "lead" }, icon(ic)), h("span", { class: "t" }, h("span", null, label), sub ? h("small", null, sub) : null), icon("chevron-right"));
+    return this._sheetFrame("More", h("div", { class: "picker-list", style: { maxHeight: "none" } },
+      secs.map((s) => item(s.icon, s.long || s.name, () => { this._ui.sheet = null; this._go(this._panelPath(p, s.id)); }, this._pname(p))),
+      this._panels.length > 1 ? item("content-copy", "Copy settings to other panels", () => this._openCopy(p)) : null,
+      p.device_id ? item("pencil-outline", `Rename ${this._pname(p)}`, () => this._openSheet({ kind: "rename", panel: p.entry_id })) : null,
+      item("view-grid-outline", "All panels", () => { this._ui.sheet = null; this._go("/all"); }),
+      item("plus", "Add a panel", () => this._startAdd())), null);
+  }
+
+  _sheet_panels() {
+    const r = this._route();
+    return this._sheetFrame("Panels", h("div", { class: "picker-list", style: { maxHeight: "none" } },
+      this._panels.map((x) => h("button", { class: x.entry_id === r.panel && r.view !== "all" ? "on" : "", onclick: () => { this._ui.sheet = null; this._go(this._panelPath(x)); } },
+        h("span", { class: "thumb" }, this._picture(x, { placeholder: false })),
+        h("span", { class: "t" }, h("span", null, this._pname(x)), h("small", null, [this._pmodel(x), this._parea(x)].filter(Boolean).join(" · "))),
+        h("span", { class: `state${x.connected ? " on" : ""}` }, h("b")))),
+      h("button", { onclick: () => { this._ui.sheet = null; this._go("/all"); } }, h("span", { class: "lead" }, icon("view-grid-outline")), h("span", { class: "t" }, h("span", null, "All panels")), icon("chevron-right")),
+      h("button", { onclick: () => this._startAdd() }, h("span", { class: "lead" }, icon("plus")), h("span", { class: "t" }, h("span", null, "Add a panel")), icon("chevron-right"))), null);
+  }
+
+  _sheet_rename(sh, p) {
+    const dev = this._device(p) || {};
+    if (sh.name == null) sh.name = dev.name_by_user || this._pname(p);
+    if (sh.area == null) sh.area = dev.area_id || "";
+    const areas = Object.values(this._areas).sort((a, b) => a.name.localeCompare(b.name));
+    const save = async () => {
+      const name = sh.name.trim();
+      try {
+        await this._hass.callWS({ type: "config/device_registry/update", device_id: p.device_id, name_by_user: name && name !== dev.name ? name : null, area_id: sh.area || null });
+        this._ui.sheet = null;
+        if (this._reg) await this._loadRegistries();
+        this._toast("Saved");
+        this._render();
+      } catch (err) {
+        this._toast(err.message || String(err), null, true);
+      }
+    };
+    return this._sheetFrame("Rename", [
+      h("div", { class: "sec" }, h("h3", null, "Name"), h("input", { class: "inp", value: sh.name, maxlength: 60, "aria-label": "Name", oninput: (e) => { sh.name = e.target.value; } })),
+      h("div", { class: "sec" }, h("h3", null, "Room"), this._radioChips([["", "None"], ...areas.map((a) => [a.area_id, a.name])], sh.area, (v) => { sh.area = v; this._renderLayer(); })),
+    ], [this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }), this._btn("Save", save, { cls: "primary" })], { center: true });
+  }
+
+  _sheet_catalogue(sh, p) {
+    const pages = this._pages(p);
+    const full = pages.length >= (this._data.max_pages || 12);
+    const items = TYPE_ORDER.map((kind) => {
+      const sup = this._pageSupported(p, kind);
+      const count = pages.filter((x) => x.kind === kind).length;
+      const t = PAGE_TYPES[kind];
+      return { sup, node: h("button", { class: "cat-item", disabled: !sup.ok || full, onclick: () => this._addPage(p, kind) },
+        h("div", { class: "pic" }, lookArt(kind, 0, { options: { theme: 1 } })),
+        count ? h("span", { class: "tag" }, count > 1 ? `${count} added` : "Added") : null,
+        h("b", null, t.name), h("small", null, sup.ok ? t.desc : sup.why)) };
+    });
+    const ok = items.filter((x) => x.sup.ok);
+    const no = items.filter((x) => !x.sup.ok);
+    return this._sheetFrame("Add a page", [
+      full ? h("p", { class: "note", style: { margin: 0 } }, `${this._pname(p)} has the most pages it can take (${this._data.max_pages || 12}).`) : null,
+      h("div", { class: "cat" }, ok.map((x) => x.node)),
+      no.length ? h("div", { class: "sec" }, h("h3", null, `Not on ${this._pname(p)}`), h("div", { class: "cat" }, no.map((x) => x.node))) : null,
+    ], null, { wide: true });
+  }
+
+  _addPage(p, kind) {
+    const pages = clone(this._pages(p));
+    const area = this._pareaId(p);
+    const pick = (domain, n, sameArea = false) => {
+      const list = this._ents([domain], { p });
+      const mine = sameArea && area ? list.filter((e) => e.area === area) : [];
+      return (mine.length ? mine : list).slice(0, n).map((e) => e.id);
+    };
+    const page = { kind, variant: 0, entities: [], options: {}, hidden: false };
+    if (kind === "home") {
+      page.options = { theme: 1, real_sun: true };
+      const first = pages.find((x) => x.kind === "home");
+      if (first) page.options.items = this._items(first);
+    }
+    if (kind === "timers") page.options = { functions: ["timer", "alarm", "stopwatch"] };
+    if (kind === "camera") page.entities = pick("camera", 4);
+    if (kind === "calendar") page.entities = pick("calendar", 3);
+    if (kind === "todo") page.entities = pick("todo", 1);
+    if (kind === "thermostat") page.entities = pick("climate", 1, true);
+    pages.push(page);
+    this._ui.sheet = null;
+    this._savePages(p, pages, { toast: `${PAGE_TYPES[kind].name} added to ${this._pname(p)}` });
+    this._go(`${this._panelPath(p, "pages")}/${pages.length - 1}`);
+  }
+
+  // Choose an entity: a search field and the list (the panel's area first).
+  _sheet_pick(sh, p) {
+    const list = this._ents(sh.domains, { p, filter: sh.filter || null }).filter((e) => !(sh.exclude || []).includes(e.id));
+    const pickNone = () => {
+      const back = sh.back;
+      this._ui.sheet = null;
+      sh.onPick("");
+      if (back) this._openSheet(back);
+      else this._renderLayer();
+    };
+    const box = h("div", { class: "picker-list", style: { maxHeight: "none" } },
+      sh.none ? h("button", { class: !sh.current ? "on" : "", onclick: pickNone }, h("span", { class: "lead" }, icon("minus")), h("span", { class: "t" }, h("span", null, sh.none)), !sh.current ? icon("check") : null) : null,
+      list.length ? list.map((e) => h("button", { class: e.id === sh.current ? "on" : "", "data-name": `${e.name} ${e.id}`.toLowerCase(), onclick: () => {
+        const back = sh.back;
+        this._ui.sheet = null;
+        sh.onPick(e.id);
+        if (back) this._openSheet(back);
+        else this._renderLayer();
+      } }, h("span", { class: "lead" }, icon(this._eicon(e.id))), h("span", { class: "t" }, h("span", null, e.name), h("small", null, [this._areaName(e.area), e.id].filter(Boolean).join(" · "))), e.id === sh.current ? icon("check") : null))
+        : h("div", { class: "empty" }, "Nothing to choose from."));
+    const search = h("input", { class: "inp", type: "search", placeholder: "Search", "aria-label": "Search", oninput: (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      box.querySelectorAll("[data-name]").forEach((b) => { b.hidden = Boolean(q) && !b.dataset.name.includes(q); });
+    } });
+    return this._sheetFrame(sh.title, [search, box], null, { back: sh.back ? () => this._openSheet(sh.back) : null });
+  }
+
+  _sheet_addWidget(sh, p) {
+    const page = this._pages(p)[sh.page];
+    if (!page) return null;
+    const items = this._items(page);
+    return this._sheetFrame("Add a widget", h("div", { class: "cat" }, Object.entries(WIDGETS).map(([k, w]) => {
+      const kind = Number(k);
+      const spot = this._freeSpot(items, w.def[0], w.def[1]);
+      const small = spot ? null : this._freeSpot(items, w.min[0], w.min[1]);
+      return h("button", { class: "cat-item", disabled: !spot && !small, onclick: () => {
+        const at = spot || small;
+        const [ww, hh] = spot ? w.def : w.min;
+        const item = { kind, col: at.x, row: at.y, w: ww, h: hh, style: w.style || 0, accent: "", weight: 600, tap: true, opts: w.opts || 0 };
+        items.push(item);
+        this._ui.sheet = null;
+        this._ui.sel = items.length - 1;
+        this._saveItems(p, sh.page, items, { toast: `${w.name} added` });
+      } }, h("div", { class: "pic wicon" }, icon(w.icon)), h("b", null, w.name), h("small", null, spot ? `${w.def[0]} × ${w.def[1]}` : small ? "Smaller, to fit" : "No room left on the layout"));
+    })), null, { wide: true });
+  }
+
+  _sheet_widget(sh, p) {
+    const page = this._pages(p)[sh.page];
+    const items = page ? this._items(page) : [];
+    const w = items[sh.item];
+    if (!w) return null;
+    const meta = WIDGETS[w.kind] || WIDGETS[0];
+    const set = (patch) => { Object.assign(w, patch); this._saveItems(p, sh.page, items); };
+    const bit = (b, label) => this._row(label, this._toggle(Boolean((w.opts || 0) & b), (v) => set({ opts: v ? (w.opts || 0) | b : (w.opts || 0) & ~b }), { label }));
+    const body = [];
+    if (w.kind === 0) body.push(h("div", { class: "sec" }, h("h3", null, "Style"), h("div", { class: "chips" }, CLOCK_STYLES.map((n, k) => this._chipToggle((w.style || 0) === k, n, () => set({ style: k }))))));
+    const bits = meta.bits;
+    if (w.kind === 7) {
+      const scroll = Boolean((w.opts || 0) & 1);
+      body.push(h("div", { class: "group" },
+        this._row("Long titles", this._seg([[0, "Cut off"], [1, "Scroll"]], scroll ? 1 : 0, (v) => set({ opts: v ? (w.opts || 0) | 1 : (w.opts || 0) & ~1 }), { label: "Long titles" }), { cls: "first" }),
+        scroll ? this._row("Scroll speed", this._slider(w.style || 3, 1, 5, 1, (v) => set({ style: v }), (v) => ["", "Slowest", "Slow", "Medium", "Fast", "Fastest"][v], { label: "Scroll speed" })) : null));
+    }
+    if (bits.length) body.push(h("div", { class: "group" }, bits.map(([b, label], k) => { const r = bit(b, label); if (k === 0) r.classList.add("first"); return r; })));
+    body.push(h("div", { class: "sec" }, h("h3", null, "Colour"), h("div", { class: "swatches" },
+      h("button", { class: `sw panel${!w.accent ? " on" : ""}`, "aria-label": "The panel's colour", title: "The panel's colour", onclick: () => set({ accent: "" }) }),
+      ACCENTS.map((c) => h("button", { class: `sw${w.accent === c ? " on" : ""}`, style: { background: c }, "aria-label": c, onclick: () => set({ accent: c }) })))));
+    body.push(h("div", { class: "group" }, this._row("Opens its page on a tap", this._toggle(w.tap !== false, (v) => set({ tap: v }), { label: "Opens its page on a tap" }), { cls: "first" })));
+    return this._sheetFrame(meta.name, body, [
+      this._btn("Remove", () => { this._ui.sheet = null; this._removeWidget(p, sh.page, sh.item); this._renderLayer(); }, { cls: "ghost danger", icon: "delete-outline" }),
+      h("span", { class: "grow" }), this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  _sheet_tile(sh, p) {
+    const page = this._pages(p)[sh.page];
+    if (!page) return null;
+    const ents = [...(page.entities || [])];
+    const tapes = Array.isArray(page.options?.tapes) ? [...page.options.tapes] : [];
+    while (tapes.length < ents.length) tapes.push("");
+    tapes.length = ents.length;
+    const cur = ents[sh.slot] || null;
+    const desk = (page.variant || 0) === 1;
+    const save = (nextEnts, nextTapes) => {
+      const options = { ...(page.options || {}) };
+      if (nextTapes.some(Boolean)) options.tapes = nextTapes;
+      else delete options.tapes;
+      return this._setPage(p, sh.page, { entities: nextEnts, options });
+    };
+    const domains = this._data.tile_domains || ["light", "switch", "cover", "fan", "input_boolean", "scene", "script", "sensor", "climate"];
+    const list = this._ents(domains, { p }).filter((e) => e.id === cur || !ents.includes(e.id));
+    const box = h("div", { class: "picker-list" }, list.map((e) => h("button", { class: e.id === cur ? "on" : "", "data-name": `${e.name} ${e.id}`.toLowerCase(), onclick: () => {
+      const ne = [...ents];
+      const nt = [...tapes];
+      if (cur) { ne[sh.slot] = e.id; if (e.id !== cur) nt[sh.slot] = ""; } else { ne.push(e.id); nt.push(""); sh.slot = ne.length - 1; }
+      save(ne, nt).then(() => this._renderLayer());
+    } }, h("span", { class: "lead" }, icon(this._eicon(e.id))), h("span", { class: "t" }, h("span", null, e.name), h("small", null, [this._areaName(e.area), e.id].filter(Boolean).join(" · "))), e.id === cur ? icon("check") : null)));
+    const search = h("input", { class: "inp", type: "search", placeholder: "Search", "aria-label": "Search", oninput: (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      box.querySelectorAll("[data-name]").forEach((b) => { b.hidden = Boolean(q) && !b.dataset.name.includes(q); });
+    } });
+    const move = (d) => {
+      const k = sh.slot;
+      const ne = [...ents];
+      const nt = [...tapes];
+      ne.splice(k + d, 0, ne.splice(k, 1)[0]);
+      nt.splice(k + d, 0, nt.splice(k, 1)[0]);
+      sh.slot = k + d;
+      save(ne, nt);
+    };
+    return this._sheetFrame(cur ? this._ename(cur) : "New tile", [
+      h("div", { class: "sec" }, h("h3", null, "Controls"), search, box),
+      cur && desk ? h("div", { class: "group" }, this._row("Label", this._text(tapes[sh.slot], (v) => { const nt = [...tapes]; nt[sh.slot] = v.trim().toUpperCase().slice(0, 8); save(ents, nt); }, { max: 8, placeholder: "From the name", label: "Label", cls: "short" }),
+        { info: "The label-maker tape under the fader. Empty: the panel makes one from the name.", cls: "first" })) : null,
+      cur ? h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+        this._btn("Earlier", () => move(-1), { cls: "small", icon: "arrow-left", disabled: sh.slot === 0 }),
+        this._btn("Later", () => move(1), { cls: "small", icon: "arrow-right", disabled: sh.slot >= ents.length - 1 })) : null,
+    ], [
+      cur ? this._btn("Remove", () => { const ne = [...ents]; const nt = [...tapes]; ne.splice(sh.slot, 1); nt.splice(sh.slot, 1); this._ui.sheet = null; save(ne, nt); this._renderLayer(); }, { cls: "ghost danger", icon: "delete-outline" }) : null,
+      h("span", { class: "grow" }), this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  _sheet_crit(sh, p) {
+    const c = (this._data.house.critical || []).find((x) => x.entity_id === sh.id);
+    if (!c) return null;
+    const cls = SAFETY[this._safetyClass(c.entity_id)];
+    const set = (fn) => this._saveHouse((hs) => fn(hs.critical.find((x) => x.entity_id === c.entity_id)));
+    return this._sheetFrame(this._ename(c.entity_id), [
+      h("div", { class: "group" },
+        this._row("Counts as critical", this._toggle(c.on, (v) => set((x) => { x.on = v; }), { label: "Counts as critical" }), { cls: "first", sub: [cls ? cls.name : "Sensor", this._areaName(this._earea(c.entity_id))].filter(Boolean).join(" · ") }),
+        this._row("Hold to silence", this._toggle(c.hold, (v) => set((x) => { x.hold = v; }), { label: "Hold to silence" }), { info: "On: the sound stops after holding the button on the panel; the alert stays until the sensor clears. Off: it sounds until the sensor clears." })),
+      h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
+        const on = !c.off.includes(q.entry_id);
+        return this._chipToggle(on, this._pname(q), () => set((x) => { x.off = on ? [...x.off, q.entry_id] : x.off.filter((e) => e !== q.entry_id); }));
+      }))),
+    ], [
+      this._btn("Remove from the list", () => {
+        const gone = clone(c);
+        this._ui.sheet = null;
+        this._saveHouse((hs) => { hs.critical = hs.critical.filter((x) => x.entity_id !== c.entity_id); }, { toast: `${this._ename(c.entity_id)} removed`, undo: () => this._saveHouse((hs) => { hs.critical.push(gone); }) });
+        this._renderLayer();
+      }, { cls: "ghost danger", icon: "delete-outline" }),
+      h("span", { class: "grow" }),
+      this._btn(`Test on ${this._pname(p)}`, () => { this._ui.sheet = null; this._renderLayer(); this._test(p, "critical", c.entity_id); }, { icon: "alert-octagon-outline", disabled: !p.connected }),
+      this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  _sheet_critSuggest(sh, p) {
+    const sugg = this._suggestions();
+    return this._sheetFrame("Suggested", [
+      h("p", { class: "note", style: { margin: 0 } }, "Sensors whose device class is about safety. Only the ones you add count as critical."),
+      h("div", { class: "group" }, sugg.length ? sugg.map((e, k) => this._row(e.name, h("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } },
+        this._btn("Not this", () => this._saveHouse((hs) => { hs.dismissed.push(e.id); }), { cls: "small ghost" }),
+        this._btn("Add", () => this._saveHouse((hs) => { hs.critical.push({ entity_id: e.id, on: true, hold: true, off: [] }); }, { toast: `${e.name} is critical now` }), { cls: "small primary", icon: "plus" })),
+      { lead: h("span", { class: "lead" }, icon(this._eicon(e.id))), sub: [SAFETY[this._safetyClass(e.id)]?.name, this._areaName(e.area)].filter(Boolean).join(" · "), cls: k === 0 ? "first" : "" }))
+        : h("div", { class: "empty", style: { paddingTop: "14px" } }, "Nothing more to suggest.")),
+    ], [h("span", { class: "grow" }), this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  _sheet_status(sh, p) {
+    const house = this._data.house || {};
+    const r = (house.status || []).find((x) => x.id === sh.id);
+    if (!r) return null;
+    const cat = STATUS_CAT[r.cat] || STATUS_CAT.custom;
+    const t = r.trigger || { kind: "entity", entity: "", op: "on", value: "", after: "" };
+    const set = (patch) => this._saveHouse((hs) => Object.assign(hs.status.find((x) => x.id === r.id), patch));
+    const setT = (patch) => set({ trigger: { ...t, ...patch } });
+    const pv = this._panelById(sh.pv) || p;
+    const own = r.own || r.cat === "custom";
+    const domain = t.entity ? t.entity.split(".")[0] : "";
+    const numeric = t.entity && !Number.isNaN(Number(this._hass.states[t.entity]?.state)) && ["sensor", "number", "input_number"].includes(domain);
+    const binary = ["binary_sensor", "input_boolean", "switch", "light", "fan", "automation"].includes(domain);
+    const ops = numeric ? [["above", "Above"], ["below", "Below"]] : binary || !domain ? [["on", "Is on"], ["off", "Is off"]] : [["equals", "Is"]];
+    const others = (house.status || []).filter((x) => x.id !== r.id && x.trigger?.kind !== "after");
+    const pictos = [...cat.pictos.map((x) => ({ id: x, img: `${this._static}/picto/${x}-144.png` })), { id: `mdi:${cat.mdi}`, mdi: cat.mdi }];
+    const trigDomains = ["binary_sensor", "input_boolean", "switch", "sensor", "light", "fan", "vacuum", "lock", "media_player", "cover", "climate", "input_select", "person", "device_tracker"];
+    const back = { ...sh, fresh: false };
+    const connectedForPv = this._panels.filter((q) => q.connected);
+    const picto = r.picto || cat.pictos[0];
+    const preview = h("div", { class: "stick" },
+      h("div", { class: "stpv", style: { background: r.colour || cat.c } },
+        picto.startsWith("mdi:") ? icon(picto) : h("img", { src: `${this._static}/picto/${picto}-144.png`, alt: "" }),
+        h("b", null, own && r.headline ? r.headline : cat.name),
+        h("small", null, own ? r.line || "" : "The panel picks a line for this kind"),
+        r.button ? h("span", { class: "bt" }, r.button_label || "Button text from the panel") : null,
+        r.countdown || t.kind === "after" ? h("small", null, `Closes after ${r.countdown || 10} min`) : null),
+      h("p", { class: "note", style: { margin: 0, textAlign: "center" } }, "A sketch; the panel draws it in its own style."),
+      connectedForPv.length > 1 ? h("div", { class: "sec", style: { alignSelf: "stretch" } }, h("h3", null, "Show now on"), this._radioChips(connectedForPv.map((q) => [q.entry_id, this._pname(q)]), pv.entry_id, (v) => { sh.pv = v; this._renderLayer(); })) : null);
+    const form = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px", minWidth: 0 } },
+      h("div", { class: "sec" }, h("h3", null, "When"),
+        this._seg([["entity", "A device"], ["after", "After a screen"], ["service", "Automation"]], t.kind, (v) => setT({ kind: v, after: v === "after" ? (others[0] || {}).id || "" : t.after }), { label: "Trigger" }),
+        t.kind === "entity" ? h("div", { class: "group" },
+          this._row("Device", this._entityButton(t.entity, { title: "Device", domains: trigDomains, p, back,
+            onPick: (id) => { const d = id.split(".")[0]; const st = this._hass.states[id]; const num = ["sensor", "number", "input_number"].includes(d) && !Number.isNaN(Number(st?.state)); const bin = ["binary_sensor", "input_boolean", "switch", "light", "fan", "automation"].includes(d); setT({ entity: id, op: num ? "above" : bin ? "on" : "equals", value: num ? String(st.state) : bin ? "" : String(st?.state || "") }); } }), { cls: "first" }),
+          t.entity ? this._row("State", h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" } },
+            this._seg(ops, ops.some(([v]) => v === t.op) ? t.op : ops[0][0], (v) => setT({ op: v }), { label: "State" }),
+            ["above", "below", "equals"].includes(t.op) ? this._text(t.value, (v) => setT({ value: v }), { max: 60, label: "Value", cls: "short", placeholder: String(this._hass.states[t.entity]?.state ?? "") }) : null),
+          { sub: `Now: ${this._liveValue(`ha:${t.entity}`)}` }) : null) : null,
+        t.kind === "after" ? h("div", { class: "group" }, others.length
+          ? this._row("Screen", this._radioChips(others.map((x) => [x.id, this._statusName(x)]), t.after, (v) => setT({ after: v })), { cls: "first", stack: true })
+          : h("div", { class: "empty", style: { paddingTop: "12px" } }, "Add another status screen first.")) : null,
+        t.kind === "service" ? h("div", { class: "yaml" }, `action: panelos.show_status\ndata:\n  screen: ${r.id}\n\naction: panelos.clear_status\ndata:\n  screen: ${r.id}`) : null),
+      h("div", { class: "sec" }, h("h3", null, "Kind"), h("div", { class: "catgrid" }, STATUS_CATS.map((c) => h("button", {
+        class: `catbtn${c.id === r.cat ? " on" : ""}`, "aria-pressed": c.id === r.cat ? "true" : "false",
+        onclick: () => set({ cat: c.id, colour: c.c, picto: c.pictos[0], own: c.id === "custom" ? true : r.cat === "custom" ? false : r.own, countdown: c.countdown && !r.countdown ? 10 : r.countdown }),
+      }, h("span", { class: "pc", style: { background: c.c } }, h("img", { src: `${this._static}/picto/${c.pictos[0]}-144.png`, alt: "" })), c.name)))),
+      h("div", { class: "sec" }, h("h3", null, "Text", h("span", { class: "rinfo" }, this._infoBtn("st:text", "PanelOS texts: the panel shows a different headline and line from its own set for this kind each time. Own text: always yours."))),
+        r.cat !== "custom" ? this._seg([["panelos", "PanelOS texts"], ["own", "Own text"]], r.own ? "own" : "panelos", (v) => set({ own: v === "own" }), { label: "Text" }) : null,
+        own ? h("div", { class: "group" },
+          this._row("Headline", this._text(r.headline, (v) => set({ headline: v.trim() }), { max: 40, label: "Headline" }), { cls: "first", stack: true }),
+          this._row("Line", this._text(r.line, (v) => set({ line: v.trim() }), { max: 80, label: "Line" }), { stack: true })) : null),
+      this._has(pv, "images") ? h("div", { class: "sec" }, h("h3", null, "Picture"), h("div", { class: "swatches" }, pictos.map((x) => h("button", {
+        class: `picto${picto === x.id ? " on" : ""}`, style: { background: r.colour || cat.c }, "aria-label": x.mdi ? "Icon" : x.id, onclick: () => set({ picto: x.id }),
+      }, x.img ? h("img", { src: x.img, alt: "" }) : icon(x.mdi))))) : null,
+      h("div", { class: "sec" }, h("h3", null, "Colour"), h("div", { class: "swatches" }, STATUS_COLOURS.map((c) => h("button", { class: `sw${(r.colour || cat.c).toLowerCase() === c.toLowerCase() ? " on" : ""}`, style: { background: c }, "aria-label": c, onclick: () => set({ colour: c }) })))),
+      h("div", { class: "group" },
+        this._row("Button", this._toggle(r.button, (v) => set({ button: v }), { label: "Button" }), { cls: "first", sub: r.button ? "Closes the screen on that panel" : "No button: it ends by itself" }),
+        r.button ? this._row("Button text", this._text(r.button_label, (v) => set({ button_label: v.trim() }), { max: 24, label: "Button text", placeholder: "From the panel" }), { stack: true }) : null,
+        this._row("Closes by itself", this._select([["0", t.kind === "after" ? "After 10 min" : "No"], ["5", "After 5 min"], ["10", "After 10 min"], ["15", "After 15 min"], ["30", "After 30 min"], ["60", "After 1 hour"]], String(r.countdown || 0), (v) => set({ countdown: Number(v) }), { label: "Closes by itself" }), { info: "The screen shows the time left and closes when it runs out." }),
+        this._row("In use", this._toggle(r.on, (v) => set({ on: v }), { label: "In use" }), { sub: r.on ? null : "Switched off: never shown" })),
+      h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
+        const on = r.panels.includes(q.entry_id);
+        return this._chipToggle(on, this._pname(q), () => set({ panels: on ? r.panels.filter((x) => x !== q.entry_id) : [...r.panels, q.entry_id] }));
+      }))));
+    return this._sheetFrame(sh.fresh ? "New status screen" : this._statusName(r), h("div", { class: "split" }, form, preview), [
+      this._armed(`del:${r.id}`, "Delete", "Tap again to delete", () => {
+        const gone = clone(r);
+        this._ui.sheet = null;
+        this._saveHouse((hs) => { hs.status = hs.status.filter((x) => x.id !== r.id); }, { toast: "Status screen deleted", undo: () => this._saveHouse((hs) => { hs.status.push(gone); }) });
+        this._renderLayer();
+      }, { cls: "ghost danger", icon: "delete-outline" }),
+      h("span", { class: "grow" }),
+      this._btn("Show now", () => { this._ui.sheet = null; this._renderLayer(); this._test(pv, "status", r.id); }, { icon: "eye-outline", disabled: !pv.connected }),
+      this._btn("Done", () => this._closeSheet(), { cls: "primary" })], { wide: true });
+  }
+
+  // -- copy settings --------------------------------------------------------------------------
+
+  _openCopy(from, pageIndex = null) {
+    const others = this._panels.filter((x) => x.entry_id !== from.entry_id).map((x) => x.entry_id);
+    this._openSheet({ kind: "copy", from: from.entry_id, to: others.slice(0, 1), page: pageIndex,
+      what: pageIndex != null ? { pages: true } : { pages: true, display: false, voice: false, dnd: false, popups: false, dashboard: false } });
+  }
+
+  // What copying does on one panel: [y copied / a adapted / n skipped, text, why].
+  _copyPlan(from, to, what, pageIndex) {
+    const out = [];
+    const tn = this._pname(to);
+    if (what.pages || pageIndex != null) {
+      const src = pageIndex != null ? [this._pages(from)[pageIndex]] : this._pages(from);
+      for (const pg of src) {
+        if (!pg) continue;
+        const t = PAGE_TYPES[pg.kind] || { name: pg.kind };
+        const sup = this._pageSupported(to, pg.kind);
+        if (!sup.ok) { out.push(["n", `${t.name} page`, sup.why]); continue; }
+        const look = this._lookSupported(to, pg.kind, pg.variant || 0);
+        if (!look.ok) { out.push(["a", `${t.name}: ${(LOOKS[pg.kind] || [])[pg.variant] || "look"} → ${(LOOKS[pg.kind] || ["the first look"])[0]}`, look.why]); continue; }
+        out.push(["y", `${t.name} page, look and options${pg.hidden ? " (hidden)" : ""}`]);
+      }
+      if (pageIndex != null && this._pages(to).length >= (this._data.max_pages || 12)) out.splice(0, out.length, ["n", "The page", `${tn} has no room for more pages.`]);
+    }
+    if (pageIndex == null) {
+      if (what.display) {
+        const s = { ...DEFAULT_SCREENSAVER, ...(from.settings.screensaver || {}) };
+        if (s.when === "dark" && !s.light_entity && !this._has(to, "light")) {
+          const ha = this._ents(["sensor"], { p: to, filter: (st) => st.attributes?.device_class === "illuminance" }).find((e) => e.area && e.area === this._pareaId(to));
+          out.push(["a", ha ? `Screensaver in the dark: light from ${ha.name}` : "Screensaver: sunset to sunrise instead of in the dark", this._reason(to, "light")]);
+        } else out.push(["y", "When the screensaver may start"]);
+        if (!to.connected) out.push(["n", "Theme, brightness and screensaver style", `${tn} is offline; they are the panel's own settings.`]);
+        else out.push(["y", "Theme, brightness and screensaver style"]);
+      }
+      if (what.voice) out.push(this._has(to, "mic") ? ["y", "Voice look"] : ["n", "Voice look", this._reason(to, "mic")]);
+      if (what.dnd) out.push(["y", "Do not disturb"]);
+      if (what.popups) out.push(!this._has(to, "speaker") && from.settings.popups?.sound !== false ? ["a", "New notifications, without sound", this._reason(to, "speaker")] : ["y", "New notifications"]);
+      if (what.dashboard) out.push(this._has(to, "web") ? ["y", "Dashboard"] : ["n", "Dashboard", this._reason(to, "web")]);
+    }
+    return out;
+  }
+
+  async _applyCopy(from, to, what, pageIndex) {
+    const changes = {};
+    const max = this._data.max_pages || 12;
+    const adapt = (pg) => {
+      if (!this._pageSupported(to, pg.kind).ok) return null;
+      const c = clone(pg);
+      if (!this._lookSupported(to, c.kind, c.variant || 0).ok) c.variant = 0;
+      return c;
+    };
+    if (pageIndex != null) {
+      const c = adapt(this._pages(from)[pageIndex]);
+      if (c && this._pages(to).length < max) changes.pages = [...clone(this._pages(to)), { ...c, hidden: false }];
+    } else if (what.pages) {
+      const list = this._pages(from).map(adapt).filter(Boolean).slice(0, max);
+      if (list.length) changes.pages = list;
+    }
+    if (pageIndex == null) {
+      if (what.display) {
+        const s = { ...DEFAULT_SCREENSAVER, ...(from.settings.screensaver || {}) };
+        if (s.when === "dark" && !s.light_entity && !this._has(to, "light")) {
+          const ha = this._ents(["sensor"], { p: to, filter: (st) => st.attributes?.device_class === "illuminance" }).find((e) => e.area && e.area === this._pareaId(to));
+          if (ha) s.light_entity = ha.id;
+          else s.when = "night";
+        }
+        changes.screensaver = s;
+      }
+      if (what.voice && this._has(to, "mic")) changes.voice_look = from.settings.voice_look || 0;
+      if (what.dnd) changes.dnd = clone(from.settings.dnd || DEFAULT_DND);
+      if (what.popups) {
+        changes.popups = clone(from.settings.popups || DEFAULT_POPUPS);
+        if (!this._has(to, "speaker")) changes.popups.sound = false;
+      }
+      if (what.dashboard && this._has(to, "web")) {
+        const st = from.settings;
+        Object.assign(changes, { dashboard: st.dashboard || "", show_header: Boolean(st.show_header), show_sidebar: Boolean(st.show_sidebar), zoom: st.zoom ?? 100, loading_screen: st.loading_screen ?? true, skip_unused_resources: st.skip_unused !== false, keep_resources: [...(st.keep_resources || [])] });
+      }
+    }
+    let ok = true;
+    if (Object.keys(changes).length) ok = await this._options(to, changes, { optimistic: (s) => { if (changes.pages) s.all_pages = changes.pages; } });
+    if (ok && pageIndex == null && what.display && to.connected) {
+      const fs = from.states || {};
+      for (const key of ["theme", "auto_brightness", "brightness", "screensaver", "screensaver_style"]) {
+        if (fs[key] != null && (key !== "auto_brightness" || this._has(to, "light"))) await this._command(to, key, fs[key]);
+      }
+      if (fs.proximity_wake != null && this._has(to, "proximity")) await this._command(to, "proximity_wake", fs.proximity_wake);
+    }
+    return ok;
+  }
+
+  _sheet_copy(sh) {
+    const from = this._panelById(sh.from);
+    if (!from) return null;
+    const targets = this._panels.filter((x) => x.entry_id !== from.entry_id);
+    const page = sh.page != null ? this._pages(from)[sh.page] : null;
+    const res = { y: ["check", "y"], a: ["alert-outline", "a"], n: ["close", "n"] };
+    const items = [["pages", "Pages, their looks and options"], ["display", "Display and screensaver"], ["voice", "Voice look"], ["dnd", "Do not disturb"], ["popups", "New notifications"], ["dashboard", "Dashboard"]];
+    const tos = sh.to.map((id) => this._panelById(id)).filter(Boolean);
+    return this._sheetFrame(page ? `Copy ${(PAGE_TYPES[page.kind] || { name: page.kind }).name}` : "Copy settings", [
+      h("div", { class: "sec" }, h("h3", null, "From"), this._radioChips(this._panels.map((x) => [x.entry_id, this._pname(x)]), from.entry_id, (v) => {
+        sh.from = v;
+        sh.to = sh.to.filter((x) => x !== v);
+        if (!sh.to.length) { const other = this._panels.find((x) => x.entry_id !== v); if (other) sh.to = [other.entry_id]; }
+        sh.page = null;
+        this._renderLayer();
+      })),
+      h("div", { class: "sec" }, h("h3", null, "To"), h("div", { class: "chips" }, targets.map((x) => this._chipToggle(sh.to.includes(x.entry_id), this._pname(x), () => {
+        sh.to = sh.to.includes(x.entry_id) ? sh.to.filter((e) => e !== x.entry_id) : [...sh.to, x.entry_id];
+        this._renderLayer();
+      })))),
+      page ? null : h("div", { class: "sec" }, h("h3", null, "What"), h("div", { class: "group" }, items.map(([k, l]) => h("label", { class: "opt" },
+        h("input", { type: "checkbox", checked: Boolean(sh.what[k]), onchange: (e) => { sh.what[k] = e.target.checked; this._renderLayer(); } }), h("span", { class: "t" }, h("span", null, l)))))),
+      page ? null : sh.what.pages ? h("p", { class: "note", style: { margin: 0 } }, "Copying the pages replaces the pages of the panels it goes to.") : null,
+      tos.map((to) => {
+        const plan = this._copyPlan(from, to, sh.what, sh.page);
+        const copied = plan.filter((x) => x[0] !== "n").length;
+        const skipped = plan.length - copied;
+        return h("div", { class: "sec" }, h("h3", null, `On ${this._pname(to)}`, h("span", { class: "faint", style: { fontWeight: 400, fontSize: "13px" } }, ` · ${copied} copied${skipped ? `, ${skipped} skipped` : ""}`)),
+          h("div", { class: "group" }, plan.length ? plan.map(([k, text, why]) => h("div", { class: "result" }, icon(res[k][0], res[k][1]), h("div", null, text, why ? h("small", null, why) : null))) : h("div", { class: "empty", style: { paddingTop: "12px" } }, "Nothing chosen.")));
+      }),
+    ], [this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }),
+      this._btn(tos.length ? `Copy to ${tos.length === 1 ? this._pname(tos[0]) : `${tos.length} panels`}` : "Choose a panel", async () => {
+        this._ui.sheet = null;
+        this._renderLayer();
+        let ok = true;
+        for (const to of tos) ok = (await this._applyCopy(from, to, sh.what, sh.page)) && ok;
+        if (ok) this._toast(`Copied to ${tos.map((x) => this._pname(x)).join(" and ")}`);
+      }, { cls: "primary", disabled: !tos.length })], { wide: true });
+  }
+
+  // -- add a panel (the integration's config flow) ---------------------------------------------
+
+  _startAdd() {
+    const used = new Set(this._panels.map((x) => x.settings?.panel_id));
+    this._openSheet({ kind: "add", step: 1, panelId: used.has("nspanel-pro") ? "" : "nspanel-pro", start: "defaults", copyFrom: this._panels[0]?.entry_id || null, error: null, busy: false });
+  }
+
+  async _finishAdd(sh) {
+    const panelId = sh.panelId.trim();
+    if (!panelId) { sh.error = "Enter the panel's ID."; this._renderLayer(); return; }
+    sh.busy = true;
+    sh.error = null;
+    this._renderLayer();
+    try {
+      const flow = await this._hass.callApi("POST", "config/config_entries/flow", { handler: "panelos", show_advanced_options: false });
+      let result = flow;
+      if (flow.type === "form") result = await this._hass.callApi("POST", `config/config_entries/flow/${flow.flow_id}`, { panel_id: panelId });
+      if (result.type === "abort") throw new Error(result.reason === "already_configured" ? "This panel is already set up." : `Not added (${result.reason}).`);
+      if (result.type !== "create_entry") throw new Error("Home Assistant asked for more than this page can answer; add the panel in Settings → Devices and services.");
+      const entryId = result.result?.entry_id;
+      this._ui.sheet = null;
+      this._renderLayer();
+      this._toast(`${panelId} added`);
+      let fresh = null;
+      for (let k = 0; k < 30 && entryId; k++) {
+        fresh = this._panelById(entryId);
+        if (fresh) break;
+        await new Promise((res) => setTimeout(res, 300));
+      }
+      const src = this._panelById(sh.copyFrom);
+      if (fresh && sh.start === "copy" && src) await this._applyCopy(src, fresh, { pages: true, display: true, voice: true, dnd: true, popups: true, dashboard: true }, null);
+      if (fresh) this._go(this._panelPath(fresh));
+    } catch (err) {
+      sh.busy = false;
+      sh.error = err.body?.message || err.message || String(err);
+      this._renderLayer();
+    }
+  }
+
+  _sheet_add(sh) {
+    const steps = h("div", { class: "steps" }, [1, 2].map((k) => h("i", { class: k <= sh.step ? "on" : "" })));
+    let body;
+    let foot;
+    if (sh.step === 1) {
+      body = [steps,
+        h("div", { class: "sec" }, h("h3", null, "Panel ID", h("span", { class: "rinfo" }, this._infoBtn("add:id", "The panel's network name, as its PanelOS settings show it. The panel then finds its settings here by this name."))),
+          h("input", { class: "inp", value: sh.panelId, maxlength: 64, "aria-label": "Panel ID", oninput: (e) => { sh.panelId = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") { sh.step = 2; this._renderLayer(); } } })),
+        h("p", { class: "note", style: { margin: 0 } }, "Start PanelOS on the panel and connect it to Wi-Fi and Home Assistant first.")];
+      foot = [this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }), this._btn("Next", () => { if (sh.panelId.trim()) { sh.step = 2; this._renderLayer(); } }, { cls: "primary", disabled: !sh.panelId.trim() })];
+    } else {
+      body = [steps,
+        h("div", { class: "sec" }, h("h3", null, "Start with"), h("div", { class: "group" },
+          h("label", { class: "opt" }, h("input", { type: "radio", name: "start", checked: sh.start === "defaults", onchange: () => { sh.start = "defaults"; this._renderLayer(); } }), h("span", { class: "t" }, h("span", null, "PanelOS defaults"), h("small", null, "The usual pages, ready to change"))),
+          this._panels.length ? h("label", { class: "opt" }, h("input", { type: "radio", name: "start", checked: sh.start === "copy", onchange: () => { sh.start = "copy"; this._renderLayer(); } }), h("span", { class: "t" }, h("span", null, "A copy of another panel"), h("small", null, "Pages, display, voice, do not disturb, notifications, dashboard"))) : null)),
+        sh.start === "copy" ? h("div", { class: "sec" }, h("h3", null, "Copy from"), this._radioChips(this._panels.map((x) => [x.entry_id, this._pname(x)]), sh.copyFrom, (v) => { sh.copyFrom = v; this._renderLayer(); })) : null,
+        sh.error ? h("p", { class: "note", role: "alert", style: { margin: 0, color: "var(--bad)" } }, sh.error) : null];
+      foot = [this._btn("Back", () => { sh.step = 1; this._renderLayer(); }, { cls: "ghost" }), this._btn(sh.busy ? "Adding…" : `Add ${sh.panelId.trim()}`, () => this._finishAdd(sh), { cls: "primary", icon: "check", disabled: sh.busy })];
+    }
+    return this._sheetFrame("Add a panel", body, foot, { center: true });
   }
 }
 

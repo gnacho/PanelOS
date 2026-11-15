@@ -18,6 +18,9 @@ integration gives each panel:
   must change before the panel sends a new value, also in the options;
 * actions that put something on a panel's screen: ``panelos.show_view``
   (home, dashboard, weather, media, a camera) and ``panelos.show_message``;
+* critical alerts and status screens shared by every panel (``house.py``),
+  with ``panelos.show_status`` / ``panelos.clear_status`` for the status
+  screens an automation starts;
 * the PanelOS page in the sidebar (administrators): every setting of a panel
   beside a live picture of its screen (``page.py``).
 
@@ -35,7 +38,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.service import async_register_admin_service
@@ -44,13 +47,16 @@ from .const import (
     CONF_PANEL_ID,
     DOMAIN,
     PLATFORMS,
+    SERVICE_CLEAR_STATUS,
     SERVICE_SHOW_MESSAGE,
+    SERVICE_SHOW_STATUS,
     SERVICE_SHOW_VIEW,
     SIGNAL_CONFIG_UPDATED,
     SIGNAL_LINKS,
     SIGNAL_SHOW,
     VIEWS,
 )
+from .house import House
 from .page import async_hide_page, async_setup_page, async_show_page
 from .panel import Panel, find_entry, links, panel_config
 
@@ -81,6 +87,9 @@ SHOW_MESSAGE_SCHEMA = vol.Schema(
 )
 
 
+STATUS_ACTION_SCHEMA = vol.Schema({vol.Required("screen"): vol.All(cv.string, vol.Match(r"^[a-z0-9_]{1,40}$"))})
+
+
 def _loaded_panel(hass: HomeAssistant, panel_id: str) -> Panel | None:
     entry = find_entry(hass, panel_id)
     return getattr(entry, "runtime_data", None) if entry else None
@@ -108,7 +117,11 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 
     @callback
     def show(target: str, request: dict[str, Any]) -> None:
-        if not target or target == panel_id:
+        # A target is a panel id; a panel that subscribed without one is the
+        # only entry's panel.
+        if not target or target == panel_id or (
+            (entry := find_entry(hass, panel_id)) is not None and panel_config(entry)["panel_id"] == target
+        ):
             connection.send_message(websocket_api.event_message(msg["id"], {"show": request}))
 
     @callback
@@ -129,6 +142,10 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     connection.subscriptions[msg["id"]] = unsubscribe
     connection.send_result(msg["id"])
     send_config()
+    # The critical alerts and status screens active right now.
+    if (entry := find_entry(hass, panel_id)) is not None:
+        for request in hass.data[DOMAIN]["house"].requests_for(panel_config(entry)["panel_id"]):
+            connection.send_message(websocket_api.event_message(msg["id"], {"show": request}))
     async_dispatcher_send(hass, SIGNAL_LINKS)
 
 
@@ -161,6 +178,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register the websocket commands, the actions and the sidebar page's files once."""
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_report)
+    house = House(hass)
+    hass.data.setdefault(DOMAIN, {})["house"] = house
+    await house.async_load()
     await async_setup_page(hass)
 
     async def handle_show(call: ServiceCall) -> None:
@@ -178,6 +198,19 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     # on the panel.
     async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_VIEW, handle_show, schema=SHOW_VIEW_SCHEMA)
     async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_MESSAGE, handle_show, schema=SHOW_MESSAGE_SCHEMA)
+
+    async def handle_status(call: ServiceCall) -> None:
+        try:
+            if call.service == SERVICE_SHOW_STATUS:
+                house.show_status(call.data["screen"])
+            else:
+                house.clear_status(call.data["screen"])
+        except vol.Invalid as err:
+            raise ServiceValidationError(str(err)) from err
+
+    # Status screens whose trigger is an action (set on the PanelOS page).
+    async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_STATUS, handle_status, schema=STATUS_ACTION_SCHEMA)
+    async_register_admin_service(hass, DOMAIN, SERVICE_CLEAR_STATUS, handle_status, schema=STATUS_ACTION_SCHEMA)
     return True
 
 
@@ -190,6 +223,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: PanelOSConfigEntry) -> b
     await async_show_page(hass)
     entry.async_on_unload(entry.add_update_listener(_options_updated))
     async_dispatcher_send(hass, SIGNAL_CONFIG_UPDATED, panel_config(entry)["panel_id"])
+    # Shared alerts and status screens for this panel too.
+    hass.data[DOMAIN]["house"].evaluate()
     return True
 
 
@@ -217,3 +252,4 @@ async def async_unload_entry(hass: HomeAssistant, entry: PanelOSConfigEntry) -> 
 async def _after_unload(hass: HomeAssistant, panel_id: str) -> None:
     # The entry is gone from the list only after unload returns.
     async_dispatcher_send(hass, SIGNAL_CONFIG_UPDATED, panel_id)
+    hass.data[DOMAIN]["house"].evaluate()

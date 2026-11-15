@@ -10,7 +10,13 @@ For administrators. The page uses these websocket commands:
   its entities;
 * ``panelos/page/screen``: a fresh PNG of what the panel shows;
 * ``panelos/page/resources``: the card resources with their size and whether
-  the panel's dashboard needs them (for the resources it should skip).
+  the panel's dashboard needs them (for the resources it should skip);
+* ``panelos/page/house``: store the critical alerts and status screens shared
+  by every panel (``house.py``);
+* ``panelos/page/test``: show a critical alert or a status screen on one panel
+  for a few seconds;
+* ``panelos/page/touch_test``: start the panel's touch calibration (its
+  nine-point test; the result shows on the panel).
 
 The panel sends that picture with ``panelos/screen`` when its subscription
 asks for it (command ``screenshot``).
@@ -20,6 +26,8 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -31,7 +39,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 from homeassistant.loader import async_get_integration
 
@@ -51,16 +59,28 @@ from .const import (
     CONF_ZOOM,
     CONF_LOADING_SCREEN,
     CONF_PAGES,
+    CONF_DND,
+    CONF_POPUPS,
+    CONF_SCREENSAVER,
+    DEFAULT_PAGES,
+    DND_ALLOW,
+    DND_MODES,
     DOMAIN,
     MAX_PAGES,
     PAGE_KINDS,
+    POPUP_KINDS,
     REPORTING,
+    SAFETY_CLASSES,
+    SCREENSAVER_WHEN,
     SIGNAL_CONFIG_UPDATED,
     SIGNAL_LINKS,
     SIGNAL_PAGE,
+    SIGNAL_SHOW,
+    STATUS_CATS,
     TILE_DOMAINS,
 )
-from .panel import KEY_DOMAIN, Panel, find_entry, panel_config
+from .house import HOUSE_SCHEMA, House
+from .panel import KEY_DOMAIN, Panel, find_entry, panel_caps, panel_config
 from .resources import async_resource_list
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
@@ -71,16 +91,78 @@ _PNG_MAX = 4 * 1024 * 1024
 _DASHBOARD_PATH = re.compile(r"^[a-z0-9_-]{0,64}$")
 _EMPTY_CLEARS = (CONF_WEATHER, CONF_MEDIA_PLAYER)
 
+_OPTIONS_JSON_MAX = 16000
+_OPTION_TEXT_MAX = 200
+_OPTION_LIST_MAX = 64
+_OPTION_KEYS_MAX = 32
+
+
+def _option_value(value: Any, depth: int = 0) -> Any:
+    """A page option: a scalar, or (two levels deep at most) a list or a small object of them."""
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise vol.Invalid("numbers must be finite")
+        return value
+    if isinstance(value, str):
+        if len(value) > _OPTION_TEXT_MAX:
+            raise vol.Invalid(f"texts are at most {_OPTION_TEXT_MAX} characters")
+        return value
+    if depth < 3 and isinstance(value, list):
+        if len(value) > _OPTION_LIST_MAX:
+            raise vol.Invalid(f"lists have at most {_OPTION_LIST_MAX} items")
+        return [_option_value(v, depth + 1) for v in value]
+    if depth < 3 and isinstance(value, dict):
+        if len(value) > _OPTION_KEYS_MAX or any(not isinstance(k, str) or len(k) > 40 for k in value):
+            raise vol.Invalid(f"objects have at most {_OPTION_KEYS_MAX} keys of up to 40 characters")
+        return {k: _option_value(v, depth + 1) for k, v in value.items()}
+    raise vol.Invalid("not a valid page option")
+
+
+# A widget of a weather page on its 4 x 4 grid, as the panel draws it
+# (app/ui/home.slint, HomeItem; panelos-page.js, WIDGETS): kind 0 clock,
+# 1 date, 2 weather now, 3 next event, 4 forecast curve, 5 hourly forecast,
+# 6 daily forecast, 7 music; style and opts per kind.
+_HOME_ITEM = vol.Schema(
+    {
+        vol.Required("kind"): vol.All(int, vol.Range(min=0, max=7)),
+        vol.Required("col"): vol.All(int, vol.Range(min=0, max=3)),
+        vol.Required("row"): vol.All(int, vol.Range(min=0, max=3)),
+        vol.Required("w"): vol.All(int, vol.Range(min=1, max=4)),
+        vol.Required("h"): vol.All(int, vol.Range(min=1, max=4)),
+        vol.Optional("style", default=0): vol.All(int, vol.Range(min=0, max=99)),
+        vol.Optional("accent", default=""): vol.Any("", vol.All(str, vol.Match(r"^#[0-9a-fA-F]{6}$"))),
+        vol.Optional("weight", default=600): vol.All(int, vol.Range(min=300, max=800)),
+        vol.Optional("tap", default=True): bool,
+        vol.Optional("opts", default=0): vol.All(int, vol.Range(min=0, max=0xFFFF)),
+    }
+)
+
+
+def _home_items(items: Any) -> list[dict[str, Any]]:
+    items = vol.Schema(vol.All([_HOME_ITEM], vol.Length(max=16)))(items)
+    cells: set[tuple[int, int]] = set()
+    for item in items:
+        if item["col"] + item["w"] > 4 or item["row"] + item["h"] > 4:
+            raise vol.Invalid("a widget is outside the 4 x 4 grid")
+        mine = {(item["col"] + x, item["row"] + y) for x in range(item["w"]) for y in range(item["h"])}
+        if mine & cells:
+            raise vol.Invalid("widgets overlap")
+        cells |= mine
+    return items
+
+
 def _page(value: Any) -> dict[str, Any]:
-    """One page of the panel: its kind, look, entities (of the kind's domains) and switches."""
+    """One page of the panel: its kind, look, entities (of the kind's domains) and options."""
     page = vol.Schema(
         {
             vol.Required("kind"): vol.In(list(PAGE_KINDS)),
             vol.Optional("variant", default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=9)),
             vol.Optional("entities", default=list): [cv.entity_id],
-            vol.Optional("options", default=dict): {
-                vol.All(str, vol.Length(max=40)): vol.Any(None, bool, int, float, vol.All(str, vol.Length(max=120)))
-            },
+            vol.Optional("options", default=dict): vol.All(dict, _option_value),
+            # kept here with its settings, not sent to the panel
+            vol.Optional("hidden", default=False): bool,
         }
     )(value)
     looks, domains, most = PAGE_KINDS[page["kind"]]
@@ -88,7 +170,49 @@ def _page(value: Any) -> dict[str, Any]:
         raise vol.Invalid(f"{page['kind']} has {looks} looks")
     if len(page["entities"]) > most or any(e.split(".")[0] not in domains for e in page["entities"]):
         raise vol.Invalid(f"{page['kind']} takes up to {most} entities of {', '.join(domains) or 'no domain'}")
+    if len(json.dumps(page["options"])) > _OPTIONS_JSON_MAX:
+        raise vol.Invalid("the page's options are too large")
+    if "items" in page["options"]:
+        if page["kind"] != "home":
+            raise vol.Invalid("only weather pages have widgets")
+        page["options"]["items"] = _home_items(page["options"]["items"])
     return page
+
+
+def _pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if pages:
+        pages[0]["hidden"] = False  # the start page is always shown
+    return pages
+
+
+_TIME = vol.All(str, vol.Match(r"^([01]\d|2[0-3]):[0-5]\d$"))
+
+SCREENSAVER_SCHEMA = vol.Schema(
+    {
+        vol.Optional("when"): vol.In(SCREENSAVER_WHEN),
+        vol.Optional("lux"): vol.All(vol.Coerce(float), vol.Range(min=0, max=1000)),
+        vol.Optional("from"): _TIME,
+        vol.Optional("to"): _TIME,
+        vol.Optional("light_entity"): vol.Any("", cv.entity_domain("sensor")),
+    }
+)
+
+DND_SCHEMA = vol.Schema(
+    {
+        vol.Optional("mode"): vol.In(DND_MODES),
+        vol.Optional("from"): _TIME,
+        vol.Optional("to"): _TIME,
+        vol.Optional("allow"): {vol.Optional(key): bool for key in DND_ALLOW},
+    }
+)
+
+POPUPS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("kind"): vol.In(POPUP_KINDS),
+        vol.Optional("sound"): bool,
+        vol.Optional("seconds"): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
+    }
+)
 
 
 OPTIONS_SCHEMA = vol.Schema(
@@ -105,7 +229,10 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_KEEP_RESOURCES): vol.All([vol.All(str, vol.Length(max=300))], vol.Length(max=100)),
         vol.Optional(CONF_ZOOM): vol.All(vol.Coerce(int), vol.Range(min=50, max=150)),
         vol.Optional(CONF_LOADING_SCREEN): bool,
-        vol.Optional(CONF_PAGES): vol.All([_page], vol.Length(min=1, max=MAX_PAGES)),
+        vol.Optional(CONF_PAGES): vol.All([_page], vol.Length(min=1, max=MAX_PAGES), _pages),
+        vol.Optional(CONF_SCREENSAVER): SCREENSAVER_SCHEMA,
+        vol.Optional(CONF_DND): DND_SCHEMA,
+        vol.Optional(CONF_POPUPS): POPUPS_SCHEMA,
         **{
             vol.Optional(key): vol.All(vol.Coerce(float), vol.Range(min=low, max=high))
             for key, (_default, low, high, _step, _unit) in REPORTING.items()
@@ -121,7 +248,17 @@ async def async_setup_page(hass: HomeAssistant) -> None:
     await hass.http.async_register_static_paths([StaticPathConfig(STATIC_URL, str(FRONTEND_DIR), cache_headers=False)])
     # The PanelOS mark as an icon ("panelos:mark") everywhere in the frontend.
     frontend.add_extra_js_url(hass, f"{STATIC_URL}/panelos-icons.js?v={version}")
-    for command in (ws_page_subscribe, ws_page_options, ws_page_command, ws_page_screen, ws_page_resources, ws_screen):
+    for command in (
+        ws_page_subscribe,
+        ws_page_options,
+        ws_page_command,
+        ws_page_screen,
+        ws_page_resources,
+        ws_page_house,
+        ws_page_test,
+        ws_page_touch_test,
+        ws_screen,
+    ):
         websocket_api.async_register_command(hass, command)
 
 
@@ -155,10 +292,15 @@ def _panel(hass: HomeAssistant, entry_id: str) -> Panel:
     return panel
 
 
+def _house(hass: HomeAssistant) -> House:
+    return hass.data[DOMAIN]["house"]
+
+
 def _page_data(hass: HomeAssistant) -> dict[str, Any]:
     panels = []
     for entry in hass.config_entries.async_entries(DOMAIN):
         panel: Panel | None = getattr(entry, "runtime_data", None)
+        options = {**entry.data, **entry.options}
         panels.append(
             {
                 "entry_id": entry.entry_id,
@@ -169,25 +311,35 @@ def _page_data(hass: HomeAssistant) -> dict[str, Any]:
                 "connected": bool(panel and panel.connected),
                 "states": dict(panel.states) if panel else {},
                 "select_options": dict(panel.options) if panel else {},
+                # what the panel can do; an NSPanel Pro until it reports it
+                "caps": panel_caps(entry),
+                "caps_reported": isinstance(entry.data.get("caps"), list),
                 "settings": {
                     **panel_config(entry),
                     "skip_unused": bool(entry.options.get(CONF_SKIP_UNUSED, True)),
                     "keep_resources": list(entry.options.get(CONF_KEEP_RESOURCES, [])),
+                    # every page with its settings, the hidden ones too
+                    "all_pages": [dict(page) for page in options.get(CONF_PAGES, DEFAULT_PAGES)],
                 },
                 # The dashboard the web view shows and its card resources.
                 "web_dashboard": panel.dashboard if panel else "",
                 "resources": list(panel.resources) if panel else [],
             }
         )
+    house = _house(hass)
     return {
         "panels": panels,
         "dashboards": [dict(choice) for choice in dashboard_choices(hass)],
         "tile_domains": list(TILE_DOMAINS),
         "page_kinds": {kind: {"looks": looks, "domains": list(domains), "most": most} for kind, (looks, domains, most) in PAGE_KINDS.items()},
+        "max_pages": MAX_PAGES,
         "reporting": {
             key: {"default": default, "min": low, "max": high, "step": step, "unit": unit}
             for key, (default, low, high, step, unit) in REPORTING.items()
         },
+        "house": {**house.data, "active": house.active()},
+        "status_cats": list(STATUS_CATS),
+        "safety_classes": list(SAFETY_CLASSES),
     }
 
 
@@ -241,6 +393,13 @@ def ws_page_options(hass: HomeAssistant, connection: websocket_api.ActiveConnect
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     options = {**entry.options, **changes}
+    # The grouped settings change field by field.
+    for key in (CONF_SCREENSAVER, CONF_DND, CONF_POPUPS):
+        if key in changes and isinstance(entry.options.get(key), dict):
+            merged = {**entry.options[key], **changes[key]}
+            if key == CONF_DND and "allow" in changes[key] and isinstance(entry.options[key].get("allow"), dict):
+                merged["allow"] = {**entry.options[key]["allow"], **changes[key]["allow"]}
+            options[key] = merged
     for key in _EMPTY_CLEARS:
         if options.get(key) == "":
             options.pop(key)
@@ -295,6 +454,60 @@ async def ws_page_resources(hass: HomeAssistant, connection: websocket_api.Activ
     connection.send_result(
         msg["id"], {"dashboard": dashboard, "resources": await async_resource_list(hass, dashboard)}
     )
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "panelos/page/house", vol.Required("house"): dict})
+@websocket_api.async_response
+async def ws_page_house(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Store the critical alerts and status screens shared by every panel."""
+    try:
+        house = HOUSE_SCHEMA(msg["house"])
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    await _house(hass).async_save(house)
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "panelos/page/test",
+        vol.Required("entry_id"): str,
+        vol.Required("kind"): vol.In(("critical", "status")),
+        vol.Required("item"): vol.All(str, vol.Length(max=255)),
+        vol.Optional("seconds", default=10): vol.All(vol.Coerce(int), vol.Range(min=3, max=60)),
+    }
+)
+@callback
+def ws_page_test(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Show a critical alert or a status screen on one panel for a few seconds."""
+    try:
+        panel = _panel(hass, msg["entry_id"])
+        if not panel.connected:
+            raise HomeAssistantError(f"The PanelOS panel '{panel.panel_id}' is not connected")
+        _house(hass).test(panel_config(panel.entry)["panel_id"], msg["kind"], msg["item"], msg["seconds"])
+    except (HomeAssistantError, vol.Invalid) as err:
+        connection.send_error(msg["id"], "not_shown", str(err))
+        return
+    connection.send_result(msg["id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "panelos/page/touch_test", vol.Required("entry_id"): str})
+@callback
+def ws_page_touch_test(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Start the panel's touch test (it corrects the touch only when the offsets are systematic)."""
+    try:
+        panel = _panel(hass, msg["entry_id"])
+        if not panel.connected:
+            raise HomeAssistantError(f"The PanelOS panel '{panel.panel_id}' is not connected")
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "not_connected", str(err))
+        return
+    async_dispatcher_send(hass, SIGNAL_SHOW, panel_config(panel.entry)["panel_id"], {"type": "touch_test"})
+    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command(
