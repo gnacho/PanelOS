@@ -57,11 +57,20 @@ pub struct WebConfig {
     pub skip_resources: Vec<String>,
     /// Size of the page, percent.
     pub zoom: u32,
+    /// The loading screen covers the page until it is complete.
+    pub loading_screen: bool,
 }
 
 impl Default for WebConfig {
     fn default() -> Self {
-        Self { dashboard: String::new(), show_header: true, show_sidebar: false, skip_resources: Vec::new(), zoom: 100 }
+        Self {
+            dashboard: String::new(),
+            show_header: true,
+            show_sidebar: false,
+            skip_resources: Vec::new(),
+            zoom: 100,
+            loading_screen: true,
+        }
     }
 }
 
@@ -91,6 +100,7 @@ impl WebConfig {
                 })
                 .unwrap_or_default(),
             zoom: v.get("zoom").and_then(serde_json::Value::as_u64).map(|z| z.clamp(50, 150) as u32).unwrap_or(100),
+            loading_screen: v.get("loading_screen").and_then(serde_json::Value::as_bool).unwrap_or(true),
         }
     }
 }

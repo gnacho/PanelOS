@@ -21,6 +21,7 @@ CONF_SKIP_UNUSED = "skip_unused_resources"
 CONF_KEEP_RESOURCES = "keep_resources"
 # Size of the dashboard in the web view, percent.
 CONF_ZOOM = "zoom"
+CONF_LOADING_SCREEN = "loading_screen"
 ZOOM_RANGE = (50, 150, 5)
 # The dashboard chosen on the panel itself (its settings or its Dashboard
 # entity) applies while this is selected.

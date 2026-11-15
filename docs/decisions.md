@@ -23,11 +23,17 @@ The current base is the latest stable kernel (7.3.x). There is no 7.x longterm k
 ## Updates (planned)
 
 - One signed bundle per release (kernel, DTB, root filesystem, panel app), published as a GitHub release. The panel verifies the signature before installing.
-- A/B with test boot and automatic fallback: the new system goes to the spare slot and boots once from there (the stock U-Boot's one-shot recovery boot). It becomes the default only after a health check (Wi-Fi, app running, Home Assistant connected); otherwise the next boot returns to the previous version. The two slots are the recovery partition and, once the stock Android is removed (`tools/remove_android.sh`), the boot partition.
+- A/B, updated in the background, with test boot and automatic fallback. PanelOS runs from RAM, so the panel stays fully usable while an update is downloaded, written and checked; only the restart interrupts it. The two slots are the recovery partition and, once the stock Android is removed (`tools/remove_android.sh`), the boot partition. The stock U-Boot has no slot retry counter, and its misc boot command wins over the one-shot boot, so only the recovery slot can be test-booted once. The order is therefore: the running version is copied to the boot partition (it becomes the backup), the new version is written to the recovery partition and verified, and the panel restarts into it once (one-shot recovery boot with the default boot cleared). It becomes the default only after a health check (Wi-Fi, app running, Home Assistant connected); if it fails or hangs, the panel restarts by itself and comes up from the boot partition with the previous version. Both restarts are automatic: into the new version at a quiet moment (or at once when asked), and back to the previous one when the new one fails, without anyone at the panel. A failed update is reported: before the test start the panel notes the version it tries on its persistent partition; a start with another version and that note still there means the update failed, and the panel says so on its screen and in Home Assistant (the update entity shows the failure, plus a notification with the reason), then clears the note. The version goes into each image's header (`name` field), so the panel can tell which slot holds what. Android's A/B ("seamless") updates work the same way, with the slot switching done by a bootloader that counts tries; here the one-shot boot and the health check take that part.
 - Home Assistant: an `update` entity (installed version, latest version, release notes, install command, progress), so the update shows up under Settings → Updates like any other; auto-update is optional.
 - On the panel: a settings page with the version, "check for updates", "install" and an auto-update switch.
 - First install over Wi-Fi ADB from the stock firmware (no opening the case), every later update over the air.
 - The panel can update itself without Home Assistant too: it checks GitHub Releases directly (or a local file/URL).
+
+## User interface
+
+- Native: Rust + Slint, drawn by the panel itself, far faster than the web view; dashboard mode stays the secondary way.
+- The many pages bring many large images, photos and fonts. They live on disk in a bundle of their own (like the web bundle: SquashFS, on the data partition once the stock Android is removed), not in the boot image, and a page loads what it needs.
+- Everything is optimised as far as the hardware allows: the heaviest page is built first and measured on the panel (frame times, CPU per core, memory, temperature, the voice satellite alongside), and the results set per-layer budgets and fallbacks for every other page.
 
 ## Home Assistant connection
 

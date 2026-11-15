@@ -110,6 +110,10 @@ struct UiState {
     /// A swipe down from the top edge of the web view (start y): opens the
     /// panel's settings instead of going to the page.
     web_swipe: Option<f32>,
+    /// Touch test: on, the point to touch now, where and when the finger came down.
+    touch_test: bool,
+    touch_test_step: usize,
+    touch_test_down: Option<(Instant, f32, f32, u32)>,
     /// Pull to refresh: where the finger came down, and how far it pulled (0..1, None: not pulling).
     web_pull: Option<(f32, f32)>,
     web_pulled: Option<f32>,
@@ -1332,6 +1336,17 @@ fn tick(ui: &MainWindow) {
             }
             s.proximity_test = test;
         }
+        // Touch test view: on while its file exists.
+        let touch_test = std::path::Path::new(TOUCH_TEST_FILE).exists();
+        if touch_test != s.touch_test {
+            s.touch_test = touch_test;
+            s.touch_test_step = 0;
+            s.touch_test_down = None;
+            ui.set_touch_test_step(0);
+            ui.set_touch_test_text(touch_test_text(0).into());
+            ui.set_touch_test(touch_test);
+            eprintln!("nspanel-app: touch test {}", if touch_test { "on" } else { "off" });
+        }
         // Screensaver (not while Home Assistant shows something)
         let timeout = s.settings.screensaver_seconds;
         let showing = s.show_until.is_some() || ui.get_message_open() || s.camera_override.is_some() || s.proximity_test.is_some();
@@ -1381,6 +1396,22 @@ fn tick(ui: &MainWindow) {
 /// default), optionally followed by a word whose change restarts learning;
 /// further lines: a prompt for the person at the panel.
 const PROXIMITY_TEST_FILE: &str = "/tmp/nspanel-proximity-test";
+
+/// Touch test (development): on while this file exists. Nine points, touched
+/// one after the other (corners, edge middles, the middle held for 2 s); each
+/// touch is logged with its distance from the point.
+const TOUCH_TEST_FILE: &str = "/tmp/nspanel-touch-test";
+const TOUCH_TEST_POINTS: [(f32, f32); 9] =
+    [(16.0, 16.0), (240.0, 16.0), (464.0, 16.0), (464.0, 240.0), (464.0, 464.0), (240.0, 464.0), (16.0, 464.0), (16.0, 240.0), (240.0, 240.0)];
+const TOUCH_TEST_HOLD: Duration = Duration::from_millis(1500);
+
+fn touch_test_text(step: usize) -> String {
+    match step {
+        0..=7 => format!("Touch the red point ({} of 9)", step + 1),
+        8 => "Hold the red point for 2 seconds (9 of 9)".into(),
+        _ => "Done, thank you".into(),
+    }
+}
 
 fn show_proximity_test(ui: &MainWindow, s: &UiState, raw: f64) {
     let rest = s.proximity.rest().unwrap_or(raw);
@@ -1661,6 +1692,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wifi_avg: None,
             web: None,
             web_swipe: None,
+            touch_test: false,
+            touch_test_step: 0,
+            touch_test_down: None,
             web_pull: None,
             web_pulled: None,
             timers: HashMap::new(),
@@ -2052,8 +2086,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let Some(ui) = weak.upgrade() else { return };
                 ui.set_web_loading(on);
                 if on {
-                    loading_text::start(&ui);
-                    ui.set_web_overlay(true);
+                    // Off in the options: Home Assistant's own start-up shows instead.
+                    if with_state(|s| s.settings.web.loading_screen) {
+                        loading_text::start(&ui);
+                        ui.set_web_overlay(true);
+                    }
                 } else {
                     loading_text::stop();
                     let weak = ui.as_weak();
@@ -2078,6 +2115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     && ui.get_web_ready()
                     && !(ui.get_web_overlay()
                         || ui.get_web_pull() > 0.0
+                        || ui.get_touch_test()
                         || ui.get_more_info_open()
                         || ui.get_weather_open()
                         || ui.get_media_open()
@@ -2104,6 +2142,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         ui.set_web_active(true);
     }
+    let weak = ui.as_weak();
+    ui.on_touch_test_event(move |kind, x, y| {
+        let Some(ui) = weak.upgrade() else { return };
+        platform::note_activity();
+        let step = with_state(|s| {
+            match kind {
+                0 => s.touch_test_down = Some((Instant::now(), x, y, 0)),
+                1 => {
+                    if let Some(d) = s.touch_test_down.as_mut() {
+                        d.3 += 1;
+                    }
+                }
+                _ => {
+                    let Some((at, x0, y0, moves)) = s.touch_test_down.take() else { return None };
+                    let held = at.elapsed();
+                    let i = s.touch_test_step.min(8);
+                    let (tx, ty) = TOUCH_TEST_POINTS[i];
+                    let (dx, dy) = (x0 - tx, y0 - ty);
+                    eprintln!(
+                        "nspanel-app: touch test: point {} ({tx:.0},{ty:.0}) down ({x0:.0},{y0:.0}) up ({x:.0},{y:.0}) off ({dx:+.0},{dy:+.0}) {:.0} px, held {} ms, {moves} moves",
+                        i + 1,
+                        (dx * dx + dy * dy).sqrt(),
+                        held.as_millis()
+                    );
+                    if s.touch_test_step < 8 || (s.touch_test_step == 8 && held >= TOUCH_TEST_HOLD) {
+                        s.touch_test_step += 1;
+                    }
+                    return Some(s.touch_test_step);
+                }
+            }
+            None
+        });
+        if let Some(step) = step {
+            ui.set_touch_test_step(step as i32);
+            ui.set_touch_test_text(touch_test_text(step).into());
+        }
+    });
+
     let weak = ui.as_weak();
     ui.on_web_touch(move |kind, x, y| {
         let Some(ui) = weak.upgrade() else { return };

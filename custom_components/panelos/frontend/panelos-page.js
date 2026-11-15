@@ -628,6 +628,7 @@ class PanelOSPage extends HTMLElement {
       this._row("Header", this._switch("Header", () => settings().show_header, (v) => this._options({ show_header: v }))),
       this._row("Sidebar", this._switch("Sidebar", () => settings().show_sidebar, (v) => this._options({ show_sidebar: v }))),
       this._row("Size", this._slider("Size", { min: 50, max: 150, step: 5 }, () => settings().zoom ?? 100, (v) => this._options({ zoom: v }), (v) => `${v} %`)),
+      this._row("Loading screen", this._switch("Loading screen", () => settings().loading_screen ?? true, (v) => this._options({ loading_screen: v }))),
       this._resourcesRow(),
     ]);
   }

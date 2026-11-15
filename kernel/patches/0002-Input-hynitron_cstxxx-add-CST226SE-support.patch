@@ -1,17 +1,136 @@
 diff --git a/drivers/input/touchscreen/hynitron_cstxxx.c b/drivers/input/touchscreen/hynitron_cstxxx.c
-index 49fb35c83..9bca54b9f 100644
+index 49fb35c83..e137ad163 100644
 --- a/drivers/input/touchscreen/hynitron_cstxxx.c
 +++ b/drivers/input/touchscreen/hynitron_cstxxx.c
-@@ -27,6 +27,8 @@
+@@ -27,6 +27,9 @@
  struct hynitron_ts_chip_data {
  	unsigned int max_touch_num;
  	u32 ic_chkcode;
 +	unsigned int reset_delay_ms;	/* settle time after reset, 0 = 60 ms */
 +	const char *input_name;		/* NULL = "Hynitron cst3xx Touchscreen" */
++	bool end_bad_frames;		/* frames without a fresh status byte (CST226SE) */
  	int (*firmware_info)(struct i2c_client *client);
  	int (*bootloader_enter)(struct i2c_client *client);
  	int (*init_input)(struct i2c_client *client);
-@@ -372,7 +374,8 @@ static int cst3xx_input_dev_int(struct i2c_client *client)
+@@ -40,6 +43,10 @@ struct hynitron_ts_data {
+ 	struct input_dev *input_dev;
+ 	struct touchscreen_properties prop;
+ 	struct gpio_desc *reset_gpio;
++	/* for CST226SE frames without a fresh status byte */
++	bool down;			/* a contact is reported now */
++	unsigned int last_x, last_y;	/* the last contact, controller axes */
++	unsigned long up_time;		/* jiffies when the last contact went */
+ };
+ 
+ /*
+@@ -252,6 +259,16 @@ static void cst3xx_report_contact(struct hynitron_ts_data *ts_data,
+ 	input_mt_report_slot_state(ts_data->input_dev, MT_TOOL_FINGER, 1);
+ 	touchscreen_report_pos(ts_data->input_dev, &ts_data->prop, x, y, true);
+ 	input_report_abs(ts_data->input_dev, ABS_MT_TOUCH_MAJOR, w);
++	ts_data->last_x = x;
++	ts_data->last_y = y;
++}
++
++/* After a frame: remember whether a contact is down and when the last one went. */
++static void cst3xx_track_contacts(struct hynitron_ts_data *ts_data, bool down)
++{
++	if (ts_data->down && !down)
++		ts_data->up_time = jiffies;
++	ts_data->down = down;
+ }
+ 
+ static int cst3xx_finish_touch_read(struct i2c_client *client)
+@@ -288,21 +305,67 @@ static int cst3xx_finish_touch_read(struct i2c_client *client)
+ static void cst3xx_touch_report(struct i2c_client *client)
+ {
+ 	struct hynitron_ts_data *ts_data = i2c_get_clientdata(client);
+-	u8 buf[28];
++	u8 buf[28] = { };
+ 	u8 finger_id, sw, w;
+ 	unsigned int x, y;
+ 	unsigned int touch_cnt, end_byte;
+ 	unsigned int idx = 0;
+ 	unsigned int i;
++	bool any = false;
+ 	int err;
+ 
+ 	/* Read and validate the first bits of input data. */
+ 	err = cst3xx_i2c_read_register(client, CST3XX_TOUCH_DATA_PART_REG,
+ 				       buf, 28);
++	/*
++	 * CST226SE: while a finger rests on the glass, and for touches at the
++	 * edges, the controller refreshes only the coordinates and the touch
++	 * count; the status byte still holds the end-of-read mark, and the
++	 * interrupt line stays low as long as the finger is there (measured:
++	 * the same frame again every 1.2 ms). Such a frame with one touch is
++	 * that touch (one finger, slot 0); with none, all contacts go. The
++	 * reports are paced to about 100 per second while the line stays low.
++	 * Right after a contact goes, the controller sends the last frame once
++	 * more (measured: 1 ms after every release, same place, one frame);
++	 * that is not a new touch.
++	 */
++	if (!err && ts_data->chip->end_bad_frames &&
++	    buf[0] == CST3XX_TOUCH_DATA_CHK_VAL &&
++	    buf[6] == CST3XX_TOUCH_DATA_CHK_VAL) {
++		touch_cnt = buf[5] & CST3XX_TOUCH_COUNT_MASK;
++		if (touch_cnt == 1) {
++			x = ((buf[1] << 4) | ((buf[3] >> 4) & 0x0f));
++			y = ((buf[2] << 4) | (buf[3] & 0x0f));
++			w = (buf[4] >> 3);
++			if (!ts_data->down &&
++			    x == ts_data->last_x && y == ts_data->last_y &&
++			    time_before(jiffies, ts_data->up_time + msecs_to_jiffies(60))) {
++				cst3xx_finish_touch_read(client);
++				usleep_range(9000, 11000);
++				return;
++			}
++			cst3xx_report_contact(ts_data, 0, x, y, w);
++		}
++		if (touch_cnt <= 1) {
++			input_mt_sync_frame(ts_data->input_dev);
++			input_sync(ts_data->input_dev);
++			cst3xx_track_contacts(ts_data, touch_cnt == 1);
++		} else {
++			dev_err_ratelimited(&client->dev,
++					    "cst3xx frame without status, %u touches: %*ph\n",
++					    touch_cnt, 8, buf);
++		}
++		cst3xx_finish_touch_read(client);
++		usleep_range(9000, 11000);
++		return;
++	}
++
+ 	if (err ||
+ 	    buf[6] != CST3XX_TOUCH_DATA_CHK_VAL ||
+ 	    buf[0] == CST3XX_TOUCH_DATA_CHK_VAL) {
+-		dev_err(&client->dev, "cst3xx touch read failure\n");
++		dev_err_ratelimited(&client->dev,
++				    "cst3xx touch read failure%s %*ph\n",
++				    err ? " (i2c)" : "", 8, buf);
+ 		return;
+ 	}
+ 
+@@ -347,8 +410,10 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 		}
+ 
+ 		/* sw value of 0 means no touch, 0x03 means touch */
+-		if (sw == CST3XX_TOUCH_DATA_TOUCH_VAL)
++		if (sw == CST3XX_TOUCH_DATA_TOUCH_VAL) {
+ 			cst3xx_report_contact(ts_data, finger_id, x, y, w);
++			any = true;
++		}
+ 
+ 		idx += 5;
+ 
+@@ -359,6 +424,7 @@ static void cst3xx_touch_report(struct i2c_client *client)
+ 
+ 	input_mt_sync_frame(ts_data->input_dev);
+ 	input_sync(ts_data->input_dev);
++	cst3xx_track_contacts(ts_data, any);
+ }
+ 
+ static int cst3xx_input_dev_int(struct i2c_client *client)
+@@ -372,7 +438,8 @@ static int cst3xx_input_dev_int(struct i2c_client *client)
  		return -ENOMEM;
  	}
  
@@ -21,7 +140,7 @@ index 49fb35c83..9bca54b9f 100644
  	ts_data->input_dev->phys = "input/ts";
  	ts_data->input_dev->id.bustype = BUS_I2C;
  
-@@ -440,11 +443,13 @@ static int hyn_probe(struct i2c_client *client)
+@@ -440,11 +507,13 @@ static int hyn_probe(struct i2c_client *client)
  		return err;
  	}
  
@@ -39,7 +158,7 @@ index 49fb35c83..9bca54b9f 100644
  
  	err = ts_data->chip->init_input(client);
  	if (err < 0)
-@@ -475,6 +480,22 @@ static const struct hynitron_ts_chip_data cst3xx_data = {
+@@ -475,6 +544,23 @@ static const struct hynitron_ts_chip_data cst3xx_data = {
  	.report_touch		= &cst3xx_touch_report,
  };
  
@@ -54,6 +173,7 @@ index 49fb35c83..9bca54b9f 100644
 +	.ic_chkcode		= 0xcaca0000,
 +	.reset_delay_ms		= 100,
 +	.input_name		= "Hynitron CST226SE Touchscreen",
++	.end_bad_frames		= true,
 +	.firmware_info		= &cst3xx_firmware_info,
 +	.init_input		= &cst3xx_input_dev_int,
 +	.report_touch		= &cst3xx_touch_report,
@@ -62,7 +182,7 @@ index 49fb35c83..9bca54b9f 100644
  static const struct i2c_device_id hyn_tpd_id[] = {
  	{ .name = "hynitron_ts" },
  	{ /* sentinel */ },
-@@ -482,6 +503,7 @@ static const struct i2c_device_id hyn_tpd_id[] = {
+@@ -482,6 +568,7 @@ static const struct i2c_device_id hyn_tpd_id[] = {
  MODULE_DEVICE_TABLE(i2c, hyn_tpd_id);
  
  static const struct of_device_id hyn_dt_match[] = {

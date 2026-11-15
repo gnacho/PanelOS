@@ -48,6 +48,7 @@ from .const import (
     CONF_TILES,
     CONF_WEATHER,
     CONF_ZOOM,
+    CONF_LOADING_SCREEN,
     DOMAIN,
     REPORTING,
     SIGNAL_CONFIG_UPDATED,
@@ -78,6 +79,7 @@ OPTIONS_SCHEMA = vol.Schema(
         vol.Optional(CONF_SKIP_UNUSED): bool,
         vol.Optional(CONF_KEEP_RESOURCES): vol.All([vol.All(str, vol.Length(max=300))], vol.Length(max=100)),
         vol.Optional(CONF_ZOOM): vol.All(vol.Coerce(int), vol.Range(min=50, max=150)),
+        vol.Optional(CONF_LOADING_SCREEN): bool,
         **{
             vol.Optional(key): vol.All(vol.Coerce(float), vol.Range(min=low, max=high))
             for key, (_default, low, high, _step, _unit) in REPORTING.items()

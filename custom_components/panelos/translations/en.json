@@ -35,6 +35,7 @@
           "show_header": "Header",
           "show_sidebar": "Sidebar",
           "zoom": "Size",
+          "loading_screen": "Loading screen",
           "skip_unused_resources": "Leave out unused card resources",
           "keep_resources": "Always load these card resources"
         },
@@ -43,6 +44,7 @@
           "show_header": "The dashboard's top bar with its title and the tabs of its views. Without it the dashboard gets the whole screen, but its views can only be reached through links on the dashboard.",
           "show_sidebar": "Home Assistant's menu (all dashboards, settings and other pages). Without it the panel stays on the chosen dashboard.",
           "zoom": "How large the dashboard is drawn on the panel; below 100 % more fits on the screen.",
+          "loading_screen": "While a dashboard loads, the panel shows its loading screen and reveals the dashboard once it is complete. Off: Home Assistant's own start-up shows instead and the dashboard appears while it loads, sooner but unfinished at first.",
           "skip_unused_resources": "Home Assistant loads every card resource on every dashboard, used or not; on the panel each one costs load time. With this on, the panel leaves out the ones the dashboard it shows does not need (a resource counts as needed when its name matches a custom card type or a setting of the dashboard), worked out again whenever the dashboard changes.",
           "keep_resources": "For a resource the dashboard needs although its name does not match any of its cards."
         }

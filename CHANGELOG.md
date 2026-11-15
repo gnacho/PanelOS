@@ -12,7 +12,7 @@
 
 - **Smooth scrolling**: while the dashboard is all there is on the screen, the browser draws straight into the display's buffers on the GPU and the display flips to them; no read-back, no copy, no drawing on the CPU. A frame reaches the screen in about 20 ms instead of 50, swipes run at 38–56 frames per second instead of 14–25.
 - **Faster loading**: card resources the dashboard shown does not need are not loaded on the panel, worked out again whenever the dashboard changes (integration option, on by default; resources can be kept); about a quarter less load time on a dashboard with 35 resources.
-- **Loading screen**: the PanelOS mark writes itself in Morse while a dashboard loads, covering Home Assistant's start-up, and the dashboard fades in once its cards and icons are there.
+- **Loading screen**: the PanelOS mark writes itself in Morse while a dashboard loads, covering Home Assistant's start-up, and the dashboard fades in once its cards and icons are there; it can be switched off (integration option).
 - **Size**: dashboards can be drawn smaller or larger (50–150 %).
 - **Pull to refresh**: pulling the dashboard down reloads it, as in a phone's browser, when the content is at its top; the top edge stays the swipe to the settings.
 - Noto Sans as a second font in the web view: card texts no longer show boxes for characters such as Mushroom's separator.
@@ -21,12 +21,13 @@
 
 ### Installation
 
-- **Removing the stock Android** (optional install step 14, `tools/remove_android.sh`, over Wi-Fi, panel closed): PanelOS is copied to the boot partition, so a normal boot and the test-boot safety net start PanelOS instead of Android, and the old userdata partition (about 3.5 GiB) becomes `/mnt/data` for larger content. The way back writes the stock partitions from the backup (restore guide, case D). Not tried on a panel yet.
+- **Removing the stock Android** (optional install step 14, `tools/remove_android.sh`, over Wi-Fi, panel closed): PanelOS is copied to the boot partition, so a normal boot and the test-boot safety net start PanelOS instead of Android, and the old userdata partition (about 3.5 GiB) becomes `/mnt/data` for larger content. The way back writes the stock partitions from the backup (restore guide, case D). Tried on one panel (the way back not yet).
 - e2fsprogs in the image (`mkfs.ext4`, `e2fsck`); `tools/build_image.sh` warns when the image would not fit the boot partition.
 
-### Known issues
+### Fixes
 
-- Touch: while the panel is touched or covered, the touch driver sometimes rereads the controller hundreds of times a second for seconds and drops those frames (measurements in docs/hardware.md); a long press does not register in the web view yet.
+- Touch: the touch controller sends frames with a stale status byte while a finger rests and at the edges; the driver dropped them, so corners seemed insensitive and a long press did not register. The driver now reports them as the touch they are, paces them and ignores the repeat the controller sends after a release. Measured: 36 of 36 points at the first touch, corners included, no ghost touches (docs/hardware.md).
+- Touch test view for development (`/tmp/nspanel-touch-test`): nine points, each touch logged with its distance from its point.
 
 ## 0.0.3
 

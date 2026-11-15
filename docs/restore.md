@@ -144,7 +144,7 @@ PanelOS writes the stock boot and recovery partitions back from this panel's bac
 cd /root/PanelOS && tools/remove_android.sh $PANEL restore $BACKUP
 ```
 
-It asks first, checks every partition after writing it, and stops before the restart if something does not match (PanelOS keeps running then; run the command again). The stock firmware should then start like after a factory reset: its own settings and the eWeLink pairing gone, developer mode and ADB to be turned on again (install guide, step 1). Not tried on a panel yet.
+It asks first, checks every partition after writing it, and stops before the restart if something does not match (PanelOS keeps running then; run the command again). The stock firmware should then start like after a factory reset: its own settings and the eWeLink pairing gone, developer mode and ADB to be turned on again (install guide, step 1). This way back has not been tried on a panel yet.
 
 ## Test the restore before you need it
 

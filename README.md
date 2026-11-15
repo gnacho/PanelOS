@@ -12,9 +12,23 @@ Version **0.0.3** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0
 
 ## Features
 
+- **Assistant mode**, the heart of PanelOS: a smart display for Home Assistant, made for talking to Assist and for a glance at the house. Today: a home screen with clock, weather, media and quick tiles, a full-screen conversation view, weather details, the media player, camera views, messages and timers. The new interface, designed and being built page by page:
+  - **Home**: widgets on living backgrounds that show the weather as it is outside right now (rain, snow, fog, wind, thunder, the sun and the moon where they really are), or calm drawn scenes;
+  - **Music**: what is playing in several looks, picking and grouping players;
+  - **Timers, alarms and a stopwatch**, with several timer themes;
+  - **Thermostat** in several looks, with a glow that shows from afar when it heats or cools;
+  - **Camera**: the whole picture or filled, all cameras in a grid, a ring overlay for a doorbell;
+  - **To-do lists** and a **calendar** (day, three days, week, month);
+  - **Info and alerts**, critical alerts included;
+  - **Status screens** for what happens at home (washing machine, robot vacuum and more);
+  - **Quick controls**: tiles, sliders, groups;
+  - **Voice feedback**, full screen while listening and answering;
+  - **Screensaver clocks** in many styles;
+  - **Settings**: a quick shade pulled down from the top, child lock, storage.
+
+  **Weather: [Bellweather](https://github.com/lauden-io/Bellweather)** was made for exactly this: the weather here and now from real observations (radar, nearby stations) and a forecast blended from many models. The living backgrounds read it, and it gives the best experience; any Home Assistant weather entity works too.
 - **Native Home Assistant dashboard**: drawn by the panel itself from a Home Assistant dashboard (tiles, shutters, climate, media, camera), details layers, themes, screensaver, automatic brightness, wake on approach. Pairing with a QR code, no token typing.
 - **Voice satellite**: on-device wake words (microWakeWord), Assist pipelines, echo cancellation, timers, announcements, follow-up listening.
-- **Assistant mode**: smart-display home screen with clock, weather, media and quick tiles, and a full-screen conversation view.
 - **Dashboard mode** (secondary): a Home Assistant dashboard in a web view, custom cards included; within the limits of the panel's hardware, so a light, simple dashboard made for it works best ([docs/home_assistant.md](docs/home_assistant.md#dashboard-mode)).
 - **First-start setup on the panel**: Home Assistant found on the network (mDNS) or its address typed on a keypad; pairing with a QR code.
 - **Home Assistant device**: the PanelOS integration (`custom_components/panelos`) adds the panel as a device with its display, settings and sensors, sets its dashboard and assistant modes and shows views or messages on it; the voice satellite is an ESPHome device (announced over mDNS like any ESPHome device), connected via the panel.
@@ -28,7 +42,7 @@ Details: [docs/app.md](docs/app.md).
 - A 3D-printable adapter plate for mounting the US NSPanel on a European 60 mm wall box (screw spacing 83.5 mm vs 60 mm).
 - Ready-made images on GitHub Releases, so a user does not have to build. A release image must not carry a personal SSH key: the user's own key is added at install.
 - Native builds on Macs with Apple silicon and other arm64 computers: Buildroot's Bootlin toolchain only runs on x86-64 hosts, so an arm64 host needs Buildroot's own toolchain (built from source). Until then the build runs in an emulated x86-64 virtual machine (see [docs/install.md](docs/install.md#mac)).
-- Web mode, signed over-the-air updates from Home Assistant's Settings → Updates, with two system slots (A/B: the `boot` and `recovery` partitions; the image already fits the 32 MiB `boot` partition).
+- Signed over-the-air updates from Home Assistant's Settings → Updates, written in the background into the second system slot (A/B: the recovery partition and, once the stock Android is removed, the boot partition). The panel stays usable while it updates and is out only for the restart; a failed update restarts into the previous version by itself and says so.
 - A wiki once more devices are supported.
 
 ## Why (NSPanel Pro)

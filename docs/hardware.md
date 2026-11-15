@@ -110,7 +110,24 @@ The touch interrupt had fired 68 716 times in 16.3 h of uptime. Three of the fou
 
 What the driver does (`drivers/input/touchscreen/hynitron_cstxxx.c`, `cst3xx_touch_report`): on every interrupt it reads 28 bytes from register 0xd000. It prints this one message both when the I²C read fails and when the frame does not check out: byte 6 is not 0xab, or byte 0 is 0xab (a frame that was already read). In both cases it returns **without** writing the end-of-read command (0xab to 0xd000), so the controller keeps its interrupt line low (the interrupt is level triggered) and the read runs again at once. That explains the rate. The frames of a burst are dropped, so touches during a burst are lost. A frame read while nobody touches the panel starts with 0xab (`ab 01 1c 70 3b 00 ab 00 00 00 2e 35 ab …`).
 
-Not known yet: whether the failing reads are I²C errors or frames in another format (for example a palm or large-area frame, which would fit the covered proximity sensor), and whether this is why a long press does not register in the web view. A read-only watcher that saves the controller's frame during a burst (`i2ctransfer -f -y 1 w2@0x5a 0xd0 0x00 r28`, triggered by the interrupt rate) is how to find out. A likely fix in `kernel/patches/0002`: on a frame that does not check out, still send the end-of-read command and log the raw bytes once (rate limited); it needs a new kernel, so it goes through a one-shot test boot.
+Frames read during a burst (read-only watcher: `i2ctransfer -f -y 1 w2@0x5a 0xd0 0x00 r28`, triggered by the interrupt rate; 2026-11-15 11:56): `ab 0e 0f 40 40 01 ab 00 …` and `ab 1d 0f 48 19 00 ab 00 …`. Byte 0 still holds the end-of-read mark 0xab while byte 5 reports one touch (then none): the controller raises its interrupt for frames whose status byte it did not refresh, so they are not I²C errors. Such frames come while a finger rests on the glass, which fits a long press that does not register.
+
+A test with known touches (2026-11-15 12:33, the four corners, then a long press in the middle; the driver logged the rejected frames): `ab 00 00 be 2a 01 ab 00` decodes to one touch at (11, 14), the top left corner, and `ab 10 0e e3 47 01 ab 00` to one touch at (270, 227), the long press in the middle; each came again every 1.2 ms (1142 more lines within 5 s). So these frames are real touches with a stale status byte, and dropping them is why corners seemed insensitive and a long press did not register. Ending the read alone did not let the line go: the controller keeps it low while the finger rests.
+
+Fix (`kernel/patches/0002`, `end_bad_frames` for the CST226SE): a frame whose status byte holds the end-of-read mark and that reports one touch is reported as that touch (one finger, slot 0, coordinates and width from bytes 1–4); one that reports none releases all contacts; the read is ended and the next report waits about 10 ms, so a resting finger gives about 100 reports a second instead of about 800. Other rejected frames are logged with their first bytes, rate limited.
+
+A second test (2026-11-15 12:42, evtest on the panel) with this fix: every corner came through at the edge, (21, 8), (450, 8), (11, 471), (439, 471), and the long press lasted 5.4 s with 126 reports. But 1 ms after every release the controller sent the last frame once more, which became a 13 ms ghost touch at the same place, a second tap. The driver therefore ignores a frame without status that repeats the last contact's place within 60 ms after it went.
+
+Accuracy, with that fix (2026-11-15, the app's touch test view, `docs/bringup.md`): nine points 16 px from the edges and the middle, four rounds, touched in different ways (one round with the other hand, speeds varied, as in everyday use). Every point registered at the first touch, 36 of 36, and the event log shows no ghost touch (27 touches for the last 27 points; the shortest pause between two touches 391 ms). Offsets of the touch from the point:
+
+| | x | y |
+|---|---|---|
+| top row (12 touches) | +0.2 ± 4.1 px | −7.4 ± 2.5 px |
+| middle row (12) | −0.9 ± 10.6 px | +11.2 ± 13.7 px |
+| bottom row (12) | +2.1 ± 5.5 px | +7.2 ± 0.7 px |
+| all 36 | +0.5 ± 7.2 px | |
+
+The only systematic part is in y at the top and bottom edges: a touch there is reported 7–8 px nearer the edge, the same in every round and with either hand (y about 3 % stretched around the middle; x not). Everything else is where the finger landed. All of it is far below a fingertip (40–50 px). A calibration screen would therefore not help in everyday use; should other panels show the same edge shift, a fixed correction of y would remove it.
 
 ## GPIO and pin map (from the vendor device tree)
 

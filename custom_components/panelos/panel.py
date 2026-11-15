@@ -35,6 +35,7 @@ from .const import (
     CONF_TILES,
     CONF_WEATHER,
     CONF_ZOOM,
+    CONF_LOADING_SCREEN,
     DOMAIN,
     ENTITY_KEYS,
     ESPHOME_ENTITIES,
@@ -86,6 +87,7 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "show_sidebar": bool(options.get(CONF_SHOW_SIDEBAR, False)),
         "skip_resources": list(getattr(getattr(entry, "runtime_data", None), "skip", [])),
         "zoom": max(50, min(150, int(options.get(CONF_ZOOM, 100)))),
+        "loading_screen": bool(options.get(CONF_LOADING_SCREEN, True)),
         **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
 

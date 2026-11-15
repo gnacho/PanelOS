@@ -24,6 +24,7 @@ from .const import (
     CONF_TILES,
     CONF_WEATHER,
     CONF_ZOOM,
+    CONF_LOADING_SCREEN,
     DASHBOARD_FROM_PANEL,
     DEFAULT_PANEL_ID,
     DOMAIN,
@@ -68,6 +69,7 @@ def _dashboard_schema(hass: HomeAssistant, defaults: dict[str, Any], resources: 
                     min=50, max=150, step=5, unit_of_measurement="%", mode=selector.NumberSelectorMode.SLIDER
                 )
             ),
+            vol.Required(CONF_LOADING_SCREEN, default=defaults.get(CONF_LOADING_SCREEN, True)): bool,
             vol.Required(CONF_SKIP_UNUSED, default=defaults.get(CONF_SKIP_UNUSED, True)): bool,
             vol.Optional(CONF_KEEP_RESOURCES, default=defaults.get(CONF_KEEP_RESOURCES, [])): selector.SelectSelector(
                 selector.SelectSelectorConfig(

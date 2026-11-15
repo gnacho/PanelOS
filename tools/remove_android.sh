@@ -98,12 +98,16 @@ copy)
 test)
   copy_done || { echo "run the copy step first"; exit 1; }
   confirm "The panel restarts once from the boot partition (normal boot), then the recovery partition becomes the default again. If it does not come back within 5 minutes, power it off and on once; docs/restore.md has the rest."
-  on_panel 'nspanel-bootmode android >/dev/null && (sleep 1; reboot) >/dev/null 2>&1 </dev/null &'
+  old_boot=$(on_panel 'cat /proc/sys/kernel/random/boot_id')
+  # A plain reboot writes the "normal" reboot mode, so with the misc boot
+  # command cleared the bootloader starts the boot partition. Detached, or the
+  # restart dies with the SSH session.
+  on_panel 'nspanel-bootmode android >/dev/null && setsid sh -c "sleep 1; reboot" </dev/null >/dev/null 2>&1 &'
   echo "restarting from the boot partition..."
-  sleep 20
-  for _ in $(seq 1 56); do
-    if up=$(on_panel 'cut -d. -f1 /proc/uptime' 2>/dev/null) && [ "$up" -lt 600 ]; then
-      on_panel 'nspanel-bootmode status; echo "app $(pidof nspanel-app || echo "not running")"'
+  sleep 15
+  for _ in $(seq 1 57); do
+    if boot=$(on_panel 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null) && [ -n "$boot" ] && [ "$boot" != "$old_boot" ]; then
+      on_panel 'nspanel-bootmode status; echo "up $(cut -d. -f1 /proc/uptime) s, app $(pidof nspanel-app || echo "not running")"'
       on_panel 'nspanel-bootmode open'
       echo "PanelOS started from the boot partition; the default boot is the recovery partition again"
       exit 0
@@ -141,7 +145,7 @@ restore)
     echo "$p partition written and verified"
   done
   on_panel "mountpoint -q /mnt/data && umount /mnt/data; dd if=/dev/zero of=/dev/$DATA bs=1M count=4 2>/dev/null; sync"
-  on_panel 'nspanel-bootmode android && (sleep 1; reboot) >/dev/null 2>&1 </dev/null &'
+  on_panel 'nspanel-bootmode android && setsid sh -c "sleep 1; reboot" </dev/null >/dev/null 2>&1 &'
   echo "restarting into the stock firmware"
   ;;
 *)

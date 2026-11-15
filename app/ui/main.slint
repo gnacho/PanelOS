@@ -86,6 +86,11 @@ export component MainWindow inherits Window {
     in property <string> prox-test-details: "";
     in property <bool> prox-test-near: false;
     in property <string> prox-test-prompt: "";
+    // Touch test (development): nine points to touch one after the other.
+    in property <bool> touch-test: false;
+    in property <int> touch-test-step: 0;   // the point to touch now; 9 = all done
+    in property <string> touch-test-text: "";
+    callback touch-test-event(int, float, float);  // 0 down, 1 move, 2 up; screen coordinates
     property <bool> dashboard-visible: root.display-mode == 0 || root.show-dashboard;
     // Dashboard mode in the web view (the Home Assistant frontend); without
     // the web bundle the native dashboard below is shown.
@@ -453,6 +458,46 @@ export component MainWindow inherits Window {
                 color: #a0a0a0;
                 horizontal-alignment: center;
             }
+        }
+    }
+
+    // Touch test view: the points to touch on black; touches go nowhere else.
+    if root.touch-test: Rectangle {
+        background: #000000;
+        for p[i] in [
+            { x: 16, y: 16 }, { x: 240, y: 16 }, { x: 464, y: 16 },
+            { x: 464, y: 240 }, { x: 464, y: 464 }, { x: 240, y: 464 },
+            { x: 16, y: 464 }, { x: 16, y: 240 }, { x: 240, y: 240 },
+        ]: Rectangle {
+            property <bool> now: i == root.touch-test-step;
+            property <color> c: now ? #FF4A1C : i < root.touch-test-step ? #5a5a5a : #d8d8d8;
+            x: p.x * 1px - 14px;
+            y: p.y * 1px - 14px;
+            width: 28px;
+            height: 28px;
+            border-radius: 14px;
+            border-width: now ? 3px : 2px;
+            border-color: c;
+            Rectangle { x: 13px; y: 4px; width: 2px; height: 20px; background: c; }
+            Rectangle { x: 4px; y: 13px; width: 20px; height: 2px; background: c; }
+        }
+        Text {
+            y: 300px;
+            width: parent.width;
+            text: root.touch-test-text;
+            font-size: 20px;
+            color: #d8d8d8;
+            horizontal-alignment: center;
+        }
+        TouchArea {
+            pointer-event(ev) => {
+                if ev.kind == PointerEventKind.down {
+                    root.touch-test-event(0, self.mouse-x / 1px, self.mouse-y / 1px);
+                } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
+                    root.touch-test-event(2, self.mouse-x / 1px, self.mouse-y / 1px);
+                }
+            }
+            moved => { root.touch-test-event(1, self.mouse-x / 1px, self.mouse-y / 1px); }
         }
     }
 

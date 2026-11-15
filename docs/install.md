@@ -267,7 +267,20 @@ The other Android partitions stay as they are, unused. The way back to the stock
 
 Before you start: the backup of step 6 is on the computer (best with its restore test), and PanelOS has run for some days without trouble.
 
-> **Not tried on a panel yet.** The stock boot and recovery images have the same layout (Android boot image with its own kernel) and the stock bootloader loads both the same way; that PanelOS starts from the boot partition has not been tried on a panel yet. Treat steps 2–4 below as new.
+> **Tried on one panel so far** (2026-11-15, steps 1–4): PanelOS started from the boot partition and was on the network after 8 s, and after formatting `/mnt/data` was mounted at the next start by itself. Read the risks first.
+
+**Risks, and why they are small.** What speaks for it, checked on a backup of the stock firmware 3.0.0: the stock boot and recovery images have the same layout (Android boot image version 0, page 2048, each with its own kernel and the same second stage); the stock bootloader's start command (`boot_android`, then `bootrkp`, then the distro boot) loads both partitions with the same code; it has no verified boot (no AVB, no signature check of the boot partition) and passes no `skip_initramfs`; the image that goes to the boot partition is the very one that already runs from recovery, byte for byte, and it fits (30.7 MB of 32 MiB).
+
+| Risk | When | What happens | Way out |
+|---|---|---|---|
+| PanelOS does not start from the boot partition | step 3, the one test start | the panel keeps restarting the boot partition | unplug for 10 s; if it still does not start, the USB route of [restore.md](restore.md) case C: the panel has to be opened for its BOOT button. This is the one risk that can need opening the panel. |
+| Power cut while writing the boot partition | step 2 (a few seconds) | the boot partition is half written; the default boot still starts PanelOS from recovery | run step 2 again |
+| Power cut while formatting | step 4 | the new data partition is unusable | run step 4 again |
+| Both partitions hold a broken image | later, only if a bad image is written to both | no system starts | [restore.md](restore.md) case C (opening the panel). Copy an image to the boot partition only after it has proven itself (see "Updating later"). |
+| The stock firmware is gone | from step 2 | the panel cannot go back to Sonoff's firmware by itself | the backup of step 6, written by PanelOS ([restore.md](restore.md) case D); the stock firmware then starts like after a factory reset. Keep the backup safe: without it there is no way back to the stock firmware. |
+| A bigger image does not fit | later updates | the second copy cannot be refreshed | `tools/build_image.sh` warns when an image is larger than the boot partition |
+
+Today, while the stock Android is on the panel, a PanelOS that does not start at all needs the same USB route; what step 14 changes is that the stock Android is no longer the fallback, the second PanelOS copy is.
 
 1. See what is on the panel (changes nothing):
 

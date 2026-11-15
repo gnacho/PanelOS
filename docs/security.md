@@ -54,6 +54,7 @@ These stay on while PanelOS is in development; they make testing and debugging p
 | `SIGUSR1` | screenshot to `/tmp/nspanel-screen.ppm` | may capture a message or a camera |
 | `/tmp/nspanel-voice-test.wav`, `/tmp/nspanel-voice-followup.wav` | sent to Home Assistant as speech instead of the microphones | root only |
 | `/tmp/nspanel-proximity-test` | proximity test view (`docs/bringup.md`) | root only |
+| `/tmp/nspanel-touch-test` | touch test view (`docs/bringup.md`) | root only |
 | `NSPANEL_API_DEBUG`, `NSPANEL_AEC_DUMP` | API message log, microphone dump | root only |
 | `NSPANEL_WEB_STATS`, `NSPANEL_DEV_DARK`, `WEBKIT_*` | web view frame timing in the log; backlight kept off; WebKit's own switches passed to the web helper | root only |
 | `/mnt/persist/panelos-web-data/console-log` | the dashboard web view writes the page's console messages to the log | dashboard details in `/var/log/messages` (RAM) |
