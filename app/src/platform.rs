@@ -1,6 +1,8 @@
-//! Slint platform for the panel: the software renderer draws into the DRM
-//! back buffer, touch comes from evdev, and one poll(2) loop waits for page
-//! flips, touch input, work sent from other threads and the next Slint timer.
+//! Slint platform for the panel: the renderer draws the UI (the software
+//! renderer into the DRM back buffer, or with the `gpu` feature Skia on the
+//! GPU into a GBM surface), touch comes from evdev, and one poll(2) loop waits
+//! for page flips, touch input, work sent from other threads and the next
+//! Slint timer.
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -10,11 +12,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(not(feature = "gpu"))]
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::platform::{EventLoopProxy, Platform, PointerEventButton, WindowAdapter, WindowEvent};
 use slint::{EventLoopError, LogicalPosition, PlatformError};
 
 use crate::display::Display;
+
+/// The window the UI draws into.
+#[cfg(not(feature = "gpu"))]
+pub type UiWindow = MinimalSoftwareWindow;
+#[cfg(feature = "gpu")]
+pub type UiWindow = crate::gpu::GpuWindow;
 use crate::touch::{Touch, TouchEvent};
 
 type Job = Box<dyn FnOnce() + Send>;
@@ -71,6 +80,12 @@ fn web_direct_now() -> bool {
         }
         now
     })
+}
+
+/// A web buffer left the screen (seen while the GPU renderer waited for a flip).
+#[allow(dead_code)]
+pub fn web_buffer_freed(i: usize) {
+    WEB_FREED.lock().unwrap().push(i);
 }
 
 fn web_release(list: &[usize]) {
@@ -175,9 +190,9 @@ impl EventLoopProxy for Wakeup {
 }
 
 pub struct PanelPlatform {
-    window: Rc<MinimalSoftwareWindow>,
+    window: Rc<UiWindow>,
     start: Instant,
-    display: RefCell<Display>,
+    display: Rc<RefCell<Display>>,
     touch: RefCell<Option<Touch>>,
     wakeup: Wakeup,
     /// Development: FIFO with lines "tap x y" / "down x y" / "move x y" / "up x y"
@@ -189,7 +204,7 @@ pub struct PanelPlatform {
 }
 
 impl PanelPlatform {
-    pub fn new(window: Rc<MinimalSoftwareWindow>, display: Display, touch: Option<Touch>) -> Self {
+    pub fn new(window: Rc<UiWindow>, display: Rc<RefCell<Display>>, touch: Option<Touch>) -> Self {
         let dev_input = std::env::var("NSPANEL_DEV_INPUT").ok().and_then(|path| {
             let c = std::ffi::CString::new(path).ok()?;
             // SAFETY: mkfifo/open on a C string path.
@@ -203,7 +218,7 @@ impl PanelPlatform {
         Self {
             window,
             start: Instant::now(),
-            display: RefCell::new(display),
+            display,
             touch: RefCell::new(touch),
             wakeup: Wakeup::new(),
             dev_input,
@@ -229,6 +244,96 @@ impl PanelPlatform {
         if let TouchEvent::Up(..) = event {
             self.window.dispatch_event(WindowEvent::PointerExited);
         }
+    }
+
+    /// Pictures of the screen asked for by SIGUSR1 (development) and by `request_screen`.
+    fn serve_screen_requests(&self) {
+        let shot = SCREENSHOT.swap(false, Ordering::SeqCst);
+        let mut sinks = SCREEN_REQUESTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+        if shot {
+            sinks.push(Box::new(|w, h, rgb| {
+                use std::io::Write;
+                let mut out = Vec::with_capacity(rgb.len() + 32);
+                let _ = write!(out, "P6\n{w} {h}\n255\n");
+                out.extend_from_slice(&rgb);
+                if let Err(e) = std::fs::write("/tmp/nspanel-screen.ppm", out) {
+                    eprintln!("nspanel-app: screenshot failed: {e}");
+                }
+            }));
+        }
+        if sinks.is_empty() {
+            return;
+        }
+        // The software renderer's front buffer, or a web buffer on screen, can be
+        // read directly; a GPU frame is read back when the next one is drawn.
+        let direct = cfg!(not(feature = "gpu")) || self.display.borrow().web_on_screen().is_some();
+        if direct {
+            let (w, h, rgb) = self.display.borrow().front_rgb();
+            for sink in sinks {
+                sink(w, h, rgb.clone());
+            }
+            return;
+        }
+        #[cfg(feature = "gpu")]
+        for sink in sinks {
+            crate::gpu::read_back_next_frame(sink);
+        }
+    }
+
+    /// Draws the UI, or shows the newest web frame straight from its buffer while
+    /// the web view is all there is on the screen.
+    fn draw(&self, direct: bool, freed: &mut Vec<usize>) -> Result<(), PlatformError> {
+        let started = crate::webstats::now_us();
+        let flip_pending = self.display.borrow().flip_pending();
+        // A picture of the screen is asked for while the UI's own (GPU) frame is
+        // still on screen: draw one UI frame to read it back.
+        #[cfg(feature = "gpu")]
+        let direct = direct && !(crate::gpu::readback_pending() && self.display.borrow().web_on_screen().is_none());
+        if direct {
+            if flip_pending {
+                return Ok(());
+            }
+            let next = WEB_NEXT.lock().unwrap().take();
+            if let Some((i, times)) = next {
+                // The helper's buffer straight to the screen.
+                crate::webstats::frame_on_ui(times);
+                let shown = self.display.borrow_mut().show_web(i);
+                match shown {
+                    Ok(()) => crate::webstats::drawn(started),
+                    Err(e) => {
+                        eprintln!("nspanel-app: web frame to the screen: {e}");
+                        freed.push(i);
+                    }
+                }
+            }
+            return Ok(());
+        }
+        if let Some((i, _)) = WEB_NEXT.lock().unwrap().take() {
+            freed.push(i);
+        }
+        #[cfg(not(feature = "gpu"))]
+        {
+            if flip_pending {
+                return Ok(());
+            }
+            let mut display = self.display.borrow_mut();
+            let drawn = self.window.draw_if_needed(|renderer| {
+                let (buffer, stride) = display.back_buffer();
+                renderer.render(buffer, stride);
+            });
+            if drawn {
+                display.flip().map_err(platform_error)?;
+                crate::webstats::drawn(started);
+            }
+        }
+        #[cfg(feature = "gpu")]
+        {
+            let _ = flip_pending;
+            if self.window.draw_if_needed()? {
+                crate::webstats::drawn(started);
+            }
+        }
+        Ok(())
     }
 
     fn read_dev_input(&self, fd: RawFd) -> Vec<TouchEvent> {
@@ -313,18 +418,7 @@ impl Platform for PanelPlatform {
             if self.wakeup.quit.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            if SCREENSHOT.swap(false, Ordering::SeqCst) {
-                if let Err(e) = self.display.borrow().dump_front("/tmp/nspanel-screen.ppm") {
-                    eprintln!("nspanel-app: screenshot failed: {e}");
-                }
-            }
-            let sinks = SCREEN_REQUESTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
-            if !sinks.is_empty() {
-                let (w, h, rgb) = self.display.borrow().front_rgb();
-                for sink in sinks {
-                    sink(w, h, rgb.clone());
-                }
-            }
+            self.serve_screen_requests();
             // Swipe from the development input: the touches that are due.
             loop {
                 let due = {
@@ -344,44 +438,7 @@ impl Platform for PanelPlatform {
 
             let direct = web_direct_now();
             let mut freed = std::mem::take(&mut *WEB_FREED.lock().unwrap());
-            {
-                let mut display = self.display.borrow_mut();
-                if !display.flip_pending() {
-                    let started = crate::webstats::now_us();
-                    let next = WEB_NEXT.lock().unwrap().take();
-                    match (direct, next) {
-                        (true, Some((i, times))) => {
-                            // The helper's buffer straight to the screen.
-                            crate::webstats::frame_on_ui(times);
-                            match display.show_web(i) {
-                                Ok(()) => crate::webstats::drawn(started),
-                                Err(e) => {
-                                    eprintln!("nspanel-app: web frame to the screen: {e}");
-                                    freed.push(i);
-                                }
-                            }
-                        }
-                        (true, None) => {}
-                        (false, next) => {
-                            if let Some((i, _)) = next {
-                                freed.push(i);
-                            }
-                            let drawn = self.window.draw_if_needed(|renderer| {
-                                let (buffer, stride) = display.back_buffer();
-                                renderer.render(buffer, stride);
-                            });
-                            if drawn {
-                                display.flip().map_err(platform_error)?;
-                                crate::webstats::drawn(started);
-                            }
-                        }
-                    }
-                } else if !direct {
-                    if let Some((i, _)) = WEB_NEXT.lock().unwrap().take() {
-                        freed.push(i);
-                    }
-                }
-            }
+            self.draw(direct, &mut freed)?;
             web_release(&freed);
 
             let flip_pending = self.display.borrow().flip_pending();
@@ -389,7 +446,15 @@ impl Platform for PanelPlatform {
             let mut timeout_ms: i32 = if web_waiting {
                 0
             } else if self.window.has_active_animations() {
-                if flip_pending { -1 } else { 16 }
+                // GPU: the next frame is drawn while this one waits for its flip
+                // (the renderer blocks before its swap), so draw again at once.
+                if cfg!(feature = "gpu") {
+                    0
+                } else if flip_pending {
+                    -1
+                } else {
+                    16
+                }
             } else {
                 match slint::platform::duration_until_next_timer_update() {
                     Some(d) => d.as_millis().min(i32::MAX as u128) as i32,
@@ -424,6 +489,8 @@ impl Platform for PanelPlatform {
                 let released = self.display.borrow_mut().handle_events().map_err(platform_error)?;
                 if was_pending && !self.display.borrow().flip_pending() {
                     crate::webstats::flipped();
+                    #[cfg(feature = "gpu")]
+                    self.window.flipped();
                 }
                 if let Some(i) = released {
                     web_release(&[i]);

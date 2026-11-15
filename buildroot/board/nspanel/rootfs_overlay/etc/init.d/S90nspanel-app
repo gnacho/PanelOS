@@ -1,26 +1,61 @@
 #!/bin/sh
-# Panel app: draws the Home Assistant dashboard. Restarted when it exits;
-# its output goes to syslog (and from there to pstore, see S98logforward).
+# Panel app. Restarted when it exits; its output goes to syslog (and from
+# there to pstore, see S98logforward).
+#
+# With the UI bundle (/opt/panelos-ui, S51panelos-ui) and the web bundle's GPU
+# libraries (/opt/panelos-web, S50panelos-web) the bundle's app runs, drawing
+# on the GPU. Otherwise, and after three starts of it in a row that ended
+# within 30 s (until the next reboot), the app in the image runs, which draws
+# with the software renderer.
 
-DAEMON=/usr/bin/nspanel-app
+IMAGE_APP=/usr/bin/nspanel-app
+GPU_APP=/opt/panelos-ui/bin/nspanel-app
+WEB=/opt/panelos-web
 PIDFILE=/var/run/nspanel-app-supervisor.pid
+GPU_OFF=/tmp/nspanel-gpu-off
+
+use_gpu() {
+	[ -x "$GPU_APP" ] && [ -e "$WEB/usr/lib/libgbm.so.1" ] && [ ! -e "$GPU_OFF" ]
+}
 
 case "$1" in
 start)
-	[ -x "$DAEMON" ] || exit 0
+	[ -x "$IMAGE_APP" ] || [ -x "$GPU_APP" ] || exit 0
 	(
+		fails=0
 		while true; do
-			{ "$DAEMON"; echo "$?" > /tmp/nspanel-app.status; } 2>&1 | logger -t nspanel-app
-			echo "<4>nspanel-app: exited (status $(cat /tmp/nspanel-app.status 2>/dev/null)), restarting in 2 s" > /dev/kmsg
+			started=$(cut -d. -f1 /proc/uptime)
+			if use_gpu; then
+				kind=gpu
+				# The web bundle's libraries (Mesa and what it needs); the app
+				# clears LD_LIBRARY_PATH for the programs it starts itself.
+				{ LD_LIBRARY_PATH=$WEB/usr/lib GBM_BACKENDS_PATH=$WEB/usr/lib/gbm \
+					LIBGL_DRIVERS_PATH=$WEB/usr/lib/dri "$GPU_APP"; echo "$?" > /tmp/nspanel-app.status; } 2>&1 | logger -t nspanel-app
+			else
+				kind=image
+				{ "$IMAGE_APP"; echo "$?" > /tmp/nspanel-app.status; } 2>&1 | logger -t nspanel-app
+			fi
+			ran=$(( $(cut -d. -f1 /proc/uptime) - started ))
+			echo "<4>nspanel-app: $kind app exited (status $(cat /tmp/nspanel-app.status 2>/dev/null)) after ${ran} s, restarting in 2 s" > /dev/kmsg
+			if [ "$kind" = gpu ]; then
+				if [ "$ran" -lt 30 ]; then fails=$((fails + 1)); else fails=0; fi
+				if [ "$fails" -ge 3 ]; then
+					touch "$GPU_OFF"
+					echo "<3>nspanel-app: the GPU app ended within 30 s three times, using the image app until reboot" > /dev/kmsg
+				fi
+			fi
 			sleep 2
 		done
 	) &
 	echo $! > "$PIDFILE"
 	;;
 stop)
-	[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null
+	# Every supervisor (a stop that missed one would leave two running).
+	for p in $(ps | grep -v grep | grep 'S90nspanel-app start' | awk '{print $1}'); do
+		[ "$p" != "$$" ] && kill "$p" 2>/dev/null
+	done
 	rm -f "$PIDFILE"
-	p=$(pidof nspanel-app) && kill $p
+	for p in $(pidof nspanel-app); do kill "$p"; done
 	;;
 restart | reload)
 	"$0" stop

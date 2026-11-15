@@ -14,6 +14,8 @@ mod config;
 mod dashboard;
 mod display;
 mod esphome;
+#[cfg(feature = "gpu")]
+mod gpu;
 mod ha;
 mod hw;
 mod icons;
@@ -40,6 +42,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+#[cfg(not(feature = "gpu"))]
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
@@ -1516,6 +1519,11 @@ fn on_setting(ui: &MainWindow, key: &str, value: &str, camera: &CameraControl) {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The GPU build runs with the web bundle's libraries (LD_LIBRARY_PATH from
+    // the init script; the loader keeps its own copy for later dlopen calls).
+    // Programs the app starts (wpa_cli, iw, the web helper) use their own.
+    #[cfg(feature = "gpu")]
+    std::env::remove_var("LD_LIBRARY_PATH");
     if std::env::var_os("TZ").is_none() {
         std::env::set_var("TZ", DEFAULT_TZ);
     }
@@ -1567,14 +1575,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The boot splash owns the display until now: it shows the finished logo,
     // gives up DRM master and keeps the picture until this app has drawn.
     let splash = splash_handoff();
-    let mut display = display::Display::open("/dev/dri/card0")?;
+    let display = Rc::new(std::cell::RefCell::new(display::Display::open("/dev/dri/card0")?));
     // Display buffers the web helper renders into while the web view is all
     // there is on the screen.
-    match display.create_web_buffers(3) {
+    let web_buffers = display.borrow_mut().create_web_buffers(3);
+    match web_buffers {
         Ok(buffers) => web::set_scanout_buffers(buffers),
         Err(e) => eprintln!("nspanel-app: no display buffers for the web view: {e}"),
     }
-    let (width, height) = (display.width, display.height);
+    let (width, height) = (display.borrow().width, display.borrow().height);
     let touch = match touch::Touch::open() {
         Ok(t) => {
             eprintln!("nspanel-app: touch input: {}", t.name);
@@ -1586,8 +1595,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
-    window.set_size(slint::PhysicalSize::new(width, height));
+    #[cfg(not(feature = "gpu"))]
+    let window = {
+        let window = MinimalSoftwareWindow::new(RepaintBufferType::SwappedBuffers);
+        window.set_size(slint::PhysicalSize::new(width, height));
+        window
+    };
+    #[cfg(feature = "gpu")]
+    let window = {
+        let _ = (width, height);
+        gpu::GpuWindow::new(Rc::clone(&display)).map_err(|e| format!("GPU renderer: {e}"))?
+    };
     slint::platform::set_platform(Box::new(platform::PanelPlatform::new(Rc::clone(&window), display, touch)))
         .map_err(|e| format!("set_platform: {e:?}"))?;
 

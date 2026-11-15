@@ -1435,6 +1435,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "gbm"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce852e998d3ca5e4a97014fb31c940dc5ef344ec7d364984525fd11e8a547e6a"
+dependencies = [
+ "bitflags 2.13.2",
+ "drm 0.14.1",
+ "drm-fourcc",
+ "gbm-sys",
+ "libc",
+]
+
+[[package]]
+name = "gbm-sys"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13a5f2acc785d8fb6bf6b7ab6bfb0ef5dad4f4d97e8e70bb8e470722312f76f"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2835,7 +2857,12 @@ version = "0.0.4"
 dependencies = [
  "alsa",
  "cc",
+ "drm 0.14.1",
  "drm 0.15.0",
+ "gbm",
+ "glow",
+ "glutin",
+ "i-slint-renderer-skia",
  "jpeg-decoder",
  "libc",
  "minimp3",
@@ -2844,6 +2871,7 @@ dependencies = [
  "prost-build",
  "protox",
  "qrcode",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "slint",

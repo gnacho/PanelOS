@@ -1,0 +1,39 @@
+#!/bin/sh
+# UI bundle: the panel app built for the GPU together with the pictures and
+# fonts of its pages, a SquashFS image on the data partition (or on the
+# persistent one), mounted at /opt/panelos-ui. It runs with the GPU libraries
+# of the web bundle (/opt/panelos-web). Without both bundles the app in the
+# image draws its system screens with the software renderer.
+#
+# Development: a directory /mnt/data/panelos-ui-dev with the same layout
+# (bin/nspanel-app, share/...) is used instead of an image when it exists.
+
+ROOT=/opt/panelos-ui
+DEV=/mnt/data/panelos-ui-dev
+
+log() { echo "<5>panelos-ui: $*" > /dev/kmsg; }
+
+case "$1" in
+start)
+	mkdir -p "$ROOT"
+	mountpoint -q "$ROOT" && exit 0
+	if [ -x "$DEV/bin/nspanel-app" ]; then
+		mount --bind "$DEV" "$ROOT" && log "UI from $DEV (development)"
+		exit 0
+	fi
+	for IMG in /mnt/data/panelos-ui.squashfs /mnt/persist/panelos-ui.squashfs; do
+		if [ -f "$IMG" ]; then
+			if mount -t squashfs -o loop,ro "$IMG" "$ROOT"; then
+				log "UI bundle mounted from $IMG"
+			else
+				log "cannot mount $IMG"
+			fi
+			exit 0
+		fi
+	done
+	;;
+stop)
+	mountpoint -q "$ROOT" && umount "$ROOT"
+	;;
+esac
+exit 0

@@ -57,6 +57,9 @@ enum Shown {
     Own,
     /// A buffer the web helper rendered into.
     Web(usize),
+    /// A buffer of the GPU renderer's GBM surface (feature `gpu`).
+    #[allow(dead_code)]
+    Gbm,
 }
 
 struct WebBuffer {
@@ -182,8 +185,31 @@ impl Display {
     pub fn web_on_screen(&self) -> Option<usize> {
         match self.shown {
             Shown::Web(i) => Some(i),
-            Shown::Own => None,
+            _ => None,
         }
+    }
+
+    /// A second descriptor of the DRM device (for the GPU renderer's GBM device).
+    #[allow(dead_code)]
+    pub fn dup_fd(&self) -> io::Result<OwnedFd> {
+        Ok(OwnedFd::from(self.card.0.try_clone()?))
+    }
+
+    /// Shows framebuffer `fb` (a GPU renderer buffer, by its DRM id) at the next vertical blank.
+    #[allow(dead_code)]
+    pub fn flip_raw(&mut self, fb: u32) -> io::Result<()> {
+        let handle: framebuffer::Handle =
+            drm::control::from_u32(fb).ok_or_else(|| io::Error::other("invalid framebuffer id"))?;
+        self.card.page_flip(self.crtc, handle, PageFlipFlags::EVENT, None)?;
+        self.flip_pending = true;
+        self.next = Some(Shown::Gbm);
+        Ok(())
+    }
+
+    /// Whether a GPU renderer buffer is on screen.
+    #[allow(dead_code)]
+    pub fn gbm_on_screen(&self) -> bool {
+        self.shown == Shown::Gbm
     }
 
     pub fn fd(&self) -> RawFd {
@@ -223,7 +249,8 @@ impl Display {
     pub fn front_rgb(&self) -> (u32, u32, Vec<u8>) {
         let front: &[Xrgb8888] = match self.shown {
             Shown::Web(i) => self.web[i].pixels,
-            Shown::Own => &self.pixels[self.back ^ 1],
+            // GPU buffers are read back by the renderer (gpu::read_back_next_frame).
+            Shown::Own | Shown::Gbm => &self.pixels[self.back ^ 1],
         };
         let (w, h) = (self.width as usize, self.height as usize);
         let mut out = Vec::with_capacity(w * h * 3);
