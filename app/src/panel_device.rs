@@ -56,8 +56,14 @@ pub fn device_info(mac: &str) -> Value {
         "model": MODEL,
         "sw_version": env!("CARGO_PKG_VERSION"),
         "mac": mac,
+        // what this panel can do (the integration offers only these)
+        "caps": CAPS,
     })
 }
+
+/// Touch screen, pictures and animation, web view, live video, microphone, speaker, proximity and
+/// light sensors.
+pub const CAPS: [&str; 8] = ["touch", "images", "web", "video", "mic", "speaker", "proximity", "light"];
 
 /// Options of the select entities.
 pub fn options(s: &DeviceState) -> Map<String, Value> {

@@ -26,6 +26,9 @@ pub type UiWindow = MinimalSoftwareWindow;
 pub type UiWindow = crate::gpu::GpuWindow;
 use crate::touch::{Touch, TouchEvent};
 
+/// The touch calibration's correction in screen pixels (subtracted from every finger position).
+pub static TOUCH_OFFSET: std::sync::Mutex<(f32, f32)> = std::sync::Mutex::new((0.0, 0.0));
+
 type Job = Box<dyn FnOnce() + Send>;
 
 /// Set by SIGUSR1: write the current screen to /tmp/nspanel-screen.ppm.
@@ -225,6 +228,27 @@ impl PanelPlatform {
             dev_buf: RefCell::new(String::new()),
             gesture: RefCell::new(VecDeque::new()),
         }
+    }
+
+    /// A finger on the touch screen: the calibration's correction applied (set when the panel's
+    /// touch test found a systematic offset).
+    fn dispatch_finger(&self, event: TouchEvent) {
+        let (dx, dy) = *TOUCH_OFFSET.lock().unwrap();
+        let fix = |x: f32, y: f32| ((x - dx).clamp(0.0, 479.0), (y - dy).clamp(0.0, 479.0));
+        self.dispatch_touch(match event {
+            TouchEvent::Down(x, y) => {
+                let (x, y) = fix(x, y);
+                TouchEvent::Down(x, y)
+            }
+            TouchEvent::Move(x, y) => {
+                let (x, y) = fix(x, y);
+                TouchEvent::Move(x, y)
+            }
+            TouchEvent::Up(x, y) => {
+                let (x, y) = fix(x, y);
+                TouchEvent::Up(x, y)
+            }
+        });
     }
 
     fn dispatch_touch(&self, event: TouchEvent) {
@@ -504,7 +528,7 @@ impl Platform for PanelPlatform {
             if fds[1].revents & libc::POLLIN != 0 {
                 let events = self.touch.borrow_mut().as_mut().map(|t| t.read_events()).unwrap_or_default();
                 for event in events {
-                    self.dispatch_touch(event);
+                    self.dispatch_finger(event);
                 }
             }
 

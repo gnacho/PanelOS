@@ -172,8 +172,11 @@ export component SettingsLayer inherits Rectangle {
         Text { x: 60px; y: 12px; height: 34px; text: root.title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
         Icon { x: parent.width - 48px; y: 10px; width: 36px; height: 36px; text: "\u{F0156}"; font-size: 24px; color: Brand.muted;
             TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("shade.close", ""); } } }
+        // the rows scroll when they are more than fit above the tagline
+        Flickable { x: 0; y: 56px; width: parent.width; height: parent.height - 56px - 40px;
+            content-height: max(self.height, root.rows.length * 48px);
         for r[i] in root.rows: Rectangle {
-            x: 16px; y: 56px + i * 48px; width: parent.width - 32px; height: 44px; border-radius: 12px;
+            x: 16px; y: i * 48px; width: parent.width - 32px; height: 44px; border-radius: 12px;
             background: row-touch.pressed ? Brand.raised : Brand.surface;
             row-touch := TouchArea { clicked => { Act.act("set.row", i); } }
             Icon { x: 12px; y: 0; width: 26px; height: parent.height; text: r.icon; font-size: 21px; color: r.danger ? Brand.signal : Brand.text; }
@@ -182,6 +185,9 @@ export component SettingsLayer inherits Rectangle {
                 vertical-alignment: center; overflow: elide; }
             if !r.danger: Icon { x: parent.width - 30px; y: 0; width: 22px; height: parent.height; text: "\u{F0142}"; font-size: 20px; color: Brand.muted; }
         }
+        }
+        if root.rows.length * 48px > root.height - 96px: Rectangle { x: 0; y: root.height - 40px - 24px; width: root.width; height: 24px;
+            background: @linear-gradient(180deg, Brand.bg.with-alpha(0) 0%, Brand.bg 100%); }
         Text { x: 16px; y: parent.height - 30px; width: parent.width - 32px; text: root.tagline; font-size: 12px; color: Brand.muted; horizontal-alignment: center; }
         // ------------------------------------------------------------------ 5 restart: are you sure
         if root.view == 5: Rectangle { background: #000000a6;

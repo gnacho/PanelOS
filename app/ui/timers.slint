@@ -293,14 +293,16 @@ export component TimersPage inherits Rectangle {
     // alarm editor (new alarm or a tap on one) and its keyboard for the label
     in property <bool> edit;
     in property <bool> edit-new: true;
-    in property <int> edit-h: 6;
-    in property <int> edit-m: 45;
+    in-out property <int> edit-h: 6;
+    in-out property <int> edit-m: 45;
     in property <[bool]> edit-days: [true, true, true, true, true, false, false];
     in property <string> edit-label;
     in property <int> edit-sound;          // index into sounds; sounds.length = the one set in Home Assistant
     in property <string> edit-ha-sound;    // a sound set in Home Assistant for this alarm (music or own file), "" none
     in property <bool> edit-keyboard;
     in property <bool> edit-info;          // the ⓘ note on sounds
+    in property <bool> ha-sounds;
+    in property <bool> edit-timer;         // the editor sets a new timer (hours, minutes, label)          // sounds picked in Home Assistant reach the panel (the ⓘ shows then)
     in property <int> kb-layer;
     in property <color> edit-tint: #ffb21e;
     property <[string]> sounds: ["Rise and Shine", "Up and At 'Em", "Early Bird", "Saved by the Bell", "Old School", "Neon Sunrise"];
@@ -317,6 +319,7 @@ export component TimersPage inherits Rectangle {
     property <TimerItem> cur: root.n > 0 ? root.timers[min(root.pick, root.n - 1)] : { label: "", remaining: 0, total: 1, running: false, tint: #e8262d };
     property <float> fr: root.cur.total > 0 ? root.cur.remaining / root.cur.total : 0;
     property <bool> synth: !root.ringing && root.mode == 1 && root.theme == 3;
+    property <bool> synth-quick: root.synth && root.n == 0;
     property <[color]> sw-rings: [#ff2a6d, #ffd319, #ff8b3d, #c86bfa, #00e5ff, #ff2e88, #f9f871, #8a5cff,
                                   #ff6ec7, #00f0c8, #ffb86b, #a17bff, #7df9ff, #b967ff, #01ffc3, #ff71ce];
     property <[color]> sw-grids: [#ff2bd6, #00e5ff, #00f0c8, #b967ff];
@@ -484,6 +487,7 @@ export component TimersPage inherits Rectangle {
 
         // one timer: a big tube, the controls at the bottom
         if root.n == 1: Rectangle {
+            cache-rendering-hint: true;   // over the moving scene: drawn once a second, not every frame
             property <TimerItem> t: root.timers[0];
             property <color> g: root.sw-rings[root.sw-scene * 4];
             NeonRing { x: (root.width - 212px) / 2; y: root.top + 8px; width: 212px; height: 212px; stroke: 8px; glow: parent.g; paused: !parent.t.running;
@@ -498,6 +502,7 @@ export component TimersPage inherits Rectangle {
         }
         // two timers: tubes side by side, small controls under each
         if root.n == 2: Rectangle {
+            cache-rendering-hint: true;   // over the moving scene: drawn once a second, not every frame
             for t[i] in root.timers: tc := Rectangle {
                 property <color> g: root.sw-rings[root.sw-scene * 4 + i];
                 x: 22px + i * 230px; y: root.top + 12px; width: 206px; height: 300px;
@@ -514,6 +519,7 @@ export component TimersPage inherits Rectangle {
         }
         // three or four: a grid of smaller tubes
         if root.n >= 3: Rectangle {
+            cache-rendering-hint: true;   // over the moving scene: drawn once a second, not every frame
             for c in 4: scell := Rectangle {
                 x: 20px + Math.mod(c, 2) * 224px; y: root.top + Math.floor(c / 2) * 176px; width: 216px; height: 168px;
                 property <bool> has: c < root.n;
@@ -536,24 +542,29 @@ export component TimersPage inherits Rectangle {
 
     // ---------------------------------------------------------------- no timer: quick starts
     if !root.ringing && root.mode == 1 && (root.n == 0 || root.quick): Rectangle {
+        cache-rendering-hint: true;
         background: root.n > 0 ? Theme.background : transparent;
         if root.n > 0: TouchArea { clicked => { Act.act("timers.quick-close", ""); } }
-        Rectangle { x: (root.width - 80px) / 2; y: root.top + 18px; width: 80px; height: 80px; border-radius: 40px; background: TFg.c.with-alpha(0.05);
-            Icon { width: parent.width; height: parent.height; text: "\u{F13AB}"; font-size: 42px; color: TFg.c.with-alpha(0.40); } }
-        Text { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
+        Rectangle { x: (root.width - 80px) / 2; y: root.top + 18px; width: 80px; height: 80px; border-radius: 40px; background: root.synth-quick ? #0000008c : TFg.c.with-alpha(0.05);
+            Icon { width: parent.width; height: parent.height; text: "\u{F13AB}"; font-size: 42px; color: root.synth-quick ? #ffffffcc : TFg.c.with-alpha(0.40); } }
+        Text { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; color: root.synth-quick ? #ffffffd9 : TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
         for m[i] in [1, 3, 5, 10, 15, 30]: Rectangle {
             x: 60px + Math.mod(i, 3) * 124px; y: root.top + 150px + Math.floor(i / 3) * 62px; width: 112px; height: 54px; border-radius: 27px;
-            background: qs-touch.pressed ? TFg.c.with-alpha(0.2) : TFg.c.with-alpha(0.10);
+            background: root.synth-quick ? (qs-touch.pressed ? #000000b3 : #0000008c) : (qs-touch.pressed ? TFg.c.with-alpha(0.2) : TFg.c.with-alpha(0.10));
+            border-width: root.synth-quick ? 1px : 0px; border-color: root.grid.with-alpha(0.55);
             qs-touch := TouchArea { clicked => { Act.act("timers.start", m * 60); } }
-            Text { width: parent.width; height: parent.height; text: m + " min"; font-size: 18px; font-weight: 600; color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
+            Text { width: parent.width; height: parent.height; text: m + " min"; font-size: 18px; font-weight: 600; color: root.synth-quick ? #ffffff : TFg.c; horizontal-alignment: center; vertical-alignment: center; }
         }
-        Rectangle { x: (root.width - 54px) / 2; y: root.top + 290px; width: 54px; height: 54px; border-radius: 27px; border-width: 1.5px; border-color: TFg.c.with-alpha(0.30);
-            Icon { width: parent.width; height: parent.height; text: "\u{F0415}"; font-size: 26px; color: TFg.c.with-alpha(0.80); } }
+        Rectangle { x: (root.width - 54px) / 2; y: root.top + 290px; width: 54px; height: 54px; border-radius: 27px;
+            border-width: 1.5px; border-color: root.synth-quick ? root.grid.with-alpha(0.55) : TFg.c.with-alpha(0.30); background: root.synth-quick ? #0000008c : transparent;
+            Icon { width: parent.width; height: parent.height; text: "\u{F0415}"; font-size: 26px; color: root.synth-quick ? #ffffff : TFg.c.with-alpha(0.80); }
+            TouchArea { clicked => { Act.act("timers.new", ""); } } }
     }
 
     // ---------------------------------------------------------------- alarms
     if !root.ringing && root.mode == 0: Rectangle {
         Rectangle { x: root.width - 20px - 44px; y: root.top; width: 44px; height: 44px; border-radius: 22px; border-width: 1.5px; border-color: TFg.c.with-alpha(0.30);
+            TouchArea { clicked => { Act.act("alarms.new", ""); } }
             Icon { width: parent.width; height: parent.height; text: "\u{F0415}"; font-size: 24px; color: TFg.c.with-alpha(0.80); } }
         Rectangle {
             x: 20px; y: root.top; width: root.width - 40px - 52px; height: 44px; border-radius: 22px; background: TFg.c.with-alpha(0.05);
@@ -567,6 +578,7 @@ export component TimersPage inherits Rectangle {
             content-height: max(self.height, root.alarms.length * 78px);
         for a[i] in root.alarms: Rectangle {
             x: 20px; y: i * 78px; width: root.width - 40px; height: 70px; border-radius: 18px; background: TFg.c.with-alpha(0.04);
+            TouchArea { clicked => { Act.act("alarms.edit", i); } }
             Rectangle { x: 0; y: 14px; width: 4px; height: parent.height - 28px; border-radius: 2px; background: a.on ? a.tint : TFg.c.with-alpha(0.15); }
             Text { x: 18px; y: 0; width: 120px; height: parent.height; text: a.time; font-size: 34px; font-weight: 600; color: a.on ? TFg.c : TFg.c.with-alpha(0.35); vertical-alignment: center; }
             Text { x: 138px; y: 13px; width: parent.width - 138px - 80px; height: 22px; text: a.label; font-size: 16px; font-weight: 600; color: a.on ? a.tint.mix(TFg.c, 0.5) : TFg.c.with-alpha(0.35); overflow: elide; vertical-alignment: center; }
@@ -653,26 +665,47 @@ export component TimersPage inherits Rectangle {
 
     // ---------------------------------------------------------------- alarm editor: time, days, sound, label
     // (a sheet sized to its content, under the status bar; delete sits in the header for a saved alarm)
-    if root.edit && !root.edit-keyboard: Rectangle { background: #00000080; }
+    if root.edit && !root.edit-keyboard: Rectangle { background: #00000080; TouchArea { clicked => { Act.act("alarm.close", ""); } } }
     if root.edit && !root.edit-keyboard: ed := Rectangle {
-        property <bool> ha: root.edit-ha-sound != "";
+        TouchArea { }
+        property <bool> ha: root.edit-ha-sound != "" && !root.edit-timer;
         property <length> dy: 56px;                       // drums
         property <length> ty: self.dy + 120px + 14px;     // days
         property <length> sy: self.ty + 40px + 18px;      // sounds (two lines, a third for the one set in Home Assistant)
-        property <length> ly: self.sy + (self.ha ? 112px : 72px) + 18px;      // label
+        property <length> ly: root.edit-timer ? self.dy + 120px + 18px : self.sy + (self.ha ? 112px : 72px) + 18px;      // label
         x: 0; y: root.height - self.height; width: root.width; height: self.ly + 44px + 14px;
         border-top-left-radius: 24px; border-top-right-radius: 24px; background: Theme.sheet;
         Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: TFg.c.with-alpha(0.25); }
-        Text { x: 20px; y: 16px; height: 32px; text: root.edit-new ? "New alarm" : "Edit alarm"; font-size: 20px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
-        if !root.edit-new: Rectangle { x: parent.width - 16px - 88px - 46px - 46px; y: 14px; width: 36px; height: 36px; border-radius: 18px; border-width: 1px; border-color: #ff5a5f80;
-            Icon { width: parent.width; height: parent.height; text: "\u{F01B4}"; font-size: 20px; color: #ff7a7e; } }
+        Text { x: 20px; y: 16px; height: 32px; text: root.edit-timer ? "New timer" : root.edit-new ? "New alarm" : "Edit alarm"; font-size: 20px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
+        if !root.edit-new && !root.edit-timer: Rectangle { x: parent.width - 16px - 88px - 46px - 46px; y: 14px; width: 36px; height: 36px; border-radius: 18px; border-width: 1px; border-color: #ff5a5f80;
+            Icon { width: parent.width; height: parent.height; text: "\u{F01B4}"; font-size: 20px; color: #ff7a7e; }
+            TouchArea { clicked => { Act.act("alarm.delete", ""); } } }
         Rectangle { x: parent.width - 16px - 88px - 46px; y: 14px; width: 36px; height: 36px; border-radius: 18px; background: TFg.c.with-alpha(0.12);
-            Icon { width: parent.width; height: parent.height; text: "\u{F0156}"; font-size: 21px; color: TFg.c.with-alpha(0.90); } }
-        Rectangle { x: parent.width - 16px - 88px; y: 15px; width: 88px; height: 34px; border-radius: 17px; background: root.edit-tint;
-            Text { width: parent.width; height: parent.height; text: "Save"; font-size: 15px; font-weight: 600; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } }
+            Icon { width: parent.width; height: parent.height; text: "\u{F0156}"; font-size: 21px; color: TFg.c.with-alpha(0.90); }
+            TouchArea { clicked => { Act.act("alarm.close", ""); } } }
+        // brand: a button's text is Ink or Paper, its ground the text colour
+        Rectangle { x: parent.width - 16px - 88px; y: 15px; width: 88px; height: 34px; border-radius: 17px; background: TFg.c;
+            Text { width: parent.width; height: parent.height; text: root.edit-timer ? "Start" : "Save"; font-size: 15px; font-weight: 600; color: Theme.dark ? #101114 : #F5F3EE; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { clicked => { Act.act(root.edit-timer ? "timers.create" : "alarm.save", ""); } } }
         // time: two drums, the middle row is the value
         Rectangle { x: 72px; y: ed.dy + 40px; width: parent.width - 144px; height: 40px; border-radius: 14px; background: TFg.c.with-alpha(0.07); }
-        for col[ci] in [{ v: root.edit-h, n: 24, x: 118 }, { v: root.edit-m, n: 60, x: 256 }]: Rectangle {
+        for col[ci] in [{ v: root.edit-h, n: 24, x: 118 }, { v: root.edit-m, n: 60, x: 256 }]: drum := Rectangle {
+            property <int> base;
+            // drag: a row (40 px) per step; a tap on the upper or lower row: one step
+            TouchArea {
+                x: col.x * 1px; y: ed.dy; width: 106px; height: 120px;
+                pointer-event(ev) => { if ev.kind == PointerEventKind.down { drum.base = col.v; } }
+                moved => {
+                    let k = Math.round((self.pressed-y - self.mouse-y) / 40px);
+                    let v = Math.mod(drum.base + k + col.n * 4, col.n);
+                    if ci == 0 { root.edit-h = v; } else { root.edit-m = v; }
+                }
+                clicked => {
+                    let k = self.mouse-y < 40px ? -1 : self.mouse-y > 80px ? 1 : 0;
+                    let v = Math.mod(col.v + k + col.n, col.n);
+                    if ci == 0 { root.edit-h = v; } else { root.edit-m = v; }
+                }
+            }
             for r in [-1, 0, 1]: Text {
                 property <int> val: Math.mod(col.v + r + col.n * 2, col.n);
                 x: col.x * 1px; y: ed.dy + 40px + r * 40px; width: 106px; height: 40px;
@@ -681,26 +714,32 @@ export component TimersPage inherits Rectangle {
                 color: r == 0 ? TFg.c : TFg.c.with-alpha(0.35); horizontal-alignment: center; vertical-alignment: center;
             }
         }
-        Text { x: 0; y: ed.dy + 40px; width: parent.width; height: 40px; text: ":"; font-size: 36px; font-weight: 600; color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
+        if !root.edit-timer: Text { x: 0; y: ed.dy + 40px; width: parent.width; height: 40px; text: ":"; font-size: 36px; font-weight: 600; color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
+        if root.edit-timer: Text { x: 198px; y: ed.dy + 40px; width: 30px; height: 40px; text: "h"; font-size: 16px; color: TFg.c.with-alpha(0.55); vertical-alignment: center; }
+        if root.edit-timer: Text { x: 336px; y: ed.dy + 40px; width: 44px; height: 40px; text: "min"; font-size: 16px; color: TFg.c.with-alpha(0.55); vertical-alignment: center; }
         // days
-        HorizontalLayout {
+        if !root.edit-timer: HorizontalLayout {
             x: 16px; y: ed.ty; width: parent.width - 32px; height: 40px; alignment: space-between;
             for d[i] in ["M", "T", "W", "T", "F", "S", "S"]: Rectangle {
                 width: 54px; height: 40px; border-radius: 20px;
+                TouchArea { clicked => { Act.act("alarm.day", i); } }
                 background: root.edit-days[i] ? root.edit-tint : transparent; border-width: root.edit-days[i] ? 0px : 1px; border-color: TFg.c.with-alpha(0.25);
                 Text { width: parent.width; height: parent.height; text: d; font-size: 15px; font-weight: 600; color: root.edit-days[i] ? #ffffff : TFg.c.with-alpha(0.70); horizontal-alignment: center; vertical-alignment: center; }
             }
         }
         // sound: the built-in ones (a tap plays it), the info button, the one set in Home Assistant
-        HorizontalLayout {
+        if !root.edit-timer: HorizontalLayout {
             x: 16px; y: ed.sy; height: 32px; alignment: start; spacing: 6px;
-            for s[i] in [root.sounds[0], root.sounds[1], root.sounds[2]]: Chip { text: s; on: root.edit-sound == i; fill: root.edit-tint; }
-            Rectangle { width: 32px; height: 32px; border-radius: 16px; background: root.edit-info ? TFg.c.with-alpha(0.18) : TFg.c.with-alpha(0.08);
-                Icon { width: parent.width; height: parent.height; text: "\u{F02FD}"; font-size: 18px; color: TFg.c.with-alpha(0.80); } }
+            for s[i] in [root.sounds[0], root.sounds[1], root.sounds[2]]: Chip { text: s; on: root.edit-sound == i; fill: root.edit-tint;
+                TouchArea { clicked => { Act.act("alarm.sound", i); } } }
+            if root.ha-sounds: Rectangle { width: 32px; height: 32px; border-radius: 16px; background: root.edit-info ? TFg.c.with-alpha(0.18) : TFg.c.with-alpha(0.08);
+                Icon { width: parent.width; height: parent.height; text: "\u{F02FD}"; font-size: 18px; color: TFg.c.with-alpha(0.80); }
+                TouchArea { clicked => { Act.act("alarm.info", ""); } } }
         }
-        HorizontalLayout {
+        if !root.edit-timer: HorizontalLayout {
             x: 16px; y: ed.sy + 40px; height: 32px; alignment: start; spacing: 6px;
-            for s[i] in [root.sounds[3], root.sounds[4], root.sounds[5]]: Chip { text: s; on: root.edit-sound == i + 3; fill: root.edit-tint; }
+            for s[i] in [root.sounds[3], root.sounds[4], root.sounds[5]]: Chip { text: s; on: root.edit-sound == i + 3; fill: root.edit-tint;
+                TouchArea { clicked => { Act.act("alarm.sound", i + 3); } } }
         }
         if ed.ha: Rectangle {
             x: 16px; y: ed.sy + 80px; width: min(hs.preferred-width + 48px, parent.width - 32px); height: 32px; border-radius: 16px;
@@ -712,6 +751,7 @@ export component TimersPage inherits Rectangle {
         Rectangle {
             x: 16px; y: ed.ly; width: parent.width - 32px; height: 44px; border-radius: 14px; background: TFg.c.with-alpha(0.07);
             Icon { x: 14px; width: 22px; height: parent.height; text: "\u{F04F9}"; font-size: 19px; color: TFg.c.with-alpha(0.60); }
+            TouchArea { clicked => { Act.act("alarm.label", ""); } }
             Text { x: 46px; width: parent.width - 60px; height: parent.height; text: root.edit-label != "" ? root.edit-label : "Label"; font-size: 16px;
                 color: root.edit-label != "" ? TFg.c : TFg.c.with-alpha(0.40); vertical-alignment: center; overflow: elide; }
         }
@@ -726,19 +766,23 @@ export component TimersPage inherits Rectangle {
     // label keyboard (the same block as on the setup screens)
     if root.edit && root.edit-keyboard: Rectangle {
         background: Theme.background;
-        Text { x: 20px; y: 52px; height: 34px; text: "Alarm label"; font-size: 20px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
-        Rectangle { x: parent.width - 16px - 88px; y: 52px; width: 88px; height: 34px; border-radius: 17px; background: root.edit-tint;
-            Text { width: parent.width; height: parent.height; text: "Done"; font-size: 15px; font-weight: 600; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } }
+        Text { x: 20px; y: 52px; height: 34px; text: root.edit-timer ? "Timer label" : "Alarm label"; font-size: 20px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
+        Rectangle { x: parent.width - 16px - 88px; y: 52px; width: 88px; height: 34px; border-radius: 17px; background: TFg.c;
+            Text { width: parent.width; height: parent.height; text: "Done"; font-size: 15px; font-weight: 600; color: Theme.dark ? #101114 : #F5F3EE; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { clicked => { Act.act("alarm.key", "enter"); } } }
         Rectangle {
             x: 16px; y: 100px; width: parent.width - 32px; height: 52px; border-radius: 14px; background: TFg.c.with-alpha(0.07); border-width: 1.5px; border-color: root.edit-tint;
             lt := Text { x: 16px; width: min(self.preferred-width, parent.width - 70px); height: parent.height; text: root.edit-label; font-size: 18px; color: TFg.c; vertical-alignment: center; overflow: elide; }
             Rectangle { x: 16px + lt.width + 2px; y: 14px; width: 2px; height: 24px; background: root.edit-tint; }
             if root.edit-label != "": Rectangle { x: parent.width - 44px; y: 8px; width: 36px; height: 36px; border-radius: 18px;
-                Icon { width: parent.width; height: parent.height; text: "\u{F0159}"; font-size: 20px; color: TFg.c.with-alpha(0.50); } }
+                Icon { width: parent.width; height: parent.height; text: "\u{F0159}"; font-size: 20px; color: TFg.c.with-alpha(0.50); }
+                TouchArea { clicked => { Act.act("alarm.key", "clear"); } } }
         }
-        Text { x: 20px; y: 162px; width: parent.width - 40px; height: 20px; text: root.edit-h + ":" + root.two(root.edit-m) + "  ·  " + root.sounds[min(root.edit-sound, root.sounds.length - 1)];
+        Text { x: 20px; y: 162px; width: parent.width - 40px; height: 20px; text: root.edit-timer ? (root.edit-h > 0 ? root.edit-h + " h " : "") + root.edit-m + " min"
+                : root.edit-h + ":" + root.two(root.edit-m) + "  ·  " + root.sounds[min(root.edit-sound, root.sounds.length - 1)];
             font-size: 13px; color: TFg.c.with-alpha(0.50); vertical-alignment: center; overflow: elide; }
-        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; enter-label: "Done"; accent: root.edit-tint; }
+        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; enter-label: "Done"; accent: root.edit-tint;
+            key(k) => { Act.act("alarm.key", k); } }
     }
 
     // ---------------------------------------------------------------- settings: functions, colour, theme (+ scene)

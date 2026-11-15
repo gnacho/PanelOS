@@ -312,13 +312,32 @@ export component MusicPage inherits Rectangle {
         Rectangle { x: (tt.px - 4) * 1px; y: (tt.py - 4) * 1px; width: 8px; height: 8px; border-radius: 4px; background: #44474e; }
         // volume fader (dark print on aluminium)
         // speaker over the value, both centred on the fader (100 % fits inside the plate)
-        Icon { x: 426px; y: 122px; width: 40px; height: 18px; text: root.volume <= 0 ? "\u{F0581}" : "\u{F057E}"; font-size: 16px; color: #3a3c42; }
-        Text { x: 418px; y: 142px; width: 56px; height: 18px; text: Math.round(root.volume * 100) + "%"; font-size: 13px; font-weight: 600; color: #3a3c42;
+        // the fader follows the finger; the volume is set when it lets go
+        property <bool> fdrag;
+        property <float> fv;
+        property <float> vol: self.fdrag ? self.fv : root.volume;
+        Icon { x: 426px; y: 122px; width: 40px; height: 18px; text: tt.vol <= 0 ? "\u{F0581}" : "\u{F057E}"; font-size: 16px; color: #3a3c42; }
+        Text { x: 418px; y: 142px; width: 56px; height: 18px; text: Math.round(tt.vol * 100) + "%"; font-size: 13px; font-weight: 600; color: #3a3c42;
             horizontal-alignment: center; vertical-alignment: center; }
         Rectangle {
-            x: 431px; y: (tt.f1 - root.volume * (tt.f1 - tt.f0) - 9) * 1px; width: 30px; height: 18px; border-radius: 3px;
+            x: 431px; y: (tt.f1 - tt.vol * (tt.f1 - tt.f0) - 9) * 1px; width: 30px; height: 18px; border-radius: 3px;
             background: #d6d8dc; border-width: 1px; border-color: #6d7078;
             Rectangle { y: 8px; height: 2px; x: 4px; width: parent.width - 8px; background: root.acc; }
+        }
+        TouchArea {
+            x: 418px; y: (tt.f0 - 16) * 1px; width: 56px; height: (tt.f1 - tt.f0 + 32) * 1px;
+            pointer-event(ev) => {
+                if ev.kind == PointerEventKind.down {
+                    tt.fdrag = true;
+                    tt.fv = max(0, min(1, (tt.f1 - (self.y + self.mouse-y) / 1px) / (tt.f1 - tt.f0)));
+                }
+                if ev.kind == PointerEventKind.up {
+                    if tt.fdrag { Act.act("music.volume", tt.fv); }
+                    tt.fdrag = false;
+                }
+                if ev.kind == PointerEventKind.cancel { tt.fdrag = false; }
+            }
+            moved => { tt.fv = max(0, min(1, (tt.f1 - (self.y + self.mouse-y) / 1px) / (tt.f1 - tt.f0))); }
         }
         // start / stop and the small buttons
         Rectangle {

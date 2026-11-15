@@ -51,10 +51,11 @@ component TimerChip inherits Rectangle {
 // Running timers: the two nearest ones, then "+N".
 export component TimerChips inherits HorizontalLayout {
     in property <[TimerInfo]> timers;
+    in property <int> most: 2;           // chips shown before "+N"
     spacing: 6px;
     if root.timers.length > 0: TimerChip { timer: root.timers[0]; }
-    if root.timers.length > 1: TimerChip { timer: root.timers[1]; }
-    if root.timers.length > 2: Rectangle {
+    if root.timers.length > 1 && root.most > 1: TimerChip { timer: root.timers[1]; }
+    if root.timers.length > root.most: Rectangle {
         height: 26px;
         border-radius: 13px;
         background: Theme.warning.with-alpha(0.18);
@@ -62,7 +63,7 @@ export component TimerChips inherits HorizontalLayout {
             padding-left: 9px;
             padding-right: 9px;
             Text {
-                text: "+" + (root.timers.length - 2);
+                text: "+" + (root.timers.length - root.most);
                 font-size: Theme.font-caption;
                 font-weight: Theme.weight-strong;
                 color: Theme.text;
@@ -81,9 +82,16 @@ export component StatusBar inherits HorizontalLayout {
     in property <bool> problem;          // connection problem
     in property <bool> quiet;            // screensaver: no hint, no microphone
     in property <bool> on-color;         // drawn over a coloured panel background
+    // the page has its own chip at the top right (speaker, room, camera, view): the timers move to the left,
+    // one chip and "+N", and the hint gives way
+    in property <bool> left-chips;
     property <color> soft: root.on-color ? #ffffffb3 : Theme.faint;
     height: 32px;
     spacing: 8px;
+    if root.left-chips: VerticalLayout {
+        alignment: center;
+        TimerChips { timers: root.timers; most: 1; }
+    }
     if !root.quiet || root.mic-muted: Icon {
         text: root.mic-muted ? "\u{F036D}" : "\u{F036C}";
         font-size: 16px;
@@ -91,7 +99,7 @@ export component StatusBar inherits HorizontalLayout {
     }
     Text {
         horizontal-stretch: 1;
-        text: root.mic-muted ? "Microphone off" : root.quiet ? "" : root.hint;
+        text: root.mic-muted ? (root.left-chips ? "" : "Microphone off") : root.quiet || root.left-chips ? "" : root.hint;
         font-size: Theme.font-caption;
         color: root.mic-muted ? Theme.danger : root.soft;
         vertical-alignment: center;
@@ -101,7 +109,7 @@ export component StatusBar inherits HorizontalLayout {
         alignment: center;
         Icon { text: "\u{F092B}"; font-size: 18px; color: Theme.warning; }
     }
-    VerticalLayout {
+    if !root.left-chips: VerticalLayout {
         alignment: center;
         TimerChips { timers: root.timers; }
     }

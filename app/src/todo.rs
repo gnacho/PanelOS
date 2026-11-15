@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use slint::ComponentHandle;
 
+use crate::draw::{self, Job, Tint};
 use crate::pages::{local_format, now, parse_iso};
 use crate::{icons, texts, with_state, AppWindow, TodoItem, TodoList};
 
@@ -150,7 +151,9 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     if entities.is_empty() {
         return;
     }
-    ui.set_todo_look(slot.variant);
+    // the label maker and the notepad need pictures drawn by the app (GPU build); otherwise the plain look
+    let look = if !draw::AVAILABLE && slot.variant >= 3 { 0 } else { slot.variant };
+    ui.set_todo_look(look);
     let sel = (ui.get_todo_sel().max(0) as usize).min(entities.len() - 1);
     {
         let mut w = WANTED.lock().unwrap();
@@ -179,16 +182,70 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
             }
         })
         .collect();
+    let name = lists.get(sel).map(|l| l.name.to_string()).unwrap_or_default();
     if let Some(m) = crate::pages::update_rows(&ui.get_todo_lists(), lists) {
         ui.set_todo_lists(m);
     }
     ui.set_todo_sel(sel as i32);
     let items = ITEMS.with(|i| i.borrow().clone());
-    let open: Vec<TodoItem> = items.iter().filter(|i| !i.done).map(row).collect();
-    let done: Vec<TodoItem> = items.iter().filter(|i| i.done).map(row).collect();
+    let show_done = ui.get_todo_show_done();
+    // the label maker's tapes and the notepad's lines (completed ones only while they are unfolded)
+    let tint = [Tint::Red, Tint::Blue, Tint::Green, Tint::Black][sel % 4];
+    let looks = crate::page_looks(ui, "todo");
+    let (tapes, hands) = (draw::AVAILABLE && looks.contains(&3), draw::AVAILABLE && looks.contains(&4));
+    let drawn = |i: &Item, done_part: bool| -> TodoItem {
+        let mut r = row(i);
+        if done_part && !show_done {
+            return r;
+        }
+        let (due_text, due_state) = due(&i.due);
+        let struck = done_part || i.done;
+        let seed = draw::seed(&i.summary);
+        if tapes {
+            r.tape = draw::get(Job::TapeItem { text: i.summary.clone(), tint, seed, due: due_text.clone(), due_state, note: i.note.clone(), struck });
+        }
+        if hands {
+            r.hand = draw::get(Job::HandItem { text: i.summary.clone(), seed, due: due_text, due_state, note: i.note.clone(), ticked: struck, faded: done_part });
+        }
+        r
+    };
+    let open: Vec<TodoItem> = items.iter().filter(|i| !i.done).map(|i| drawn(i, false)).collect();
+    let done: Vec<TodoItem> = items.iter().filter(|i| i.done).map(|i| drawn(i, true)).collect();
+    // the receipt and terminal looks' own lines and the receipt's stamp
+    if ui.get_todo_receipt_footer().is_empty() {
+        ui.set_todo_receipt_footer(texts::fresh("todo.receipt.footers").into());
+        ui.set_todo_receipt_empty(texts::fresh("todo.receipt.empty").into());
+        ui.set_todo_term_empty(texts::fresh("todo.term.empty").into());
+    }
+    ui.set_todo_stamp(local_format(now(), "%d.%m.%Y %H:%M").into());
     if open.is_empty() && ui.get_todo_empty_title().is_empty() {
         ui.set_todo_empty_title(texts::fresh("todo.empty.titles").into());
         ui.set_todo_empty_sub(texts::fresh("todo.empty.subs").into());
+    }
+    let n_open = open.len();
+    if tapes {
+        let count = if n_open == 0 { "ALL CLEAR".to_string() } else { format!("{n_open} TO DO") };
+        ui.set_todo_label_head(draw::get(Job::TapeHead { name: name.clone(), count, seed: draw::seed(&name) }));
+        ui.set_todo_label_done_head(draw::get(Job::Tape { text: format!("DONE · {}", done.len()), tint: Tint::Black, small: true, seed: 77 + done.len() as u32 }));
+        if n_open == 0 {
+            thread_local!(static EMPTY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) });
+            let text = EMPTY.with(|e| {
+                if e.borrow().is_empty() {
+                    *e.borrow_mut() = texts::fresh("todo.label.empty");
+                }
+                e.borrow().clone()
+            });
+            ui.set_todo_label_empty_tape(draw::get(Job::Tape { text, tint, small: false, seed: 4242 }));
+        }
+    }
+    if hands {
+        let count = if n_open == 0 { "all done".to_string() } else { format!("{n_open} left") };
+        ui.set_todo_note_head(draw::get(Job::HandHead { title: name.clone(), count, seed: draw::seed(&name) }));
+        ui.set_todo_note_done(draw::get(Job::HandDone { n: done.len(), open: show_done }));
+        if n_open == 0 {
+            let (title, sub) = (ui.get_todo_empty_title().to_string(), ui.get_todo_empty_sub().to_string());
+            ui.set_todo_note_empty(draw::get(Job::HandEmpty { title, sub }));
+        }
     }
     if let Some(m) = crate::pages::update_rows(&ui.get_todo_open(), open) {
         ui.set_todo_open(m);
@@ -222,7 +279,10 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             WANTED.lock().unwrap().1 = true;
             with_state(|s| refresh(ui, s));
         }
-        "todo.done-toggle" => ui.set_todo_show_done(!ui.get_todo_show_done()),
+        "todo.done-toggle" => {
+            ui.set_todo_show_done(!ui.get_todo_show_done());
+            with_state(|s| refresh(ui, s));
+        }
         _ => eprintln!("nspanel-app: act {what} {value} (not handled)"),
     }
 }

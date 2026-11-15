@@ -91,18 +91,71 @@ pub fn page_slots(config: Option<&Value>) -> Vec<PageSlot> {
             a.iter()
                 .filter_map(|p| {
                     let kind = p.get("kind").and_then(Value::as_str)?;
+                    let opts = p.get("options");
                     KINDS.contains(&kind).then(|| PageSlot {
                         kind: kind.into(),
                         variant: p.get("variant").and_then(Value::as_i64).unwrap_or(0) as i32,
+                        theme: if kind == "home" {
+                            opts.and_then(|o| o.get("theme")).and_then(Value::as_i64).map(|t| t.clamp(0, 8) as i32).unwrap_or(-1)
+                        } else {
+                            -1
+                        },
+                        layout: -1,
                     })
                 })
                 .collect()
         })
         .unwrap_or_default();
     if !list.is_empty() {
+        // the weather pages after the first with widgets of their own: their layout's index
+        let mut n = 0;
+        let mut list = list;
+        let pages = config.and_then(|c| c.get("pages")).and_then(Value::as_array);
+        let mut homes = 0;
+        for (slot, p) in list.iter_mut().zip(pages.into_iter().flatten().filter(|p| p.get("kind").and_then(Value::as_str).is_some_and(|k| KINDS.contains(&k)))) {
+            if slot.kind == "home" {
+                homes += 1;
+                if homes > 1 && p.get("options").and_then(|o| o.get("items")).and_then(Value::as_array).is_some() {
+                    slot.layout = n;
+                    n += 1;
+                }
+            }
+        }
         return list;
     }
-    ["home", "weather", "music", "timers"].iter().map(|k| PageSlot { kind: (*k).into(), variant: 0 }).collect()
+    ["home", "weather", "music", "timers"].iter().map(|k| PageSlot { kind: (*k).into(), variant: 0, theme: -1, layout: -1 }).collect()
+}
+
+/// The widget layouts of the weather pages after the first that have their own (in page order).
+pub fn home_layouts(config: Option<&Value>, accent: Color) -> Vec<Vec<HomeItem>> {
+    let Some(pages) = config.and_then(|c| c.get("pages")).and_then(Value::as_array) else { return Vec::new() };
+    pages
+        .iter()
+        .filter(|p| p.get("kind").and_then(Value::as_str) == Some("home"))
+        .skip(1)
+        .filter_map(|p| p.get("options").and_then(|o| o.get("items")).and_then(Value::as_array))
+        .map(|a| items_from(a, accent))
+        .collect()
+}
+
+fn items_from(a: &[Value], accent: Color) -> Vec<HomeItem> {
+    a.iter()
+        .map(|i| {
+            let n = |k: &str, d: i64| i.get(k).and_then(Value::as_i64).unwrap_or(d) as i32;
+            HomeItem {
+                kind: n("kind", 0),
+                col: n("col", 0),
+                row: n("row", 0),
+                w: n("w", 4),
+                h: n("h", 1),
+                style: n("style", 0),
+                accent: i.get("accent").and_then(Value::as_str).and_then(parse_color).unwrap_or(accent),
+                weight: n("weight", 600),
+                tap: i.get("tap").and_then(Value::as_bool).unwrap_or(true),
+                opts: n("opts", 0),
+            }
+        })
+        .collect()
 }
 
 /// Every page kind the panel can show.
@@ -358,28 +411,17 @@ pub fn weather_data(w: &WeatherInput) -> WeatherData {
 /// The home page's widgets until the integration sets them: big digits with
 /// the seconds line, the forecast curve and the music widget.
 pub fn home_items(config: Option<&Value>, accent: Color) -> Vec<HomeItem> {
-    let from_config: Vec<HomeItem> = config
-        .and_then(|c| c.get("home_items"))
+    // the first weather page's own widgets, else the panel's
+    let first = config
+        .and_then(|c| c.get("pages"))
         .and_then(Value::as_array)
-        .map(|a| {
-            a.iter()
-                .map(|i| {
-                    let n = |k: &str, d: i64| i.get(k).and_then(Value::as_i64).unwrap_or(d) as i32;
-                    HomeItem {
-                        kind: n("kind", 0),
-                        col: n("col", 0),
-                        row: n("row", 0),
-                        w: n("w", 4),
-                        h: n("h", 1),
-                        style: n("style", 0),
-                        accent: i.get("accent").and_then(Value::as_str).and_then(parse_color).unwrap_or(accent),
-                        weight: n("weight", 600),
-                        tap: i.get("tap").and_then(Value::as_bool).unwrap_or(true),
-                        opts: n("opts", 0),
-                    }
-                })
-                .collect()
-        })
+        .and_then(|a| a.iter().find(|p| p.get("kind").and_then(Value::as_str) == Some("home")))
+        .and_then(|p| p.get("options"))
+        .and_then(|o| o.get("items"))
+        .and_then(Value::as_array);
+    let from_config: Vec<HomeItem> = first
+        .or_else(|| config.and_then(|c| c.get("home_items")).and_then(Value::as_array))
+        .map(|a| items_from(a, accent))
         .unwrap_or_default();
     if !from_config.is_empty() {
         return from_config;

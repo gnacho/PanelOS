@@ -103,6 +103,8 @@ component FlapText inherits Rectangle {
 }
 
 component CalBoardLook inherits Rectangle {
+    // text-heavy and still between the minutes: drawn once into a layer (a swipe only moves it)
+    cache-rendering-hint: true;
     in property <[CalBoard]> rows;
     in property <string> clock;            // "13:45"
     in property <string> date;             // "SAT 14 NOV"
@@ -134,6 +136,7 @@ component CalBoardLook inherits Rectangle {
 // (red on Sundays), the weekday, the day's events, and a line for the day at the foot of the page. Tearing the page shows
 // the next day.
 component CalTearLook inherits Rectangle {
+    cache-rendering-hint: true;
     in property <string> month;            // "NOVEMBER 2026"
     in property <int> day;
     in property <string> weekday;          // "SATURDAY"
@@ -179,6 +182,7 @@ component CalTearLook inherits Rectangle {
 // ink per calendar), today circled in red, all drawn by the app as one image per cell. Which calendars are written in can be
 // chosen per look (daily routines would fill every cell).
 component CalWallLook inherits Rectangle {
+    cache-rendering-hint: true;
     in property <string> month;            // "NOVEMBER"
     in property <string> year;
     in property <image> photo;             // 448×88, scaled by the app
@@ -307,6 +311,7 @@ export component CalendarPage inherits Rectangle {
 
     // ---------------------------------------------------------------- agenda: days with their events, today's past ones faded
     if root.look == 0 && root.view == 0: Flickable {
+        cache-rendering-hint: true;
         x: 0; y: 104px; width: root.width; height: root.height - 104px;
         content-width: root.width; content-height: max(self.height, al.preferred-height); content-y: -root.scroll;
         al := VerticalLayout {
@@ -337,6 +342,7 @@ export component CalendarPage inherits Rectangle {
             vertical-alignment: center; overflow: elide; }
     }
     if root.look == 0 && root.view == 1: Flickable {
+        cache-rendering-hint: true;
         x: 0; y: 140px; width: root.width; height: root.height - 140px;
         content-width: root.width; content-height: 24 * root.hh + 40px; content-y: -root.scroll;
         for h in 25: Rectangle { x: 0; y: h * root.hh; width: root.width; height: 1px;
@@ -369,6 +375,7 @@ export component CalendarPage inherits Rectangle {
             Text { x: 4px; y: 0; width: parent.width - 8px; height: parent.height; text: e.title; font-size: root.view == 4 ? 12px : 10px; font-weight: 600; color: Theme.text;
                 vertical-alignment: center; overflow: elide; } } }
     if root.look == 0 && (root.view == 2 || root.view == 4): Flickable {
+        cache-rendering-hint: true;
         x: 0; y: 172px; width: root.width; height: root.height - 172px;
         content-width: root.width; content-height: 24 * root.gh + 40px; content-y: -root.scroll;
         if root.week-today >= 0: Rectangle { x: root.wx + root.week-today * root.gw; y: 0; width: root.gw; height: 24 * root.gh; background: Theme.surface.with-alpha(0.6); }
@@ -395,6 +402,7 @@ export component CalendarPage inherits Rectangle {
 
     // ---------------------------------------------------------------- month: the grid with up to two event labels a day (a tap opens that day)
     if root.look == 0 && root.view == 3: Rectangle { x: 0; y: 102px; width: root.width; height: 360px;
+        cache-rendering-hint: true;
         for n[i] in root.month-names: Text { x: 16px + i * 64px; y: 0; width: 64px; height: 18px; text: n; font-size: 11px; font-weight: 600; color: Theme.muted;
             horizontal-alignment: center; vertical-alignment: center; }
         for c[i] in root.month-cells: Rectangle { x: 16px + Math.mod(i, 7) * 64px; y: 20px + Math.floor(i / 7) * 56px; width: 64px; height: 56px;

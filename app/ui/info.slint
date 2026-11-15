@@ -58,6 +58,7 @@ component NoteCard inherits Rectangle {
     in property <int> count;
     property <color> c: root.n.level == 1 ? Theme.warning : #4a8fe7;
     height: cl.preferred-height; border-radius: 24px; background: Theme.surface;
+    TouchArea { }
     cl := VerticalLayout { padding: 20px; spacing: 10px; alignment: start;
         HorizontalLayout { spacing: 12px; alignment: start;
             LevelIcon { icon: root.n.icon; level: root.n.level; size: 44px; }
@@ -71,6 +72,7 @@ component NoteCard inherits Rectangle {
         if root.n.has-image: Image { height: 196px; source: root.n.image; }
         HorizontalLayout { spacing: 8px; alignment: end; padding-top: 4px;
             for a[i] in root.n.actions: Rectangle { height: 44px; width: at.preferred-width + 36px; border-radius: 22px;
+                TouchArea { clicked => { Act.act("info.action", i); } }
                 background: i == root.n.actions.length - 1 ? root.c : Theme.surface-raised;
                 at := Text { x: 18px; y: 0; width: self.preferred-width; height: parent.height; text: a; font-size: 15px; font-weight: 600;
                     color: i == root.n.actions.length - 1 ? (root.n.level == 1 ? #1d1d1f : #ffffff) : Theme.text; vertical-alignment: center; } } }
@@ -106,6 +108,9 @@ component PagerLook inherits Rectangle {
     in property <int> first-row: 0;        // the first list row shown (the arrows scroll)
     property <color> ink: #1e2a17;
     Image { x: 0; y: 0; width: 480px; height: 480px; source: root.body; }
+    TouchArea { x: 78px; y: 332px; width: 100px; height: 56px; clicked => { Act.act("info.up", ""); } }
+    TouchArea { x: 190px; y: 332px; width: 100px; height: 56px; clicked => { Act.act("info.ok", ""); } }
+    TouchArea { x: 302px; y: 332px; width: 100px; height: 56px; clicked => { Act.act("info.down", ""); } }
     if root.notes.length > 0: Image { x: 390px; y: 64px; width: 44px; height: 44px; source: root.led; }
     Rectangle { x: 64px; y: 118px; width: 352px; height: 184px; clip: true;
         LcdText { x: 12px; y: 6px; width: parent.width - 24px; height: 22px;
@@ -140,6 +145,7 @@ component NewsLook inherits Rectangle {
     Rectangle { x: 134px; y: 48px; width: 48px; height: 26px; border-radius: 4px; background: #d8202a;
         Text { text: "LIVE"; font-size: 12px; font-weight: 900; letter-spacing: 1px; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } }
     // one story, big (open), or the headlines list
+    if root.open: TouchArea { clicked => { Act.act("info.close", ""); } }
     if root.open: Rectangle { x: 0; y: 200px; width: root.width; height: 150px;
         Rectangle { x: 16px; y: 0; width: 150px; height: 34px; background: root.n.level == 1 ? #d8202a : #f2a51a;
             Text { x: 12px; y: 0; height: parent.height; text: root.n.level == 1 ? "BREAKING" : "JUST IN"; font-size: 17px; font-weight: 900; letter-spacing: 1px;
@@ -151,10 +157,12 @@ component NewsLook inherits Rectangle {
             Text { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; text: root.n.message; font-size: 15px; font-weight: 500; color: #1d2a44;
                 vertical-alignment: center; wrap: word-wrap; overflow: elide; } } }
     if !root.open: VerticalLayout { x: 16px; y: 90px; width: 448px; spacing: 6px; alignment: start;
-        for m in root.notes: HorizontalLayout { height: 36px; spacing: 0px;
+        for m[i] in root.notes: HorizontalLayout { height: 36px; spacing: 0px;
             Rectangle { width: 92px; background: m.level == 1 ? #d8202a : #f2a51a;
+                TouchArea { clicked => { Act.act("info.read", i); } }
                 Text { x: 8px; y: 0; height: parent.height; text: m.level == 1 ? "BREAKING" : "JUST IN"; font-size: 11px; font-weight: 900; color: #ffffff; vertical-alignment: center; } }
             Rectangle { horizontal-stretch: 1; background: #ffffff;
+                TouchArea { clicked => { Act.act("info.read", i); } }
                 Text { x: 10px; y: 0; width: parent.width - 92px; height: parent.height; text: m.title.to-uppercase(); font-size: 14px; font-weight: 800; color: #0b1f4d;
                     vertical-alignment: center; overflow: elide; }
                 Text { x: parent.width - 82px; y: 0; width: 74px; height: parent.height; text: m.when; font-size: 11px; color: #5b6680; horizontal-alignment: right;
@@ -182,14 +190,18 @@ component FridgeLook inherits Rectangle {
     Image { x: 0; y: 0; width: 480px; height: 480px; source: root.door; }
     if !root.open: Flickable { x: 0; y: 44px; width: root.width; height: root.height - 44px;
         content-width: root.width; content-height: max(self.height, 12px + Math.ceil(root.notes.length / 2) * 196px + 30px); content-y: -root.scroll;
-        for m[i] in root.notes: Image { x: (Math.mod(i, 2) == 0 ? 14px : 246px) + Math.mod(i * 13, 9) * 1px; y: 10px + Math.floor(i / 2) * 196px + Math.mod(i * 7, 11) * 1px;
-            width: m.paper.width * 1px; height: m.paper.height * 1px; source: m.paper; }
+        for m[i] in root.notes: Rectangle { x: (Math.mod(i, 2) == 0 ? 14px : 246px) + Math.mod(i * 13, 9) * 1px; y: 10px + Math.floor(i / 2) * 196px + Math.mod(i * 7, 11) * 1px;
+            width: m.paper.width * 1px; height: m.paper.height * 1px;
+            Image { width: parent.width; height: parent.height; source: m.paper; }
+            TouchArea { clicked => { Act.act("info.read", i); } } }
         if root.notes.length == 0: Image { x: (root.width - root.empty.width * 1px) / 2; y: 80px; width: root.empty.width * 1px; height: root.empty.height * 1px; source: root.empty; } }
-    if root.open: Rectangle { background: #00000059; }
-    if root.open: Image { x: (root.width - root.n.paper.width * 1px) / 2; y: 50px; width: root.n.paper.width * 1px; height: root.n.paper.height * 1px; source: root.n.paper; }
+    if root.open: Rectangle { background: #00000059; TouchArea { clicked => { Act.act("info.close", ""); } } }
+    if root.open: Image { x: (root.width - root.n.paper.width * 1px) / 2; y: 50px; width: root.n.paper.width * 1px; height: root.n.paper.height * 1px; source: root.n.paper;
+        TouchArea { clicked => { Act.act("info.action", root.n.actions.length - 1); } } }
     // the buttons HA sent, under the note (a tap on the note is OK)
     if root.open: HorizontalLayout { x: 16px; y: 50px + root.n.paper.height * 1px + 10px; width: 448px; height: 44px; spacing: 8px; alignment: center;
         for a[i] in root.n.actions: Rectangle { height: 44px; width: at.preferred-width + 36px; border-radius: 22px;
+            TouchArea { clicked => { Act.act("info.action", i); } }
             background: i == root.n.actions.length - 1 ? #f4f4f2 : #ffffff33; border-width: 1px; border-color: #ffffff59;
             at := Text { x: 18px; y: 0; width: self.preferred-width; height: parent.height; text: a; font-size: 15px; font-weight: 600;
                 color: i == root.n.actions.length - 1 ? #1d1d1f : #ffffff; vertical-alignment: center; } } }
@@ -225,6 +237,7 @@ export component InfoPage inherits Rectangle {
     in property <image> fridge-empty;
     in property <image> pager-body;
     in property <image> pager-led;
+    in property <int> pager-first;
     property <int> unread: 0;
     background: Theme.background;
 
@@ -253,11 +266,11 @@ export component InfoPage inherits Rectangle {
     // ---------------------------------------------------------------- looks
     if root.look == 1: FridgeLook { notes: root.notes; open: root.card; n: root.card-note; door: root.fridge-door; empty: root.fridge-empty; scroll: root.scroll; }
     if root.look == 2: PagerLook { notes: root.notes; open: root.card; n: root.card-note; index: root.card-index; clock: root.clock; empty: root.pager-empty;
-        body: root.pager-body; led: root.pager-led; }
+        body: root.pager-body; led: root.pager-led; first-row: root.pager-first; }
     if root.look == 3: NewsLook { notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; empty: root.news-empty; }
 
     // ---------------------------------------------------------------- plain pop-up card (the looks show their own)
-    if root.look == 0 && root.card: Rectangle { background: Theme.scrim; }
+    if root.look == 0 && root.card: Rectangle { background: Theme.scrim; TouchArea { clicked => { Act.act("info.close", ""); } } }
     if root.look == 0 && root.card: NoteCard { x: 16px; y: root.height - self.height - 24px; width: 448px; n: root.card-note; index: root.card-index; count: root.card-count; }
 
     // ---------------------------------------------------------------- the page's sheet: the look
@@ -278,7 +291,12 @@ export component InfoPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- critical: whole screen, plain red, breathing; hold to silence
+    // held for 2 s: silenced (the panel tells the app; the bar fills while held)
+    property <bool> holding;
+    property <float> held: root.holding ? 1 : 0;
+    animate held { duration: root.holding ? 2000ms : 200ms; easing: linear; }
     if root.critical: Rectangle { background: #8e0d14;
+        TouchArea { }
         Rectangle { background: #d8202a.with-alpha(0.35 + 0.45 * root.crit-pulse); }
         Rectangle { x: (parent.width - 132px) / 2; y: 62px; width: 132px; height: 132px; border-radius: 66px; background: #ffffff26;
             Icon { text: root.crit-icon; font-size: 80px; color: #ffffff; } }
@@ -289,10 +307,17 @@ export component InfoPage inherits Rectangle {
         if !root.crit-button: Text { x: 16px; y: 370px; width: 448px; height: 36px; text: "Ends when the sensor clears"; font-size: 15px; font-weight: 600;
             color: #ffffffcc; horizontal-alignment: center; vertical-alignment: center; }
         if root.crit-button: Rectangle { x: 80px; y: 356px; width: 320px; height: 64px; border-radius: 32px; background: #ffffff33; border-width: 2px; border-color: #ffffff80;
-            if root.crit-hold > 0: Rectangle { x: 0; y: 0; width: max(64px, parent.width * root.crit-hold); height: parent.height; border-radius: 32px; background: #4a0408; }
+            TouchArea {
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down { root.holding = true; }
+                    if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel { root.holding = false; }
+                }
+            }
+            Timer { interval: 2000ms; running: root.holding; triggered => { root.holding = false; Act.act("info.crit-silence", ""); } }
+            if root.held > 0: Rectangle { x: 0; y: 0; width: max(64px, parent.width * root.held); height: parent.height; border-radius: 32px; background: #4a0408; }
             HorizontalLayout { alignment: center; spacing: 10px;
                 Icon { width: 26px; text: "\u{F0581}"; font-size: 24px; color: #ffffff; }
-                Text { text: root.crit-hold > 0 ? "Keep holding" : "Hold to silence"; font-size: 17px; font-weight: 700; color: #ffffff;
+                Text { text: root.holding ? "Keep holding" : "Hold to silence"; font-size: 17px; font-weight: 700; color: #ffffff;
                     vertical-alignment: center; } } }
     }
 }

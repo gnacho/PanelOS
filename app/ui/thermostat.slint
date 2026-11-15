@@ -283,8 +283,11 @@ component ThermoClassic inherits ThermoBase {
 component RubberKey inherits Rectangle {
     in property <string> text;
     in property <bool> dk;
-    in property <bool> down;
+    in property <bool> pressed-by-app;
+    in property <int> key;
+    property <bool> down: root.pressed-by-app || touch.pressed;
     width: 84px; height: 64px;
+    touch := TouchArea { clicked => { Act.act("thermo.key", root.key); } }
     Image { x: 0; y: 0; width: 84px; height: 64px;
         source: root.dk ? (root.down ? @image-url("thermo/key-dark-down.png") : @image-url("thermo/key-dark.png"))
                         : (root.down ? @image-url("thermo/key-light-down.png") : @image-url("thermo/key-light.png")); }
@@ -294,8 +297,10 @@ component RubberKey inherits Rectangle {
 
 component PowerKey inherits Rectangle {
     in property <bool> dk;
-    in property <bool> down;
+    in property <bool> pressed-by-app;
+    property <bool> down: root.pressed-by-app || touch.pressed;
     width: 64px; height: 64px;
+    touch := TouchArea { clicked => { Act.act("thermo.key", 0); } }
     Image { x: 0; y: 0; width: 64px; height: 64px;
         source: root.dk ? (root.down ? @image-url("thermo/power-dark-down.png") : @image-url("thermo/power-dark.png"))
                         : (root.down ? @image-url("thermo/power-light-down.png") : @image-url("thermo/power-light.png")); }
@@ -383,8 +388,10 @@ component ThermoRemote inherits ThermoBase {
         // ▲ / ▼ next to the digits: the only touch areas on the LCD, they set the target
         Path { x: 352px; y: 70px; width: 56px; height: 48px; viewbox-width: 56; viewbox-height: 48; commands: "M 28 4 L 53 44 L 3 44 Z";
             fill: root.show-t ? root.seg : root.ghost; }
+        TouchArea { x: 340px; y: 60px; width: 80px; height: 62px; enabled: root.show-t; clicked => { Act.act("thermo.plus", ""); } }
         Path { x: 352px; y: 132px; width: 56px; height: 48px; viewbox-width: 56; viewbox-height: 48; commands: "M 3 4 L 53 4 L 28 44 Z";
             fill: root.show-t ? root.seg : root.ghost; }
+        TouchArea { x: 340px; y: 124px; width: 80px; height: 62px; enabled: root.show-t; clicked => { Act.act("thermo.minus", ""); } }
 
         // bottom: the room, its humidity, the presets (display only)
         Text { x: 16px; y: 198px; height: 13px; text: "ROOM"; font-size: 11px; font-weight: 800; letter-spacing: 1px; color: root.seg; }
@@ -421,11 +428,11 @@ component ThermoRemote inherits ThermoBase {
     // The preset key is named after the one preset when the device has just one (ECO: on / off), else PRESET (steps through them).
     HorizontalLayout {
         x: 0; y: 352px; width: root.width; height: 64px; alignment: center; spacing: 10px;
-        PowerKey { dk: root.dk; down: root.key-down == 0; }
-        if root.mode-key: RubberKey { text: "MODE"; dk: root.dk; down: root.key-down == 1; }
-        if root.d.fan != "": RubberKey { text: "FAN"; dk: root.dk; down: root.key-down == 2; }
-        if root.d.swing != "": RubberKey { text: "SWING"; dk: root.dk; down: root.key-down == 3; }
-        if root.d.has-preset: RubberKey { text: root.d.preset-caps.length == 2 ? root.d.preset-caps[1] : "PRESET"; dk: root.dk; down: root.key-down == 4; }
+        PowerKey { dk: root.dk; pressed-by-app: root.key-down == 0; }
+        if root.mode-key: RubberKey { text: "MODE"; dk: root.dk; pressed-by-app: root.key-down == 1; key: 1; }
+        if root.d.fan != "": RubberKey { text: "FAN"; dk: root.dk; pressed-by-app: root.key-down == 2; key: 2; }
+        if root.d.swing != "": RubberKey { text: "SWING"; dk: root.dk; pressed-by-app: root.key-down == 3; key: 3; }
+        if root.d.has-preset: RubberKey { text: root.d.preset-caps.length == 2 ? root.d.preset-caps[1] : "PRESET"; dk: root.dk; pressed-by-app: root.key-down == 4; key: 4; }
     }
 }
 
@@ -443,8 +450,16 @@ component Slide inherits Rectangle {
     in property <color> lever;
     in property <color> hot;                // the current stop's label
     in property <length> step: 38px;
+    in property <string> act;               // what picking a stop does (Act), with the stop's index
     property <int> n: root.codes.length > 0 ? root.codes.length : root.stops.length;
     property <length> run: (root.n - 1) * root.step;
+    // a tap or a slide picks the nearest stop
+    TouchArea {
+        clicked => {
+            let k = root.vertical ? Math.round((self.mouse-y - 36px) / root.step) : Math.round((self.mouse-x - (root.width - root.run) / 2) / root.step);
+            if root.act != "" { Act.act(root.act, max(0, min(root.n - 1, k))); }
+        }
+    }
     // vertical: the slot is 14 px wide at sx
     property <length> sx: root.labels-left ? root.width - 22px : 8px;
     if root.vertical: Text { x: 0; y: 0; width: root.width; height: 14px; text: root.title; font-size: 10px; font-weight: 800; letter-spacing: 1.5px;
@@ -520,6 +535,21 @@ component ThermoWall inherits ThermoBase {
         x: (root.cx + 152 * Math.cos(self.a * 1deg) - 16) * 1px; y: (root.cy + 152 * Math.sin(self.a * 1deg) - 9) * 1px; width: 32px; height: 18px;
         text: root.t0 + i; font-size: 15px; font-weight: 600; color: root.print; horizontal-alignment: center; vertical-alignment: center;
     }
+    // turning the knob: the finger's angle on the 270° scale sets the target when it lifts
+    TouchArea {
+        x: (root.cx - 112) * 1px; y: (root.cy - 112) * 1px; width: 224px; height: 224px;
+        enabled: root.show-t;
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.up {
+                let dx = self.mouse-x / 1px - 112;
+                let dy = self.mouse-y / 1px - 112;
+                let deg = atan2(dy, dx) / 1deg;
+                let rel = Math.mod(deg - 135 + 720, 360);
+                let f = rel > 270 ? (rel > 315 ? 0 : 1) : rel / 270;
+                Act.act("thermo.target", root.d.tmin + f * (root.d.tmax - root.d.tmin));
+            }
+        }
+    }
     // the knob: shadow, knurled rim, a domed face, the pointer (it turns: drawn at the target's angle)
     Disc { cx: root.cx; cy: root.cy + 5; r: 108; background: root.dk ? #00000099 : #00000038; }
     Disc { cx: root.cx; cy: root.cy; r: 107; background: root.knob-base; }
@@ -566,12 +596,12 @@ component ThermoWall inherits ThermoBase {
     // swing and preset under the dial
     Slide {
         x: 6px; y: (root.cy - 36 - (root.d.modes.length - 1) * 19) * 1px; width: 78px; height: 300px;
-        vertical: true; labels-left: true; title: "MODE"; codes: root.d.modes;
+        vertical: true; labels-left: true; title: "MODE"; codes: root.d.modes; act: "thermo.mode";
         cur: root.d.mode; print: root.print; slot: root.slot; lever: root.lever; hot: root.hot;
     }
     if root.d.fans.length > 0: Slide {
         x: 400px; y: (root.cy - 36 - (root.d.fan-caps.length - 1) * 16) * 1px; width: 72px; height: 300px;
-        vertical: true; labels-left: false; title: "FAN"; stops: root.d.fan-caps; cur: root.d.fan-i; step: 32px;
+        vertical: true; labels-left: false; title: "FAN"; stops: root.d.fan-caps; cur: root.d.fan-i; step: 32px; act: "thermo.fan";
         print: root.print; slot: root.slot; lever: root.lever; hot: root.hot;
     }
     if root.d.fans.length == 0 && root.d.humidity >= 0: Rectangle {
@@ -585,9 +615,9 @@ component ThermoWall inherits ThermoBase {
     }
     HorizontalLayout {
         x: 0; y: 372px; width: root.width; height: 60px; alignment: center; spacing: 28px;
-        if root.d.swings.length > 0: Slide { width: (root.d.swing-caps.length - 1) * 46px + 56px; vertical: false; title: "SWING"; stops: root.d.swing-caps;
+        if root.d.swings.length > 0: Slide { width: (root.d.swing-caps.length - 1) * 46px + 56px; vertical: false; title: "SWING"; stops: root.d.swing-caps; act: "thermo.swing";
             cur: root.d.swing-i; step: 46px; print: root.print; slot: root.slot; lever: root.lever; hot: root.hot; }
-        if root.d.presets.length > 0: Slide { width: (root.d.preset-caps.length - 1) * 46px + 56px; vertical: false; title: "PRESET"; stops: root.d.preset-caps;
+        if root.d.presets.length > 0: Slide { width: (root.d.preset-caps.length - 1) * 46px + 56px; vertical: false; title: "PRESET"; stops: root.d.preset-caps; act: "thermo.preset";
             cur: root.d.preset-i; step: 46px; print: root.print; slot: root.slot; lever: root.lever; hot: root.hot; }
     }
 }
@@ -604,6 +634,9 @@ component ThermoNeon inherits ThermoBase {
     property <color> gn: TK.neons[root.gm];
     property <float> first5: Math.ceil(root.d.tmin / 5) * 5;
     property <int> n5: Math.floor((root.d.tmax - root.first5) / 5) + 1;
+    // over the moving scene: the neon parts drawn once into a layer (again only when they change;
+    // while the device works the glow breathes, so then every frame)
+    cache-rendering-hint: !root.busy;
 
     if root.gk > 0: Glow { cx: root.cx; cy: root.cy; r: 210; tint: root.gn; k: 0.32 * root.gk; }
     if root.gk > 0: Glow { cx: root.cx; cy: root.cy; r: 100; tint: root.gn; k: 0.30 * root.gk; }
@@ -640,6 +673,7 @@ component ThermoNeon inherits ThermoBase {
     for b[i] in [{ x: 240 - 44 - 24, g: "\u{F0374}" }, { x: 240 + 44 - 24, g: "\u{F0415}" }]: Rectangle {
         visible: root.show-t;
         x: b.x * 1px; y: 280px; width: 48px; height: 48px;
+        TouchArea { x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px; clicked => { Act.act(i == 0 ? "thermo.minus" : "thermo.plus", ""); } }
         Rectangle { x: -4px; y: -4px; width: 56px; height: 56px; border-radius: 28px; border-width: 4px; border-color: root.grid.with-alpha(0.22); }
         Rectangle { border-radius: 24px; background: #0000004d; border-width: 2px; border-color: root.grid.mix(#ffffff, 0.35); }
         GlowText { width: parent.width; height: parent.height; icon: true; text: b.g; font-size: 26px; color: #ffffff; neon: true; glow: root.grid; horizontal-alignment: center; }
@@ -648,6 +682,7 @@ component ThermoNeon inherits ThermoBase {
         x: 0; y: 348px; width: root.width; height: 48px; alignment: center; spacing: 12px;
         for k[i] in root.d.modes: Rectangle {
             width: 48px; height: 48px;
+            TouchArea { clicked => { Act.act("thermo.mode", i); } }
             if i == root.d.mode: Disc { cx: 24; cy: 24; r: 32; background: TK.neons[k].with-alpha(root.busy ? 0.16 + 0.12 * root.pulse : 0.14); }
             Rectangle { x: -3px; y: -3px; width: 54px; height: 54px; border-radius: 27px; border-width: 3px; border-color: TK.neons[k].with-alpha(i == root.d.mode ? 0.35 : 0.14); }
             Rectangle { border-radius: 24px; background: i == root.d.mode ? TK.neons[k].with-alpha(0.32) : #00000059;
@@ -665,6 +700,7 @@ component ThermoNeon inherits ThermoBase {
         ]: Rectangle {
             visible: p.on;
             width: p.on ? pt.preferred-width + 50px : 0px; height: 32px; border-radius: 16px;
+            TouchArea { clicked => { Act.act("thermo.sheet", ""); } }
             background: #00000066; border-width: 1.5px; border-color: (p.lit ? root.tube : root.grid).mix(#ffffff, 0.3).with-alpha(p.lit ? 1 : 0.75);
             GlowText { x: 12px; y: 0; width: 20px; height: parent.height; icon: true; text: p.g; font-size: 17px; color: #ffffff; neon: p.lit; glow: root.tube; horizontal-alignment: center; }
             pt := GlowText { x: 37px; y: 0; width: self.preferred-width; height: parent.height; text: p.t; font-size: 14px; font-weight: 600; color: #ffffff; neon: p.lit; glow: root.tube; }

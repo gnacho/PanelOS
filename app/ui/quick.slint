@@ -203,7 +203,8 @@ export component QuickPage inherits Rectangle {
             }
             if !t.gone && (t.dim || ch.two): Image { x: 4px; y: 140px + (1 - ch.level) * 170px - 13px; width: 44px; height: 30px; source: root.fader; }
             Text { x: 0; y: 318px; width: parent.width; text: t.short; font-family: "DejaVu Sans Mono"; font-size: 12px; color: t.on ? #e9ecef : #868e96; horizontal-alignment: center; }
-            if t.has-tape: Image { x: -4px; y: 334px; width: 60px; height: 34px; source: t.tape; }
+            if t.has-tape: Image { x: (parent.width - self.width) / 2; y: 334px + (34px - self.height) / 2;
+                width: t.tape.width * 1px; height: t.tape.height * 1px; source: t.tape; }
         }
     }
 

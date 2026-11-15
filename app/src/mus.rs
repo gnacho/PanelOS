@@ -23,18 +23,42 @@ fn open(ui: &AppWindow) {
     let weak = ui.as_weak();
     std::thread::spawn(move || {
         let Ok(token) = auth.access_token() else { return };
-        let Ok(resp) = ureq::get(&format!("{url}/api/states"))
+        // Only the media players, in Home Assistant's own words (a template):
+        // the whole state list is too big for the panel's Wi-Fi.
+        let template = r#"[{% for s in states.media_player if s.state != 'unavailable' %}{"entity_id":{{ s.entity_id|tojson }},"state":{{ s.state|tojson }},"attributes":{"friendly_name":{{ s.name|tojson }},"mass_player_type":{{ s.attributes.mass_player_type|default(none)|tojson }},"media_title":{{ s.attributes.media_title|default(none)|tojson }},"media_artist":{{ s.attributes.media_artist|default(none)|tojson }},"device_class":{{ s.attributes.device_class|default(none)|tojson }},"group_members":{{ s.attributes.group_members|default([])|list|tojson }}}}{% if not loop.last %},{% endif %}{% endfor %}]"#;
+        let resp = ureq::post(&format!("{url}/api/template"))
             .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/json")
             .timeout(Duration::from_secs(10))
-            .call()
-        else {
-            return;
+            .send_string(&json!({ "template": template }).to_string());
+        let resp = match resp {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("nspanel-app: music players: {e}");
+                return;
+            }
         };
         let mut body = String::new();
-        if resp.into_reader().take(16 * 1024 * 1024).read_to_string(&mut body).is_err() {
+        if resp.into_reader().take(2 * 1024 * 1024).read_to_string(&mut body).is_err() {
             return;
         }
-        let Ok(Value::Array(all)) = serde_json::from_str::<Value>(&body) else { return };
+        let all: Vec<Value> = match serde_json::from_str::<Value>(&body) {
+            Ok(Value::Array(a)) => a,
+            other => {
+                eprintln!("nspanel-app: music players: unexpected answer ({:?})", other.err());
+                return;
+            }
+        };
+        // A missing attribute comes back as null: treat it as absent.
+        let all: Vec<Value> = all
+            .into_iter()
+            .map(|mut e| {
+                if let Some(a) = e["attributes"].as_object_mut() {
+                    a.retain(|_, v| !v.is_null());
+                }
+                e
+            })
+            .collect();
         let players: Vec<&Value> = all
             .iter()
             .filter(|e| e["entity_id"].as_str().is_some_and(|i| i.starts_with("media_player.")) && e["state"] != "unavailable")

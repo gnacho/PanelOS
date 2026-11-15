@@ -6,6 +6,8 @@
 #![allow(clippy::too_many_arguments)]
 
 mod api_link;
+mod alarms;
+mod alerts;
 mod artwork;
 mod auth;
 mod cal;
@@ -16,6 +18,7 @@ mod camera;
 mod clock;
 mod config;
 mod display;
+mod draw;
 mod esphome;
 #[cfg(feature = "gpu")]
 mod gpu;
@@ -93,6 +96,12 @@ pub struct UiState {
     offline_since: Option<Instant>,
     offline_text: String,
     screensaver: bool,
+    /// The screensaver started by itself (idle), not by Home Assistant: it ends when its time window does.
+    saver_auto: bool,
+    /// Status screens (newest last) and the critical alert sent by the integration; whether the strip is theirs.
+    statuses: Vec<alerts::Status>,
+    critical: Option<alerts::Critical>,
+    alert_strip: bool,
     backlight: hw::Backlight,
     light: hw::LightSensor,
     proximity: hw::ProximityWake,
@@ -122,6 +131,12 @@ pub struct UiState {
     /// Touch test: on, the point to touch now, where and when the finger came down.
     touch_test: bool,
     touch_test_step: usize,
+    /// The touch test started from the settings or the integration (not by its file), and its offsets.
+    touch_test_manual: bool,
+    touch_offsets: Vec<(f32, f32)>,
+    touch_result: Option<String>,
+    touch_close_at: Option<Instant>,
+    touch_started: Option<Instant>,
     touch_test_down: Option<(Instant, f32, f32, u32)>,
     /// Pull to refresh: where the finger came down, and how far it pulled (0..1, None: not pulling).
     web_pull: Option<(f32, f32)>,
@@ -170,6 +185,9 @@ pub struct UiState {
     dev_config: Option<Value>,
     /// A temporary page shown (its place in the pager).
     temp_page: Option<usize>,
+    /// The alarm open in the editor (None: a new one), the minute last checked for alarms.
+    alarm_edit: Option<usize>,
+    alarm_minute: i64,
     /// Screen off from the quick shade: dark until the next touch or approach.
     screen_off: bool,
     /// What the weather shown last looked like (see weather_key).
@@ -214,6 +232,85 @@ fn page_entities(s: &UiState, kind: &str) -> Vec<String> {
 }
 
 /// A switch of the first page of `kind` (the integration's page list).
+/// The looks of the pages of a kind on the list (a kind may be there more than once).
+pub fn page_looks(ui: &AppWindow, kind: &str) -> Vec<i32> {
+    let pages = ui.get_pages();
+    (0..pages.row_count()).filter_map(|i| pages.row_data(i)).filter(|p| p.kind == kind).map(|p| p.variant).collect()
+}
+
+/// Do not disturb: switched on in the quick shade, or by the integration (on, or on a schedule).
+pub fn dnd_active(s: &UiState) -> bool {
+    if s.dnd {
+        return true;
+    }
+    let cfg = s.panel_config.as_ref().and_then(|c| c.get("dnd"));
+    let get = |k: &str| cfg.and_then(|c| c.get(k));
+    match get("mode").and_then(Value::as_str).unwrap_or("off") {
+        "on" => true,
+        "schedule" => {
+            let mins = |k: &str, d: i64| {
+                get(k)
+                    .and_then(Value::as_str)
+                    .and_then(|t| {
+                        let (h, m) = t.split_once(':')?;
+                        Some(h.trim().parse::<i64>().ok()? * 60 + m.trim().parse::<i64>().ok()?)
+                    })
+                    .unwrap_or(d)
+            };
+            let (from, to) = (mins("from", 22 * 60), mins("to", 7 * 60));
+            let t = pages::now();
+            let now = pages::local_format(t, "%H").parse::<i64>().unwrap_or(0) * 60 + pages::local_format(t, "%M").parse::<i64>().unwrap_or(0);
+            if from <= to {
+                now >= from && now < to
+            } else {
+                now >= from || now < to
+            }
+        }
+        _ => false,
+    }
+}
+
+/// What comes through do not disturb (alarms, timers, status, ring, voice, calls; all by default).
+/// Critical alerts always do.
+pub fn dnd_allows(s: &UiState, what: &str) -> bool {
+    !dnd_active(s)
+        || s.panel_config
+            .as_ref()
+            .and_then(|c| c.get("dnd"))
+            .and_then(|d| d.get("allow"))
+            .and_then(|a| a.get(what))
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+}
+
+/// A new notification from Home Assistant: a strip on top for a few seconds (the integration's
+/// "New notifications": strip / card / off, sound, seconds); silent and none in do not disturb.
+fn popup(ui: &AppWindow, title: &str, message: &str) {
+    let (kind, sound, seconds, quiet) = with_state(|s| {
+        let p = s.panel_config.as_ref().and_then(|c| c.get("popups"));
+        let kind = p.and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("strip").to_string();
+        let sound = p.and_then(|p| p.get("sound")).and_then(Value::as_bool).unwrap_or(true);
+        let seconds = p.and_then(|p| p.get("seconds")).and_then(Value::as_u64).unwrap_or(10).clamp(3, 120);
+        (kind, sound, seconds, dnd_active(s) || s.screensaver || s.alert_strip)
+    });
+    if kind == "off" || quiet {
+        return;
+    }
+    ui.set_strip_title(if title.is_empty() { "Home Assistant".into() } else { title.into() });
+    ui.set_strip_sub(message.into());
+    ui.set_strip_icon(icons::glyph("bell-outline").map(String::from).unwrap_or_default().into());
+    ui.set_strip_has_picto(false);
+    ui.set_strip_critical(false);
+    ui.set_strip_tint(slint::Color::from_rgb_u8(0x2a, 0x2c, 0x2f));
+    ui.set_strip_on(true);
+    with_state(|s| {
+        s.show_until = Some(Instant::now() + Duration::from_secs(seconds));
+        if sound {
+            s.player.play(voice::Sound::Chime);
+        }
+    });
+}
+
 fn page_option(s: &UiState, kind: &str, key: &str) -> Option<Value> {
     s.panel_config
         .as_ref()?
@@ -255,7 +352,19 @@ fn extra_entities(s: &UiState) -> Vec<String> {
             if let Some(list) = p.get("entities").and_then(Value::as_array) {
                 out.extend(list.iter().filter_map(Value::as_str).map(str::to_string));
             }
+            // entities named in a page's options (the doorbell, the door lock)
+            if let Some(o) = p.get("options").and_then(Value::as_object) {
+                for key in ["ring", "lock", "player"] {
+                    if let Some(e) = o.get(key).and_then(Value::as_str).filter(|e| e.contains('.')) {
+                        out.push(e.to_string());
+                    }
+                }
+            }
         }
+    }
+    // the screensaver's light sensor from Home Assistant (panels without their own)
+    if let Some(e) = s.panel_config.as_ref().and_then(|c| c.get("screensaver")).and_then(|v| v.get("light_entity")).and_then(Value::as_str) {
+        out.push(e.to_string());
     }
     let mut seen = std::collections::HashSet::new();
     out.retain(|e| !e.is_empty() && seen.insert(e.clone()));
@@ -336,6 +445,24 @@ fn update_clock(ui: &AppWindow) {
         }
         // The synthwave scenes in use: their view, colour and the next car.
         synth::tick(ui, s);
+        // Alarms: when the minute turns, the ones due ring; the list's "next" line follows.
+        let minute = pages::now() / 60;
+        if minute != s.alarm_minute {
+            let first = s.alarm_minute == 0;
+            s.alarm_minute = minute;
+            if !first {
+                if let Some((time, label)) = alarms::due(s) {
+                    s.ringing = Some(Instant::now());
+                    s.ringing_flag.store(true, Ordering::SeqCst);
+                    ui.set_timers_ring_alarm(true);
+                    ui.set_timers_ring_time(time.into());
+                    ui.set_timers_ring_label(label.into());
+                    ui.set_timers_ringing(true);
+                    RANG.with(|r| r.set(true));
+                }
+            }
+            alarms::refresh(ui, s);
+        }
         // Voice view: closes a few seconds after the end.
         if s.voice_hide_at.is_some_and(|t| Instant::now() >= t) {
             s.voice_hide_at = None;
@@ -351,17 +478,24 @@ fn update_clock(ui: &AppWindow) {
             }
             Some(started) => {
                 ui.set_timers_ring_over(started.elapsed().as_secs_f32());
-                Some(s.player.clone())
+                // do not disturb may keep alarms or timers silent (they still show)
+                let what = if ui.get_timers_ring_alarm() { "alarms" } else { "timers" };
+                dnd_allows(s, what).then(|| s.player.clone())
             }
             None => None,
         }
     });
+    // status screens and the critical alert: their times, the strip; the alert sounds until held
+    let beep = if alerts::refresh(ui) { beep.or_else(|| Some(with_state(|s| s.player.clone()))) } else { beep };
     if let Some(player) = beep {
         player.play(voice::Sound::Beep);
     }
     if RANG.with(|r| r.replace(false)) {
         wake(ui);
-        go_to_page(ui, "timers");
+        // the ringing screen is the timers page's: a temporary one when the list has none
+        if !go_to_page(ui, "timers") {
+            open_temporary_page(ui, "timers");
+        }
     }
 }
 
@@ -387,6 +521,19 @@ fn refresh_pages(ui: &AppWindow) {
             theme,
         });
         let mut weather = weather;
+        // the weather page's switches: the real sun and moon (photo and drawn backgrounds), cars and
+        // neon letters (synthwave)
+        if let Some(b) = page_option(s, "home", "real_sun").and_then(|v| v.as_bool()) {
+            weather.real_sun = b;
+        }
+        let cars = page_option(s, "home", "cars").and_then(|v| v.as_bool()).unwrap_or(true);
+        if ui.get_home_fl_cars_on() != cars {
+            ui.set_home_fl_cars_on(cars);
+        }
+        let neon = page_option(s, "home", "neon").and_then(|v| v.as_bool()).unwrap_or(ui.get_home_fl_neon());
+        if ui.get_home_fl_neon() != neon {
+            ui.set_home_fl_neon(neon);
+        }
         // Development: weather values forced from the dev input (measurements).
         if let Some(o) = s.dev_wx.as_ref() {
             let f = |k: &str| o.get(k).and_then(Value::as_f64);
@@ -409,6 +556,13 @@ fn refresh_pages(ui: &AppWindow) {
         let items = pages::home_items(s.panel_config.as_ref(), a);
         if !same_rows(&ui.get_home_items(), &items) {
             ui.set_home_items(ModelRc::new(VecModel::from(items)));
+        }
+        let lays = pages::home_layouts(s.panel_config.as_ref(), a);
+        let shown = ui.get_home_layouts();
+        let same = shown.row_count() == lays.len() && lays.iter().enumerate().all(|(i, l)| shown.row_data(i).is_some_and(|o| same_rows(&o.items, l)));
+        if !same {
+            let lays: Vec<HomeLayout> = lays.into_iter().map(|items| HomeLayout { items: ModelRc::new(VecModel::from(items)) }).collect();
+            ui.set_home_layouts(ModelRc::new(VecModel::from(lays)));
         }
         let event = pages::home_event();
         if ui.get_home_event() != event {
@@ -500,6 +654,23 @@ fn refresh_pages(ui: &AppWindow) {
         }
     }
     with_state(|s| {
+        // The timers page's functions (alarm, timer, stopwatch) and its colourful timers.
+        if let Some(list) = page_option(s, "timers", "functions").and_then(|v| v.as_array().cloned()) {
+            let on = |k: &str| list.iter().any(|v| v.as_str() == Some(k));
+            let (a, t, w) = (on("alarm"), on("timer"), on("stopwatch"));
+            if a || t || w {
+                ui.set_timers_alarm_on(a);
+                ui.set_timers_timer_on(t);
+                ui.set_timers_watch_on(w);
+                let mode = ui.get_timers_mode();
+                if ![a, t, w][mode.clamp(0, 2) as usize] {
+                    ui.set_timers_mode(if t { 1 } else if a { 0 } else { 2 });
+                }
+            }
+        }
+        if let Some(c) = page_option(s, "timers", "colourful").and_then(|v| v.as_bool()) {
+            ui.set_timers_colourful(c);
+        }
         quick::refresh(ui, s);
         thermo::refresh(ui, s);
         cam::refresh(ui, s);
@@ -522,6 +693,31 @@ fn overlay(base: &mut Option<Value>, top: &Value) {
     }
 }
 
+thread_local! {
+    /// Draws the pages once after the page list changed.
+    static REWARM: slint::Timer = slint::Timer::default();
+}
+
+/// Every page drawn once, one per frame, under the page in view, so the first
+/// swipe to a new page costs no more than any other.
+fn rewarm(ui: &AppWindow) {
+    let weak = ui.as_weak();
+    let next = std::cell::Cell::new(0i32);
+    REWARM.with(|t| {
+        t.start(slint::TimerMode::Repeated, Duration::from_millis(40), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let k = next.get();
+            if k < ui.get_pages().row_count() as i32 {
+                ui.set_warm_page(if k == ui.get_page() { -1 } else { k });
+                next.set(k + 1);
+            } else {
+                ui.set_warm_page(-1);
+                REWARM.with(|t| t.stop());
+            }
+        })
+    });
+}
+
 /// The page list and what the integration's configuration changes.
 fn apply_panel_config(ui: &AppWindow) {
     let reload = with_state(|s| {
@@ -532,6 +728,7 @@ fn apply_panel_config(ui: &AppWindow) {
         let same = shown.row_count() == slots.len() && slots.iter().enumerate().all(|(i, p)| shown.row_data(i).as_ref() == Some(p));
         if !same && s.temp_page.is_none() {
             ui.set_pages(ModelRc::new(VecModel::from(slots.clone())));
+            rewarm(ui);
         }
         if current as usize >= slots.len() {
             ui.set_page(0);
@@ -586,7 +783,7 @@ fn open_temporary_page(ui: &AppWindow, kind: &str) {
     let pages = ui.get_pages();
     let Some(vec) = pages.as_any().downcast_ref::<VecModel<PageSlot>>() else { return };
     let at = (ui.get_page().max(0) as usize + 1).min(vec.row_count());
-    vec.insert(at, PageSlot { kind: kind.into(), variant: 0 });
+    vec.insert(at, PageSlot { kind: kind.into(), variant: 0, theme: -1, layout: -1 });
     with_state(|s| s.temp_page = Some(at));
     ui.set_dots_hidden(true);
     ui.set_page(at as i32);
@@ -677,7 +874,9 @@ fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, 
     });
     if finished {
         wake(ui);
-        go_to_page(ui, "timers");
+        if !go_to_page(ui, "timers") {
+            open_temporary_page(ui, "timers");
+        }
     }
     update_clock(ui);
 }
@@ -686,11 +885,34 @@ fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, 
 fn ring_timer(ui: &AppWindow, s: &mut UiState, name: String) {
     s.ringing = Some(Instant::now());
     s.ringing_flag.store(true, Ordering::SeqCst);
+    ui.set_timers_ring_alarm(false);
     ui.set_timers_ring_label(name.into());
     ui.set_timers_ringing(true);
 }
 
-/// Taps on the timers page (`timers.*`, `watch.*`, `alarms.*`).
+/// A timer started on the panel (a quick start or one of one's own).
+fn start_timer(ui: &AppWindow, secs: u32, name: String) {
+    with_state(|s| {
+        s.timer_seq += 1;
+        let seq = s.timer_seq;
+        s.timers.insert(
+            format!("panel-{seq}"),
+            pages::Timer {
+                name,
+                active: true,
+                end: Instant::now() + Duration::from_secs(secs as u64),
+                left: secs,
+                total: secs,
+                seq,
+                own: true,
+            },
+        );
+    });
+    ui.set_timers_quick(false);
+    ui.set_timers_mode(1);
+}
+
+/// Taps on the timers page (`timers.*`, `watch.*`).
 fn timers_act(ui: &AppWindow, what: &str, value: &str) {
     let n: i64 = value.parse().unwrap_or(0);
     // The timer at the page's index `n`.
@@ -700,27 +922,30 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
         "timers.pick" => ui.set_timers_focus(n as i32),
         "timers.quick" => ui.set_timers_quick(true),
         "timers.quick-close" => ui.set_timers_quick(false),
-        "timers.start" => {
-            let secs = n.clamp(1, 24 * 3600) as u32;
-            with_state(|s| {
-                s.timer_seq += 1;
-                let seq = s.timer_seq;
-                s.timers.insert(
-                    format!("panel-{seq}"),
-                    pages::Timer {
-                        name: String::new(),
-                        active: true,
-                        end: Instant::now() + Duration::from_secs(secs as u64),
-                        left: secs,
-                        total: secs,
-                        seq,
-                        own: true,
-                    },
-                );
-            });
-            ui.set_timers_quick(false);
-            ui.set_timers_mode(1);
+        "timers.new" => {
+            // a timer of one's own: the editor with hours and minutes (10 min to start from)
+            let tint = with_state(|s| accent(s));
+            ui.set_timers_edit_timer(true);
+            ui.set_timers_edit_new(true);
+            ui.set_timers_edit_h(0);
+            ui.set_timers_edit_m(10);
+            ui.set_timers_edit_label(Default::default());
+            ui.set_timers_edit_tint(tint);
+            ui.set_timers_edit_keyboard(false);
+            ui.set_timers_edit_info(false);
+            ui.set_timers_edit(true);
         }
+        "timers.create" => {
+            let secs = (ui.get_timers_edit_h() as i64 * 3600 + ui.get_timers_edit_m() as i64 * 60).clamp(0, 24 * 3600) as u32;
+            if secs == 0 {
+                return;
+            }
+            let name = ui.get_timers_edit_label().trim().to_string();
+            ui.set_timers_edit(false);
+            ui.set_timers_edit_timer(false);
+            start_timer(ui, secs, name);
+        }
+        "timers.start" => start_timer(ui, n.clamp(1, 24 * 3600) as u32, String::new()),
         "timers.toggle" | "timers.add" | "timers.cancel" => with_state(|s| {
             let Some(id) = id_at(s) else { return };
             match what {
@@ -1148,6 +1373,16 @@ fn wake_phrase(ids: &[String]) -> String {
 
 /// show_view / show_message from Home Assistant (PanelOS integration).
 fn handle_show(ui: &AppWindow, v: &Value) {
+    if v["type"].as_str() == Some("touch_test") {
+        start_touch_test(ui);
+        return;
+    }
+    // status screens and critical alerts (the integration's house-wide rules)
+    if matches!(v["type"].as_str(), Some("status" | "status_clear" | "critical" | "critical_clear")) {
+        eprintln!("nspanel-app: {} {}", v["type"].as_str().unwrap_or(""), v["id"].as_str().unwrap_or(""));
+        alerts::show(ui, v);
+        return;
+    }
     let kind = v["type"].as_str().unwrap_or("view");
     let seconds = v["seconds"].as_u64().unwrap_or(30);
     eprintln!("nspanel-app: show request {v}");
@@ -1365,8 +1600,19 @@ fn handle_event(ui: &AppWindow, event: Event) {
             }
         }
         Event::Notes { kind, notes } => {
+            let fresh = if kind == "added" {
+                notes.as_object().and_then(|m| m.values().last()).map(|v| {
+                    let t = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+                    (t("title"), t("message"))
+                })
+            } else {
+                None
+            };
             info::update(&kind, &notes);
             with_state(|s| info::refresh(ui, s));
+            if let Some((title, message)) = fresh {
+                popup(ui, &title, &message);
+            }
         }
         Event::Forecast { hourly, items } => {
             with_state(|s| if hourly { s.forecast_hourly = items } else { s.forecast_daily = items });
@@ -1424,8 +1670,59 @@ fn wake(ui: &AppWindow) {
     }
 }
 
+/// The darkness below which the screensaver may start by default (lux at the panel). Measured on the
+/// panel's own sensor: a lamp-lit evening 5–26 lx, the dark room about 1 lx.
+const DARK_LUX: f64 = 3.0;
+
+/// Whether the screensaver may start now (the integration's "When"): only in the dark (the default:
+/// darker than `lux`, from the panel's sensor or a Home Assistant one), between two times, from sunset
+/// to sunrise, or any time. `leaving`: whether one already on may stay (in the dark it stays until it
+/// is clearly brighter, so a reading near the limit does not toggle it).
+fn saver_window(s: &UiState, leaving: bool) -> bool {
+    let cfg = s.panel_config.as_ref().and_then(|c| c.get("screensaver"));
+    let get = |k: &str| cfg.and_then(|c| c.get(k));
+    let night = || s.states.get("sun.sun").map(|e| e.state == "below_horizon").unwrap_or(true);
+    match get("when").and_then(Value::as_str).unwrap_or("dark") {
+        "any" => true,
+        "night" => night(),
+        "window" => {
+            let mins = |k: &str, d: i64| {
+                get(k)
+                    .and_then(Value::as_str)
+                    .and_then(|t| {
+                        let (h, m) = t.split_once(':')?;
+                        Some(h.trim().parse::<i64>().ok()? * 60 + m.trim().parse::<i64>().ok()?)
+                    })
+                    .unwrap_or(d)
+            };
+            let (from, to) = (mins("from", 22 * 60), mins("to", 6 * 60));
+            let t = pages::now();
+            let now = pages::local_format(t, "%H").parse::<i64>().unwrap_or(0) * 60 + pages::local_format(t, "%M").parse::<i64>().unwrap_or(0);
+            if from <= to {
+                now >= from && now < to
+            } else {
+                now >= from || now < to
+            }
+        }
+        _ => {
+            let lux = get("light_entity")
+                .and_then(Value::as_str)
+                .and_then(|e| s.states.get(e))
+                .and_then(|e| e.state.parse::<f64>().ok())
+                .or(s.lux);
+            let limit = get("lux").and_then(Value::as_f64).unwrap_or(DARK_LUX);
+            match lux {
+                Some(l) if leaving => l <= limit * 2.0 + 2.0,
+                Some(l) => l < limit,
+                None => night(),
+            }
+        }
+    }
+}
+
 fn start_screensaver(ui: &AppWindow, s: &mut UiState) {
     s.screensaver = true;
+    s.saver_auto = false;
     s.show_until = None;
     ui.set_set_view(0);
     ui.set_strip_on(false);
@@ -1665,7 +1962,15 @@ fn tick(ui: &AppWindow) {
             s.proximity_test = test;
         }
         // Touch test view: on while its file exists.
-        let touch_test = std::path::Path::new(TOUCH_TEST_FILE).exists();
+        // (or started from the settings / the integration; its result stays a few seconds)
+        if s.touch_close_at.is_some_and(|t| Instant::now() >= t) {
+            s.touch_close_at = None;
+        }
+        // nobody finishing it: it closes after a minute and a half
+        if s.touch_test_manual && s.touch_started.is_some_and(|t| t.elapsed() > Duration::from_secs(90)) {
+            s.touch_test_manual = false;
+        }
+        let touch_test = std::path::Path::new(TOUCH_TEST_FILE).exists() || s.touch_test_manual || s.touch_close_at.is_some();
         if touch_test != s.touch_test {
             s.touch_test = touch_test;
             s.touch_test_step = 0;
@@ -1677,10 +1982,27 @@ fn tick(ui: &AppWindow) {
         }
         // Screensaver (not while Home Assistant shows something)
         let timeout = s.settings.screensaver_seconds;
-        let showing = s.show_until.is_some() || s.proximity_test.is_some() || ui.get_voice_on() || s.ringing.is_some();
-        if !s.screensaver && !showing && timeout > 0 && ui.get_paired() && !ui.get_setup() && idle > Duration::from_secs(timeout as u64) {
+        // (and not while a timer runs: its chips stay in view)
+        let showing = s.show_until.is_some()
+            || s.proximity_test.is_some()
+            || ui.get_voice_on()
+            || s.ringing.is_some()
+            || s.timers.values().any(|t| t.active)
+            || !s.statuses.is_empty()
+            || s.critical.is_some();
+        if !s.screensaver
+            && !showing
+            && timeout > 0
+            && ui.get_paired()
+            && !ui.get_setup()
+            && idle > Duration::from_secs(timeout as u64)
+            && saver_window(s, false)
+        {
             start_screensaver(ui, s);
+            s.saver_auto = true;
         }
+        // outside its window (a lamp switched on, the morning) the panel shows its pages again
+        let saver_ends = s.screensaver && s.saver_auto && !saver_window(s, true);
         // Proximity: presence for Home Assistant, wake from the screensaver
         let mut wake_now = test_started && s.screensaver;
         if let Some(p) = s.light.proximity() {
@@ -1703,7 +2025,7 @@ fn tick(ui: &AppWindow) {
         };
         s.brightness_target = target;
         report_device(s);
-        (wake_now, s.weather_refreshed.elapsed() > Duration::from_secs(60))
+        (wake_now || saver_ends, s.weather_refreshed.elapsed() > Duration::from_secs(60))
     });
     let (wake_now, refresh) = result;
     if wake_now {
@@ -1733,8 +2055,42 @@ fn touch_test_text(step: usize) -> String {
     match step {
         0..=7 => format!("Touch the red point ({} of 9)", step + 1),
         8 => "Hold the red point for 2 seconds (9 of 9)".into(),
-        _ => "Done, thank you".into(),
+        _ => with_state(|s| s.touch_result.clone()).unwrap_or_else(|| "Done, thank you".into()),
     }
+}
+
+/// Starts the touch calibration (the settings' Touch row, or the integration).
+fn start_touch_test(ui: &AppWindow) {
+    with_state(|s| {
+        s.touch_test_manual = true;
+        s.touch_offsets.clear();
+        s.touch_result = None;
+        s.touch_started = Some(Instant::now());
+    });
+    ui.set_set_view(0);
+    wake(ui);
+}
+
+/// The nine points touched: a correction only when the offsets are systematic (all the same way,
+/// more than 3 px on average, spread under 6 px); the test closes a few seconds later.
+fn finish_touch_test(s: &mut UiState) {
+    let n = s.touch_offsets.len().max(1) as f32;
+    let (mx, my) = s.touch_offsets.iter().fold((0.0, 0.0), |a, o| (a.0 + o.0 / n, a.1 + o.1 / n));
+    let spread = (s.touch_offsets.iter().map(|o| (o.0 - mx).powi(2) + (o.1 - my).powi(2)).sum::<f32>() / n).sqrt();
+    let systematic = (mx * mx + my * my).sqrt() > 3.0 && spread < 6.0;
+    let (ox, oy) = s.settings.touch_offset;
+    let result = if systematic {
+        s.settings.touch_offset = (ox + mx, oy + my);
+        *platform::TOUCH_OFFSET.lock().unwrap() = s.settings.touch_offset;
+        s.settings.save();
+        format!("Corrected by {:+.0} px across, {:+.0} px down", mx, my)
+    } else {
+        "No correction needed".into()
+    };
+    eprintln!("nspanel-app: touch calibration: mean ({mx:+.1},{my:+.1}) spread {spread:.1} px → {result}");
+    s.touch_result = Some(result);
+    s.touch_test_manual = false;
+    s.touch_close_at = Some(Instant::now() + Duration::from_secs(4));
 }
 
 fn show_proximity_test(ui: &AppWindow, s: &UiState, raw: f64) {
@@ -1837,9 +2193,12 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
     match what {
         "saver.wake" => wake(ui),
         "timers.stop" => stop_ringing(ui),
-        w if w.starts_with("timers.") || w.starts_with("watch.") || w.starts_with("alarms.") => timers_act(ui, w, value),
+        w if w.starts_with("alarms.") || w.starts_with("alarm.") => alarms::act(ui, w, value),
+        w if w.starts_with("timers.") || w.starts_with("watch.") => timers_act(ui, w, value),
         "voice.close" => ui.set_voice_on(false),
         "strip.close" => ui.set_strip_on(false),
+        "status.fold" | "strip.open" | "info.crit-silence" => alerts::act(ui, what),
+        "set.touch" => start_touch_test(ui),
         "shade.open" => shade::open(ui),
         "shade.peek" => shade::fill(ui),
         // A home widget's view: clock → timers, date / event → calendar,
@@ -1913,6 +2272,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     platform::install_screenshot_signal();
 
     let settings = Settings::load();
+    *platform::TOUCH_OFFSET.lock().unwrap() = settings.touch_offset;
     let config = AppConfig::load();
     // mDNS: announces the ESPHome API, so Home Assistant finds the panel;
     // browses for Home Assistant when the setup screen asks for it.
@@ -2012,19 +2372,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ui.set_loading_image(slint::Image::from_rgb8(pic));
         }
     }
+    // The pictures the app draws itself: when new ones are ready, the pages that show them follow.
+    {
+        let weak = ui.as_weak();
+        draw::start(move || {
+            if let Some(ui) = weak.upgrade() {
+                with_state(|s| {
+                    todo::refresh(&ui, s);
+                    info::refresh(&ui, s);
+                    cal::refresh(&ui, s);
+                    quick::refresh(&ui, s);
+                });
+            }
+        });
+    }
+    // While the start-up picture still covers the screen, every page is drawn
+    // once (one per frame), then the picture fades. At most 1.5 s.
     let intro = slint::Timer::default();
     let weak = ui.as_weak();
-    intro.start(slint::TimerMode::SingleShot, Duration::from_millis(250), move || {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_intro(false);
+    let warm_started = Instant::now();
+    let warm_next = std::cell::Cell::new(0i32);
+    intro.start(slint::TimerMode::Repeated, Duration::from_millis(20), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let n = ui.get_pages().row_count() as i32;
+        let k = warm_next.get();
+        if k < n && warm_started.elapsed() < Duration::from_millis(1500) {
+            ui.set_warm_page(if k == ui.get_page() { -1 } else { k });
+            warm_next.set(k + 1);
+            return;
+        }
+        if ui.get_intro() {
+            ui.set_warm_page(-1);
+            if warm_started.elapsed() >= Duration::from_millis(250) {
+                ui.set_intro(false);
+            }
         }
     });
     let intro_end = slint::Timer::default();
     let weak = ui.as_weak();
-    intro_end.start(slint::TimerMode::SingleShot, Duration::from_millis(900), move || {
-        if let Some(ui) = weak.upgrade() {
-            ui.set_intro_visible(false);
+    // The picture goes once it has faded (500 ms after the warm-up).
+    intro_end.start(slint::TimerMode::Repeated, Duration::from_millis(100), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if ui.get_intro() || !ui.get_intro_visible() {
+            return;
         }
+        thread_local!(static FADE_FROM: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
+        let from = FADE_FROM.with(|f| match f.get() {
+            Some(t) => t,
+            None => {
+                let t = Instant::now();
+                f.set(Some(t));
+                t
+            }
+        });
+        if from.elapsed() < Duration::from_millis(650) {
+            return;
+        }
+        ui.set_intro_visible(false);
         if let Some(pid) = splash {
             // SAFETY: plain kill(2).
             unsafe { libc::kill(pid, libc::SIGTERM) };
@@ -2058,6 +2462,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             offline_since: None,
             offline_text: String::new(),
             screensaver: false,
+            saver_auto: false,
+            statuses: Vec::new(),
+            critical: None,
+            alert_strip: false,
             backlight: hw::Backlight::open(),
             light: hw::LightSensor::open(),
             proximity: hw::ProximityWake::default(),
@@ -2077,6 +2485,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             web_swipe: None,
             touch_test: false,
             touch_test_step: 0,
+            touch_test_manual: false,
+            touch_offsets: Vec::new(),
+            touch_result: None,
+            touch_close_at: None,
+            touch_started: None,
             touch_test_down: None,
             web_pull: None,
             web_pulled: None,
@@ -2109,6 +2522,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             dnd: false,
             dev_config: None,
             temp_page: None,
+            alarm_edit: None,
+            alarm_minute: 0,
             screen_off: false,
             weather_key: String::new(),
             dev_wx: None,
@@ -2243,7 +2658,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(list) = v.get("pages").and_then(Value::as_array) {
                 let slots: Vec<PageSlot> =
-                    list.iter().filter_map(Value::as_str).map(|k| PageSlot { kind: k.into(), variant: 0 }).collect();
+                    list.iter().filter_map(Value::as_str).map(|k| PageSlot { kind: k.into(), variant: 0, theme: -1, layout: -1 }).collect();
                 ui.set_page(0);
                 ui.set_pages(ModelRc::new(VecModel::from(slots)));
             }
@@ -2350,10 +2765,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let weak = ui.as_weak();
     let art_tx = artwork::spawn(config.ha_url.clone(), auth.clone(), move |img| {
+        // RGBA in this thread: the renderer takes it without converting.
+        let img = img.map(|b| cam::rgba(&b));
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
-                with_state(|s| s.art = img.map(slint::Image::from_rgb8));
+                with_state(|s| s.art = img.map(slint::Image::from_rgba8));
                 refresh_pages(&ui);
             }
         });
@@ -2474,6 +2891,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
                     if s.touch_test_step < 8 || (s.touch_test_step == 8 && held >= TOUCH_TEST_HOLD) {
                         s.touch_test_step += 1;
+                        // measured with the correction in place: the offset left over adds to it
+                        s.touch_offsets.push((dx, dy));
+                    }
+                    if s.touch_test_step == 9 && s.touch_test_manual {
+                        finish_touch_test(s);
                     }
                     return Some(s.touch_test_step);
                 }

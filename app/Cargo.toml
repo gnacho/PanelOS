@@ -38,11 +38,13 @@ drm014 = { package = "drm", version = "0.14", optional = true }
 glutin = { version = "0.32", default-features = false, features = ["egl"], optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 glow = { version = "0.18", optional = true }
+# The pictures the app draws itself (label tapes, handwriting): the renderer's own Skia.
+skia-safe = { version = "=0.153.3", default-features = false, features = ["gl"], optional = true }
 
 [features]
 default = []
 # The UI on the GPU (Mesa from the web bundle); without it the software renderer draws.
-gpu = ["dep:i-slint-renderer-skia", "dep:gbm", "dep:drm014", "dep:glutin", "dep:raw-window-handle", "dep:glow"]
+gpu = ["dep:i-slint-renderer-skia", "dep:gbm", "dep:drm014", "dep:glutin", "dep:raw-window-handle", "dep:glow", "dep:skia-safe"]
 
 [build-dependencies]
 slint-build = "1.18"

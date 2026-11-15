@@ -145,7 +145,28 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         ui.set_quick_screw(picture("quick/screw.png"));
     }
     let entities = crate::page_entities(s, "quick");
-    let list = tiles(&s.states, &entities, crate::accent(s));
+    let mut list = tiles(&s.states, &entities, crate::accent(s));
+    // the mixing desk: a tiny label tape under each fader (the integration's tape text, else the
+    // name's last word), coloured by kind
+    if crate::page_looks(ui, "quick").contains(&1) && crate::draw::AVAILABLE {
+        let own = crate::page_option(s, "quick", "tapes").and_then(|v| v.as_array().cloned()).unwrap_or_default();
+        for (i, (t, id)) in list.iter_mut().zip(&entities).enumerate() {
+            let text = own
+                .get(i)
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| t.name.split_whitespace().last().unwrap_or("").chars().take(7).collect());
+            let tint = match id.split('.').next().unwrap_or("") {
+                "climate" | "fan" | "water_heater" => crate::draw::Tint::Green,
+                "media_player" => crate::draw::Tint::Red,
+                _ => crate::draw::Tint::Blue,
+            };
+            let seed = crate::draw::seed(id);
+            t.tape = crate::draw::get(crate::draw::Job::DeskTape { text, tint, seed });
+            t.has_tape = t.tape.size().width > 0;
+        }
+    }
     let mood = mood(&list);
     if ui.get_quick_mood().as_str() != mood {
         ui.set_quick_mood(mood.into());

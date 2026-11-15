@@ -39,9 +39,12 @@ fn grid(scene: usize, view: &str) -> Color {
 
 /// Updates the scenes that are in use (once a second).
 pub fn tick(ui: &AppWindow, s: &crate::UiState) {
-    let home = ui.get_weather().theme == 8;
-    let timers = ui.get_timers_theme() == 3;
-    let thermo = ui.get_thermo_look() == 3;
+    // any page on the list with a synthwave look (a kind may be there more than once)
+    let pages = ui.get_pages();
+    let any = |f: &dyn Fn(&crate::PageSlot) -> bool| (0..slint::Model::row_count(&pages)).filter_map(|i| slint::Model::row_data(&pages, i)).any(|p| f(&p));
+    let home = ui.get_weather().theme == 8 || any(&|p| p.kind == "home" && p.theme == 8);
+    let timers = any(&|p| p.kind == "timers" && p.variant == 3);
+    let thermo = any(&|p| p.kind == "thermostat" && p.variant == 3);
     if !home && !timers && !thermo {
         return;
     }

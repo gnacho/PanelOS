@@ -11,7 +11,8 @@ use serde_json::Value;
 use slint::{Color, ComponentHandle, ModelRc, SharedString, VecModel};
 
 use crate::pages::{local_format, now, parse_iso};
-use crate::{texts, with_state, AppWindow, CalCell, CalDay, CalEvent};
+use crate::draw::{self, Ink, Job};
+use crate::{texts, with_state, AppWindow, CalBoard, CalCell, CalDay, CalEvent, WallCell};
 
 /// One event as read from Home Assistant.
 #[derive(Clone, Debug)]
@@ -240,6 +241,58 @@ fn day_label(day0: i64, today: i64) -> String {
 }
 
 /// The calendar page from the events read (only when the panel has one).
+/// "Series - S01E02 - Title" (an episode calendar): the series name; other titles as they are.
+fn short(title: &str) -> String {
+    if let Some(i) = title.find(" - S") {
+        let rest: Vec<char> = title[i + 4..].chars().take(3).collect();
+        if rest.len() == 3 && rest[0].is_ascii_digit() && rest[1].is_ascii_digit() && rest[2] == 'E' {
+            return title[..i].to_string();
+        }
+    }
+    title.to_string()
+}
+
+/// The wall calendar: this month's grid, each day's events written in pen by the app (one ink per
+/// calendar, today circled in red).
+fn wall(ui: &AppWindow, events: &[Ev], t: i64, written: Option<&[usize]>) {
+    let today = midnight(t);
+    let first = date_epoch(&local_format(t, "%Y-%m-01")).unwrap_or(today);
+    let grid0 = day_after(first, -weekday(first));
+    let month = local_format(t, "%m");
+    let inks = [Ink::Blue, Ink::Purple, Ink::Red, Ink::Green, Ink::Black];
+    let rows: Vec<WallCell> = (0..42)
+        .map(|k| {
+            let day0 = day_after(grid0, k);
+            let day1 = day_after(day0, 1);
+            let notes: Vec<(String, Ink)> =
+                events
+                    .iter()
+                    .filter(|e| e.start < day1 && e.end > day0 && written.map_or(true, |w| w.contains(&e.cal)))
+                    .map(|e| (short(&e.title), inks[e.cal % inks.len()]))
+                    .collect();
+            let is_today = day0 == today;
+            WallCell {
+                num: local_format(day0, "%-d").parse().unwrap_or(0),
+                other_month: local_format(day0, "%m") != month,
+                sunday: weekday(day0) == 6,
+                notes: if notes.is_empty() && !is_today {
+                    Default::default()
+                } else {
+                    draw::get(Job::Cell { notes, today: is_today, seed: (day0 / 86400) as u32 })
+                },
+            }
+        })
+        .collect();
+    if let Some(m) = crate::pages::update_rows(&ui.get_cal_wall_cells(), rows) {
+        ui.set_cal_wall_cells(m);
+    }
+    ui.set_cal_wall_month(local_format(t, "%B").to_uppercase().into());
+    ui.set_cal_wall_year(local_format(t, "%Y").into());
+    if ui.get_cal_wall_photo().size().width == 0 {
+        ui.set_cal_wall_photo(crate::quick::picture("cal/wall-photo.jpg"));
+    }
+}
+
 pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     let pages = ui.get_pages();
     let Some(slot) =
@@ -266,6 +319,14 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         events.iter().filter(|e| e.start < day1 && e.end > day0).collect()
     };
     let view = ui.get_cal_view();
+    // the wall calendar's pen notes come in one by one: its cells follow them
+    if crate::page_looks(ui, "calendar").contains(&3) {
+        // the calendars written on the wall (daily routines would fill every cell): set in the integration, else all
+        let written: Option<Vec<usize>> = crate::page_option(s, "calendar", "wall_calendars")
+            .and_then(|v| v.as_array().cloned())
+            .map(|a| a.iter().filter_map(Value::as_str).filter_map(|id| entities.iter().position(|e| e == id)).collect());
+        wall(ui, &events, t, written.as_deref());
+    }
     // New models rebuild the page: only when the events, the minute or the view changed.
     thread_local!(static LAST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) });
     let key = events.iter().fold((t / 60) as u64 ^ ((view as u64) << 56), |k, e| {
@@ -344,6 +405,59 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         ["M", "T", "W", "T", "F", "S", "S"].iter().map(|d| SharedString::from(*d)).collect::<Vec<_>>(),
     )));
     ui.set_cal_month_cells(ModelRc::new(VecModel::from(cells)));
+    // departure board: today's and the coming events, one row each (fields cut to their cells)
+    let cell = |s: &str, n: usize| -> String {
+        let up: String = s.to_uppercase().chars().filter(|c| !c.is_control()).take(n).collect();
+        up
+    };
+    let mut board: Vec<CalBoard> = Vec::new();
+    for d in 0..7 {
+        let day0 = day_after(today, d);
+        for e in on_day(day0) {
+            if board.len() >= 6 {
+                break;
+            }
+            if e.start < day0 && d > 0 {
+                continue;
+            }
+            let (status, state) = if e.end <= t {
+                ("DEPARTED".to_string(), 2)
+            } else if e.start <= t {
+                ("BOARDING".to_string(), 1)
+            } else if d == 0 {
+                ("ON TIME".to_string(), 0)
+            } else {
+                (local_format(day0, "%a %-d").to_uppercase(), 3)
+            };
+            board.push(CalBoard {
+                time: if e.all_day { "--:--".into() } else { hm(e.start).into() },
+                what: cell(&e.title, 16).into(),
+                gate: cell(names.get(e.cal).map(String::as_str).unwrap_or(""), 2).into(),
+                status: cell(&status, 8).into(),
+                state,
+            });
+        }
+    }
+    ui.set_cal_board_rows(ModelRc::new(VecModel::from(board)));
+    ui.set_cal_board_clock(hm(t).into());
+    ui.set_cal_board_date(local_format(t, "%a %-d %b").to_uppercase().into());
+    if ui.get_cal_board_ticker().is_empty() {
+        ui.set_cal_board_ticker(texts::fresh("cal.board.tickers").into());
+        ui.set_cal_board_empty(texts::fresh("cal.board.empty").into());
+    }
+    // tear-off: today's page
+    let todays: Vec<CalEvent> = on_day(today).iter().map(|e| event(e, &names, today, t)).collect();
+    let shown = todays.len().min(3);
+    ui.set_cal_tear_month(local_format(t, "%B %Y").to_uppercase().into());
+    ui.set_cal_tear_day(local_format(t, "%-d").parse().unwrap_or(1));
+    ui.set_cal_tear_weekday(local_format(t, "%A").to_uppercase().into());
+    ui.set_cal_tear_sunday(weekday(t) == 6);
+    ui.set_cal_tear_info(format!("week {} · day {}", local_format(t, "%V").trim_start_matches('0'), local_format(t, "%j").trim_start_matches('0')).into());
+    ui.set_cal_tear_more(if todays.len() > shown { format!("+{} more", todays.len() - shown).into() } else { SharedString::new() });
+    ui.set_cal_tear_events(ModelRc::new(VecModel::from(todays.into_iter().take(shown).collect::<Vec<_>>())));
+    if ui.get_cal_tear_line().is_empty() {
+        ui.set_cal_tear_line(texts::fresh("cal.tear.lines").into());
+    }
     let (title, sub) = match view {
         1 => ("Today".to_string(), local_format(t, "%A, %-d %B")),
         2 | 4 => ("This week".into(), format!("{}–{} · week {}", local_format(monday, "%-d"), local_format(day_after(monday, 6), "%-d %B"), local_format(t, "%V").trim_start_matches('0'))),

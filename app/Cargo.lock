@@ -2872,6 +2872,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "skia-safe",
  "slint",
  "slint-build",
  "snow",

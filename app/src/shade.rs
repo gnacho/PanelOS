@@ -11,7 +11,8 @@ use crate::{hw, texts, with_state, AppWindow, SetBar, SetRow, SetSection, SetSeg
 
 /// Rows of the settings list, in this order.
 const ROW_STORAGE: i32 = 5;
-const ROW_RESTART: i32 = 7;
+const ROW_TOUCH: i32 = 6;
+const ROW_RESTART: i32 = 8;
 
 pub fn open(ui: &AppWindow) {
     fill(ui);
@@ -123,6 +124,7 @@ fn rows(ui: &AppWindow, slow: &Slow) {
             row("\u{F036C}", "Voice", voice, false),
             row("\u{F057E}", "Sound", format!("Volume {} %", s.settings.volume), false),
             row("\u{F02CA}", "Storage", slow.free.map(|b| format!("{} free", size_text(b))).unwrap_or_else(|| "…".into()), false),
+            row("\u{F0741}", "Touch", if s.settings.touch_offset == (0.0, 0.0) { "Calibrate".into() } else { "Calibrated".into() }, false),
             row("\u{F02FD}", "About", format!("PanelOS {}", env!("CARGO_PKG_VERSION")), false),
             row("\u{F0709}", "Restart", String::new(), true),
         ]
@@ -205,6 +207,7 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                 storage(ui);
                 ui.set_set_view(4);
             }
+            ROW_TOUCH => crate::start_touch_test(ui),
             ROW_RESTART => ui.set_set_view(5),
             _ => {}
         },

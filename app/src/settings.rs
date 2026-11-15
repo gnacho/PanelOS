@@ -46,6 +46,10 @@ pub struct Settings {
     pub music_player: String,
     /// The calendar page's view picked on the panel (agenda, day, week …).
     pub calendar_view: i32,
+    /// Alarms set on the panel's timers page.
+    pub alarms: Vec<crate::alarms::Alarm>,
+    /// The touch calibration's correction (pixels), from the touch test.
+    pub touch_offset: (f32, f32),
 }
 
 /// What the web view shows in dashboard mode.
@@ -186,6 +190,8 @@ impl Default for Settings {
             web: WebConfig::default(),
             music_player: String::new(),
             calendar_view: 0,
+            alarms: Vec::new(),
+            touch_offset: (0.0, 0.0),
         }
     }
 }

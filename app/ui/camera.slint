@@ -202,6 +202,11 @@ export component CameraPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- visitor overlay
+    // holding "open" for 1.5 s opens (the app calls the lock); the bar fills while held
+    property <bool> opening;
+    property <float> opened: root.opening ? 1 : 0;
+    animate opened { duration: root.opening ? 1500ms : 200ms; easing: linear; }
+    if root.ring: TouchArea { }
     if root.ring: Image { x: 0; y: 0; width: 480px; height: 480px; source: root.ring-bg; }
     if root.ring: GlowText { x: 16px; y: 50px; width: 448px; height: 30px; text: root.ring-title; font-size: 22px; font-weight: 600; color: #ffffff;
         horizontal-alignment: center; overflow: elide; }
@@ -226,12 +231,20 @@ export component CameraPage inherits Rectangle {
         if root.can-open: Rectangle {
             width: 200px; height: 64px; border-radius: 32px; background: #ffffff2b; border-width: 1px; border-color: #ffffff3d;
             // holding fills it from the left (a solid fill: gradients ignore the corner radius)
-            if root.hold > 0: Rectangle { x: 0; y: 0; width: max(64px, parent.width * root.hold); height: 64px; border-radius: 32px; background: Theme.success; }
+            TouchArea {
+                pointer-event(ev) => {
+                    if ev.kind == PointerEventKind.down { root.opening = true; }
+                    if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel { root.opening = false; }
+                }
+            }
+            Timer { interval: 1500ms; running: root.opening; triggered => { root.opening = false; Act.act("cam.open", ""); } }
+            if root.opened > 0: Rectangle { x: 0; y: 0; width: max(64px, parent.width * root.opened); height: 64px; border-radius: 32px; background: Theme.success; }
             HorizontalLayout { alignment: center; spacing: 8px;
                 GlowText { width: 24px; height: 64px; icon: true; text: "\u{F0FC7}"; font-size: 22px; color: #ffffff; horizontal-alignment: center; }
-                GlowText { width: self.preferred-width; height: 64px; text: root.hold > 0 ? "Keep holding" : "Hold to open"; font-size: 16px; font-weight: 600; color: #ffffff; } }
+                GlowText { width: self.preferred-width; height: 64px; text: root.opening ? "Keep holding" : "Hold to open"; font-size: 16px; font-weight: 600; color: #ffffff; } }
         }
         Rectangle { width: 64px; height: 64px; border-radius: 32px; background: #ffffff2b; border-width: 1px; border-color: #ffffff3d;
+            TouchArea { clicked => { Act.act("cam.ring-close", ""); } }
             GlowText { width: 64px; height: 64px; icon: true; text: "\u{F0156}"; font-size: 28px; color: #ffffff; horizontal-alignment: center; } }
     }
     // replies: tap on talk (holding talk records a voice message for the door instead)

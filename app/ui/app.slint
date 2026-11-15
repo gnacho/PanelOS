@@ -40,6 +40,14 @@ export { SetRow, SetBar, SetSeg, SetSection }
 export struct PageSlot {
     kind: string,
     variant: int,
+    // a weather (home) page's own background (-1: the panel's) and widget layout (-1: the panel's)
+    theme: int,
+    layout: int,
+}
+
+// the widgets of one more weather page
+export struct HomeLayout {
+    items: [HomeItem],
 }
 
 export component AppWindow inherits Window {
@@ -76,6 +84,7 @@ export component AppWindow inherits Window {
     in property <WeatherData> weather;
     // home page: widgets on the living weather background
     in property <[HomeItem]> home-items;
+    in property <[HomeLayout]> home-layouts;
     // thermostat panel: the climate devices, the one on the dial, the rooms (device picker), the options sheet
     in property <[ClimateDev]> thermo-devices;
     in property <int> thermo-sel;
@@ -109,7 +118,8 @@ export component AppWindow inherits Window {
     in property <bool> cam-can-open;
     in property <bool> cam-can-talk;
     in property <float> cam-hold;
-    in property <float> cam-pulse: 1;
+    // breathing ring round the visitor's picture (only computed while it shows)
+    in property <float> cam-pulse: 0.5 + 0.5 * Math.sin(animation-tick() / 1600ms * 360deg);
     in property <bool> cam-replies;
     in property <[string]> cam-reply-list;
     in property <int> info-look;
@@ -127,7 +137,8 @@ export component AppWindow inherits Window {
     in property <string> info-crit-icon;
     in property <string> info-crit-source;
     in property <float> info-crit-hold;
-    in property <float> info-crit-pulse: 1;
+    // breathing (2 s), only computed while a critical alert shows
+    in property <float> info-crit-pulse: 0.5 + 0.5 * Math.sin(animation-tick() / 2000ms * 360deg);
     in property <bool> info-settings;
     in property <string> info-clock;
     in property <string> info-pager-empty;
@@ -137,6 +148,7 @@ export component AppWindow inherits Window {
     in property <image> info-fridge-empty;
     in property <image> info-pager-body;
     in property <image> info-pager-led;
+    in property <int> info-pager-first;
     in property <bool> info-crit-button: true;
     in property <int> quick-look;
     in property <[QuickTile]> quick-tiles;
@@ -186,7 +198,7 @@ export component AppWindow inherits Window {
     in property <bool> strip-has-picto;
     in property <color> strip-tint;
     in property <bool> strip-critical;
-    in property <float> strip-pulse: 1;
+    in property <float> strip-pulse: 0.5 + 0.5 * Math.sin(animation-tick() / 2000ms * 360deg);
     in property <int> cal-view;
     in property <int> cal-look;
     in property <[CalBoard]> cal-board-rows;
@@ -393,8 +405,10 @@ export component AppWindow inherits Window {
     in property <image> timers-sw-palm-r: root.palms-r[root.palm-frame(root.scene-t + 1.3)];
     in property <bool> timers-edit;
     in property <bool> timers-edit-new: true;
-    in property <int> timers-edit-h: 6;
-    in property <int> timers-edit-m: 45;
+    in property <bool> timers-edit-timer;
+    in-out property <int> timers-edit-h: 6;
+    in property <int> timers-kb-layer;
+    in-out property <int> timers-edit-m: 45;
     in property <[bool]> timers-edit-days: [true, true, true, true, true, false, false];
     in property <string> timers-edit-label;
     in property <int> timers-edit-sound;
@@ -429,6 +443,9 @@ export component AppWindow inherits Window {
     in property <length> intro-y;
     in-out property <bool> intro: true;
     in-out property <bool> intro-visible: true;
+    // Start-up: the page drawn once under the opaque start-up picture, so its
+    // text, pictures and layers are ready before the first swipe (-1: none).
+    in property <int> warm-page: -1;
     // Assistant mode
     // First-start setup (no settings yet)
     in property <bool> setup: false;
@@ -519,12 +536,17 @@ export component AppWindow inherits Window {
     in property <int> saver-style;
     property <length> drag-x;
     property <bool> dragging;
-    property <length> offset: root.dragging ? -root.page * root.width + root.drag-x : -root.page * root.width;
+    // Endless: `pos` counts pages without wrapping (after the last page comes the first from the same side);
+    // the page shown is pos modulo the count. A page set by the app (out of step with pos) is taken as it is.
+    property <int> pos;
+    property <int> base: root.pages.length > 0 && Math.mod(root.pos, root.pages.length) == root.page ? root.pos : root.page;
+    property <length> offset: root.dragging ? -root.base * root.width + root.drag-x : -root.base * root.width;
+    property <float> pf: -root.offset / root.width;
     // set by the app for one frame when pages are renumbered (a temporary page leaves): no slide
     in-out property <bool> instant;
     animate offset { duration: root.dragging || root.instant ? 0ms : 260ms; easing: cubic-bezier(0.2, 0.8, 0.25, 1); }
     // The page that covers most of the screen now (status bar colour while swiping).
-    property <int> shown-page: max(0, min(root.pages.length - 1, round(-root.offset / root.width)));
+    property <int> shown-page: Math.mod(round(root.pf), max(1, root.pages.length));
     out property <bool> swiping: root.dragging;
 
     // Taps, holds and drags of every page and layer: what ("music.play",
@@ -551,7 +573,7 @@ export component AppWindow inherits Window {
     callback hidden-focus-field(int);
 
     pure function on-color(p: PageSlot) -> bool {
-        (p.kind == "weather" && p.variant == 1) || p.kind == "home" || (p.kind == "music" && !(root.music-style == 1 && !Theme.dark)) || (p.kind == "timers" && (root.timers-ringing || (root.timers-theme == 3 && root.timers-mode == 1))) || (p.kind == "thermostat" && root.thermo-look == 3) || (p.kind == "todo" && root.todo-look == 2) || (p.kind == "calendar" && root.cal-look == 1) || (p.kind == "info" && (root.info-critical || root.info-look == 3)) || root.status-on || (p.kind == "quick" && root.quick-look > 0) || (p.kind == "camera" && (root.cam-ring || (root.cam-view == 0 && root.cam-items.length > 0 && root.cam-items[root.cam-sel].state == 0 && (root.cam-fit == 0 || Theme.dark))))
+        (p.kind == "weather" && p.variant == 1) || p.kind == "home" || (p.kind == "music" && !(p.variant == 1 && !Theme.dark)) || (p.kind == "timers" && (root.timers-ringing || (p.variant == 3 && root.timers-mode == 1))) || (p.kind == "thermostat" && p.variant == 3) || (p.kind == "todo" && p.variant == 2) || (p.kind == "calendar" && p.variant == 1) || (p.kind == "info" && (root.info-critical || p.variant == 3)) || root.status-on || (p.kind == "quick" && p.variant > 0) || (p.kind == "camera" && (root.cam-ring || (root.cam-view == 0 && root.cam-items.length > 0 && root.cam-items[root.cam-sel].state == 0 && (root.cam-fit == 0 || Theme.dark))))
     }
 
     // ---- the pages, side by side ----
@@ -579,39 +601,43 @@ export component AppWindow inherits Window {
             handle-swipe-left: root.pages.length > 1;
             handle-swipe-right: root.pages.length > 1;
             moved => {
-                root.dragging = true;
-                let dx = self.current-position.x - self.pressed-position.x;
-                // Rubber band past the first and the last page.
-                if (root.page == 0 && dx > 0) || (root.page == root.pages.length - 1 && dx < 0) {
-                    root.drag-x = dx * 0.35;
-                } else {
-                    root.drag-x = dx;
+                if !root.dragging {
+                    // a new swipe starts from the page shown (the same picture: pages sit at their nearest copy)
+                    root.pos = root.page;
                 }
+                root.dragging = true;
+                root.drag-x = self.current-position.x - self.pressed-position.x;
             }
             swiped => {
                 let dx = self.current-position.x - self.pressed-position.x;
-                let target = dx < -root.width * 0.22 ? min(root.page + 1, root.pages.length - 1)
-                    : dx > root.width * 0.22 ? max(root.page - 1, 0) : root.page;
+                let step = dx < -root.width * 0.22 ? 1 : dx > root.width * 0.22 ? -1 : 0;
                 root.dragging = false;
                 root.drag-x = 0;
-                if target != root.page {
-                    root.page = target;
-                    root.page-changed(target);
+                if step != 0 {
+                    root.pos = root.pos + step;
+                    root.page = Math.mod(root.pos, root.pages.length);
+                    root.page-changed(root.page);
                 }
             }
             cancelled => {
                 root.dragging = false;
                 root.drag-x = 0;
             }
-            for slot[i] in root.pages: Rectangle {
-                x: i * root.width + root.offset;
+            for slot[i] in root.pages: home-slot := Rectangle {
+                // warm-up: each page drawn once in view, under the page shown (start-up, a new page list)
+                // each page at its copy nearest to the position shown (endless both ways)
+                x: i == root.warm-page ? 0px : (i + root.pages.length * round((root.pf - i) / root.pages.length)) * root.width + root.offset;
+                z: i == root.warm-page ? -1 : 0;
                 width: root.width;
                 height: root.height;
                 background: Theme.background;
 
-                if slot.kind == "home" && root.weather.theme != 8: sky := PhotoSky {
+                // several weather pages may each have their own background and widgets
+                property <int> home-theme: slot.theme >= 0 ? slot.theme : root.weather.theme;
+                property <[HomeItem]> home-items: slot.layout >= 0 && slot.layout < root.home-layouts.length ? root.home-layouts[slot.layout].items : root.home-items;
+                if slot.kind == "home" && home-slot.home-theme != 8: sky := PhotoSky {
                     mood: root.weather.mood;
-                    theme: root.weather.theme;
+                    theme: home-slot.home-theme;
                     rain: root.weather.rain;
                     dusk: root.weather.dusk;
                     dawn: root.weather.dawn;
@@ -630,7 +656,7 @@ export component AppWindow inherits Window {
                     sun-veil: root.weather.sun-veil;
                     moon-veil: root.weather.moon-veil;
                     HomeGrid {
-                        items: root.home-items;
+                        items: home-slot.home-items;
                         data: root.weather;
                         clock: root.clock;
                         event: root.home-event;
@@ -661,12 +687,12 @@ export component AppWindow inherits Window {
                         picker: root.home-picker;
                     }
                 }
-                if slot.kind == "home" && root.weather.theme == 8: FastLane {
+                if slot.kind == "home" && home-slot.home-theme == 8: FastLane {
                     scene: root.home-fl-scene; back-a: root.home-fl-back-a; floor-a: root.home-fl-floor-a; back-b: root.home-fl-back-b; floor-b: root.home-fl-floor-b;
                     mix: root.home-fl-mix; grid: root.home-fl-grid; star-k: root.home-fl-star; t: root.home-fl-t; cars: root.home-fl-cars;
                     palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r;
                     HomeGrid {
-                        items: root.home-items;
+                        items: home-slot.home-items;
                         data: root.weather;
                         clock: root.clock;
                         event: root.home-event;
@@ -728,7 +754,7 @@ export component AppWindow inherits Window {
                     shuffle: root.music-shuffle; repeat: root.music-repeat; volume: root.music-volume;
                     player: root.music-player; art: root.music-art; art-bg: root.music-art-bg; has-art: root.music-has-art;
                     kind-icon: root.music-kind-icon; accent: root.music-accent; players: root.music-players; picker: root.music-picker;
-                    style: root.music-style; tape-scope: root.music-tape-scope; q-played: root.music-q-played; q-total: root.music-q-total;
+                    style: slot.variant; tape-scope: root.music-tape-scope; q-played: root.music-q-played; q-total: root.music-q-total;
                     q-index: root.music-q-index; q-count: root.music-q-count; tt-deck: root.music-tt-deck; tt-grooves: root.music-tt-grooves;
                     cs-back: root.music-cs-back; cs-front: root.music-cs-front; cs-hub: root.music-cs-hub; cs-hub-r: root.music-cs-hub-r;
                     tt-arm-r: root.music-tt-arm-r; tt-lift: root.music-tt-lift; tape-rem: root.music-tape-rem;
@@ -736,7 +762,7 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "timers": TimersPage {
                     timers: root.timers-list; ringing: root.timers-ringing; ring-label: root.timers-ring-label; ring-over: root.timers-ring-over;
-                    pulse: root.timers-pulse; mode: root.timers-mode; theme: root.timers-theme; pick: root.timers-focus; alarms: root.timers-alarms; quick: root.timers-quick;
+                    pulse: root.timers-pulse; mode: root.timers-mode; theme: slot.variant; pick: root.timers-focus; alarms: root.timers-alarms; quick: root.timers-quick;
                     next-alarm: root.timers-next-alarm; watch: root.timers-watch; watch-running: root.timers-watch-running; laps: root.timers-laps;
                     ring-alarm: root.timers-ring-alarm; ring-time: root.timers-ring-time; ring-tint: root.timers-ring-tint; settings: root.timers-settings;
                     colourful: root.timers-colourful; alarm-on: root.timers-alarm-on; timer-on: root.timers-timer-on; watch-on: root.timers-watch-on;
@@ -745,8 +771,8 @@ export component AppWindow inherits Window {
                     hg-stream-mask: root.timers-hg-stream-mask; hg-stream-shade: root.timers-hg-stream-shade;
                     sw-scene: root.timers-sw-scene; sw-choice: root.timers-sw-choice; sw-back: root.timers-sw-back; sw-floor: root.timers-sw-floor; sw-t: root.timers-sw-t;
                     sw-cars: root.timers-sw-cars; sw-palm-l: root.timers-sw-palm-l; sw-palm-r: root.timers-sw-palm-r;
-                    edit: root.timers-edit; edit-new: root.timers-edit-new; edit-h: root.timers-edit-h; edit-m: root.timers-edit-m; edit-days: root.timers-edit-days;
-                    edit-label: root.timers-edit-label; edit-sound: root.timers-edit-sound; edit-ha-sound: root.timers-edit-ha-sound; edit-keyboard: root.timers-edit-keyboard;
+                    edit: root.timers-edit; edit-new: root.timers-edit-new; edit-timer: root.timers-edit-timer; edit-h <=> root.timers-edit-h; edit-m <=> root.timers-edit-m; edit-days: root.timers-edit-days;
+                    edit-label: root.timers-edit-label; edit-sound: root.timers-edit-sound; edit-ha-sound: root.timers-edit-ha-sound; edit-keyboard: root.timers-edit-keyboard; kb-layer: root.timers-kb-layer;
                     edit-info: root.timers-edit-info; edit-tint: root.timers-edit-tint;
                 }
                 if slot.kind == "thermostat" && root.thermo-look == 3: FastLane {
@@ -756,11 +782,11 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "thermostat": ThermostatPage {
                     devices: root.thermo-devices; sel: root.thermo-sel; rooms: root.thermo-rooms; picker: root.thermo-picker; sheet: root.thermo-sheet;
-                    settings: root.thermo-settings; look: root.thermo-look; pulse: root.thermo-pulse; clock-h: root.thermo-clock-h; clock-m: root.thermo-clock-m; key-down: root.thermo-key-down; fahrenheit: root.thermo-fahrenheit;
+                    settings: root.thermo-settings; look: slot.variant; pulse: root.thermo-pulse; clock-h: root.thermo-clock-h; clock-m: root.thermo-clock-m; key-down: root.thermo-key-down; fahrenheit: root.thermo-fahrenheit;
                     grid: root.home-fl-grid; fl-scene: root.home-fl-scene; fl-cars: root.home-fl-cars-on;
                 }
                 if slot.kind == "quick": QuickPage {
-                    look: root.quick-look; tiles: root.quick-tiles; title: root.quick-title; mood: root.quick-mood; placard: root.quick-placard;
+                    look: slot.variant; tiles: root.quick-tiles; title: root.quick-title; mood: root.quick-mood; placard: root.quick-placard;
                     sheet: root.quick-sheet; sheet-tile: root.quick-sheet-tile; sheet-index: root.quick-sheet-index; mixer-panel: root.quick-mixer-panel; fader: root.quick-fader;
                     deck-panel: root.quick-deck-panel; toggle-up: root.quick-toggle-up; toggle-down: root.quick-toggle-down; lamp-glow: root.quick-lamp-glow; lamp-spec: root.quick-lamp-spec;
                     grid: root.quick-grid; sheet-temp: root.quick-sheet-temp; sheet-temp-text: root.quick-sheet-temp-text; sheet-colours: root.quick-sheet-colours;
@@ -774,7 +800,7 @@ export component AppWindow inherits Window {
                     replies: root.cam-replies; reply-list: root.cam-reply-list;
                 }
                 if slot.kind == "calendar": CalendarPage {
-                    look: root.cal-look; board-rows: root.cal-board-rows; board-clock: root.cal-board-clock; board-date: root.cal-board-date;
+                    look: slot.variant; board-rows: root.cal-board-rows; board-clock: root.cal-board-clock; board-date: root.cal-board-date;
                     board-ticker: root.cal-board-ticker; board-empty: root.cal-board-empty; tear-month: root.cal-tear-month; tear-day: root.cal-tear-day;
                     tear-weekday: root.cal-tear-weekday; tear-sunday: root.cal-tear-sunday; tear-info: root.cal-tear-info; tear-events: root.cal-tear-events;
                     tear-more: root.cal-tear-more; tear-line: root.cal-tear-line; wall-month: root.cal-wall-month; wall-year: root.cal-wall-year;
@@ -792,19 +818,19 @@ export component AppWindow inherits Window {
                     lists: root.todo-lists; sel: root.todo-sel; open-items: root.todo-open; done-items: root.todo-done; show-done: root.todo-show-done;
                     scroll: root.todo-scroll; picker: root.todo-picker; empty-title: root.todo-empty-title; empty-sub: root.todo-empty-sub;
                     adding: root.todo-adding; draft: root.todo-draft; can-due: root.todo-can-due; due-pick: root.todo-due-pick; due-picked: root.todo-due-picked;
-                    kb-layer: root.todo-kb-layer; look: root.todo-look; settings: root.todo-settings; stamp: root.todo-stamp;
+                    kb-layer: root.todo-kb-layer; look: slot.variant; settings: root.todo-settings; stamp: root.todo-stamp;
                     receipt-footer: root.todo-receipt-footer; receipt-empty: root.todo-receipt-empty; term-empty: root.todo-term-empty;
                     label-head: root.todo-label-head; label-done-head: root.todo-label-done-head; label-empty-tape: root.todo-label-empty-tape;
                     note-head: root.todo-note-head; note-done: root.todo-note-done; note-empty: root.todo-note-empty;
                 }
                 if slot.kind == "info": InfoPage {
-                    look: root.info-look; notes: root.info-notes; scroll: root.info-scroll; empty-title: root.info-empty-title; empty-sub: root.info-empty-sub;
+                    look: slot.variant; notes: root.info-notes; scroll: root.info-scroll; empty-title: root.info-empty-title; empty-sub: root.info-empty-sub;
                     card: root.info-card; card-note: root.info-card-note; card-index: root.info-card-index; card-count: root.info-card-count;
                     critical: root.info-critical; crit-title: root.info-crit-title; crit-message: root.info-crit-message; crit-icon: root.info-crit-icon;
                     crit-source: root.info-crit-source; crit-hold: root.info-crit-hold; crit-pulse: root.info-crit-pulse; settings: root.info-settings;
                     clock: root.info-clock; pager-empty: root.info-pager-empty; news-ticker: root.info-news-ticker; news-empty: root.info-news-empty;
                     fridge-door: root.info-fridge-door; fridge-empty: root.info-fridge-empty;
-                    pager-body: root.info-pager-body; pager-led: root.info-pager-led; crit-button: root.info-crit-button;
+                    pager-body: root.info-pager-body; pager-led: root.info-pager-led; pager-first: root.info-pager-first; crit-button: root.info-crit-button;
                 }
                 if root.show-people && root.people.length > 0: People {
                     x: 16px;
@@ -832,6 +858,9 @@ export component AppWindow inherits Window {
         problem: !root.connected;
         quiet: root.screensaver-on;
         on-color: root.status-on || (root.pages.length > 0 && root.on-color(root.pages[root.shown-page]));
+        left-chips: !root.screensaver-on && !root.status-on && root.timers.length > 0 && root.pages.length > 0
+            && (root.pages[root.shown-page].kind == "music" || root.pages[root.shown-page].kind == "thermostat"
+                || root.pages[root.shown-page].kind == "camera" || root.pages[root.shown-page].kind == "calendar");
     }
     property <bool> sheet-open: root.quick-sheet || root.thermo-sheet || root.thermo-picker || root.music-picker || root.cal-detail
         || root.timers-quick || root.todo-picker;
@@ -947,6 +976,7 @@ export component AppWindow inherits Window {
         x: 0; y: 0; width: root.width;
         title: root.strip-title; sub: root.strip-sub; icon: root.strip-icon; picto: root.strip-picto; has-picto: root.strip-has-picto;
         tint: root.strip-tint; critical: root.strip-critical; pulse: root.strip-pulse;
+        TouchArea { clicked => { root.act("strip.open", ""); } }
     }
     if root.voice-on: TouchArea {
         clicked => { root.act("voice.close", ""); }

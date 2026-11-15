@@ -182,6 +182,18 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                 slint::Model::set_row_data(&devs, sel, cur);
             }
         }
+        // a value from the wall look's knob, to the device's step
+        "thermo.target" => {
+            let d = device(&id, st);
+            let v: f32 = value.parse().unwrap_or(d.target);
+            let t = ((v / d.step).round() * d.step).clamp(d.tmin, d.tmax);
+            call("set_temperature", &id, json!({"temperature": t}));
+            let devs = ui.get_thermo_devices();
+            if let Some(mut cur) = slint::Model::row_data(&devs, sel) {
+                cur.target = t;
+                slint::Model::set_row_data(&devs, sel, cur);
+            }
+        }
         "thermo.mode" => {
             let hvac: Vec<String> = strings(attr("hvac_modes")).into_iter().filter(|m| mode_code(m).is_some()).collect();
             if let Some(mode) = hvac.get(n) {
@@ -196,6 +208,42 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             };
             if let Some(v) = strings(attr(key)).get(n) {
                 call(service, &id, json!({ field: v }));
+            }
+        }
+        // The remote's keys: power off / on, the next mode (not off), the next
+        // fan or swing step, the next preset (one preset: on / off).
+        "thermo.key" => {
+            let state = st.map(|s| s.state.as_str()).unwrap_or("off");
+            let next = |list: Vec<String>, cur: &str| -> Option<String> {
+                if list.is_empty() {
+                    return None;
+                }
+                let i = list.iter().position(|v| v == cur).map(|i| (i + 1) % list.len()).unwrap_or(0);
+                Some(list[i].clone())
+            };
+            match n {
+                0 => call(if state == "off" { "turn_on" } else { "turn_off" }, &id, json!({})),
+                1 => {
+                    let modes: Vec<String> = strings(attr("hvac_modes")).into_iter().filter(|m| m != "off" && mode_code(m).is_some()).collect();
+                    if let Some(m) = next(modes, state) {
+                        call("set_hvac_mode", &id, json!({ "hvac_mode": m }));
+                    }
+                }
+                2 => {
+                    if let Some(f) = next(strings(attr("fan_modes")), attr("fan_mode").and_then(Value::as_str).unwrap_or("")) {
+                        call("set_fan_mode", &id, json!({ "fan_mode": f }));
+                    }
+                }
+                3 => {
+                    if let Some(f) = next(strings(attr("swing_modes")), attr("swing_mode").and_then(Value::as_str).unwrap_or("")) {
+                        call("set_swing_mode", &id, json!({ "swing_mode": f }));
+                    }
+                }
+                _ => {
+                    if let Some(p) = next(strings(attr("preset_modes")), attr("preset_mode").and_then(Value::as_str).unwrap_or("")) {
+                        call("set_preset_mode", &id, json!({ "preset_mode": p }));
+                    }
+                }
             }
         }
         "thermo.sheet" => ui.set_thermo_sheet(true),

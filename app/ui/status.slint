@@ -4,6 +4,7 @@
 // Swiping away (or the button) leaves the screen; while the state lasts a strip in its colour stays on top of every panel,
 // and a tap on it brings the screen back. Critical alerts use the same strip in red.
 import { Icon } from "widgets.slint";
+import { Act } from "theme.slint";
 
 export struct StatusScreen {
     title: string,
@@ -23,6 +24,12 @@ export component StatusPage inherits Rectangle {
     in property <StatusScreen> s;
     property <bool> btn: root.s.button != "";
     background: root.s.tint;
+    // a swipe (any way) or the button folds it into the strip; taps do not reach the page under it
+    SwipeGestureHandler {
+        handle-swipe-left: true; handle-swipe-right: true; handle-swipe-up: true; handle-swipe-down: true;
+        swiped => { Act.act("status.fold", ""); }
+        TouchArea { }
+    }
     VerticalLayout { x: 24px; y: 44px; width: 432px; height: root.height - 44px - (root.btn ? 92px : 30px); alignment: center; spacing: 6px;
         HorizontalLayout { alignment: center;
             if root.s.has-picto: Image { width: 144px; height: 144px; source: root.s.picto; }
@@ -43,6 +50,7 @@ export component StatusPage inherits Rectangle {
                     text: root.s.left >= 0 ? root.s.left-text : root.s.since; } } }
     }
     if root.btn: Rectangle { x: 90px; y: root.height - 86px; width: 300px; height: 56px; border-radius: 28px; background: #ffffff;
+        TouchArea { clicked => { Act.act("status.fold", ""); } }
         Text { x: 16px; y: 0; width: parent.width - 32px; height: parent.height; text: root.s.button; font-size: 17px; font-weight: 700; color: root.s.tint;
             horizontal-alignment: center; vertical-alignment: center; overflow: elide; } }
 }
