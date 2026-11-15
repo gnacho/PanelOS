@@ -1,7 +1,8 @@
 //! Home Assistant WebSocket client (own thread): login, dashboard config,
 //! live states of the dashboard's entities (`subscribe_entities`, compressed
-//! updates), weather forecasts, the nspanel_pro integration's settings and
-//! requests, and service calls from the UI.
+//! updates), weather forecasts, service calls from the UI, and the PanelOS
+//! integration: its settings, show requests and entity commands come in, the
+//! panel's device states go out (`panelos/report`, see `panel_device.rs`).
 
 use std::collections::{HashMap, HashSet};
 use std::net::TcpStream;
@@ -27,6 +28,8 @@ pub enum Command {
     Reload,
     /// Ask for the list of dashboards (answered with Event::Dashboards).
     ListDashboards,
+    /// Picture of the screen (PNG, base64) asked for by the PanelOS page.
+    Screen(String),
 }
 
 pub enum Event {
@@ -36,16 +39,18 @@ pub enum Event {
     States(Vec<(String, Option<EntityState>)>),
     /// (url_path, title); "" = the default dashboard.
     Dashboards(Vec<(String, String)>),
-    /// Assistant mode settings from the nspanel_pro integration; None = the
+    /// Assistant mode settings from the PanelOS integration; None = the
     /// integration is not installed (or has no entry for this panel).
     Panel(Option<Value>),
-    /// show_view / show_message request from the nspanel_pro integration.
+    /// show_view / show_message request from the PanelOS integration.
     Show(Value),
+    /// Command from an entity of the panel's device (PanelOS integration).
+    Command { key: String, value: Value },
     /// Weather forecast (hourly or daily) of the forecast entity.
     Forecast { hourly: bool, items: Vec<Value> },
 }
 
-/// The panel's name for the nspanel_pro integration (its ESPHome name).
+/// The panel's name for the PanelOS integration (its ESPHome name).
 pub const PANEL_ID: &str = "nspanel-pro";
 
 /// Settings the UI thread can change while the client runs.
@@ -55,6 +60,9 @@ pub struct Shared {
     pub extra_entities: std::sync::Mutex<Vec<String>>,
     /// Weather entity whose forecasts are followed ("" = none).
     pub forecast_entity: std::sync::Mutex<String>,
+    /// What the panel's device in Home Assistant shows; filled by the UI
+    /// thread (the ESPHome API reads the voice part of it).
+    pub device: Arc<std::sync::Mutex<crate::esphome::DeviceState>>,
 }
 
 type Socket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -230,7 +238,7 @@ fn session(
     // "unknown command" error means it is not installed).
     next_id += 1;
     let mut panel_id = next_id;
-    send_json(&mut ws, &json!({"id": panel_id, "type": "nspanel_pro/subscribe", "panel_id": PANEL_ID}))?;
+    send_json(&mut ws, &json!({"id": panel_id, "type": "panelos/subscribe", "panel_id": PANEL_ID}))?;
     // Retried every minute while the integration is missing, so installing
     // it needs no panel restart.
     let mut panel_retry_at: Option<Instant> = None;
@@ -254,6 +262,9 @@ fn session(
     let mut last_rx = Instant::now();
     let mut ping_sent: Option<Instant> = None;
     let mut dashboards_request: Option<u64> = None;
+    // The panel's device (PanelOS integration): reported once the
+    // subscription is accepted, then only what changed.
+    let mut report = Report::default();
     loop {
         while let Ok(cmd) = commands.try_recv() {
             match cmd {
@@ -271,6 +282,11 @@ fn session(
                     dashboards_request = Some(next_id);
                     send_json(&mut ws, &json!({"id": next_id, "type": "lovelace/dashboards/list"}))?;
                 }
+                Command::Screen(png) if report.linked => {
+                    next_id += 1;
+                    send_json(&mut ws, &json!({"id": next_id, "type": "panelos/screen", "panel_id": PANEL_ID, "png": png}))?;
+                }
+                Command::Screen(_) => {}
             }
         }
 
@@ -278,7 +294,15 @@ fn session(
             Some(msg) => {
                 last_rx = Instant::now();
                 ping_sent = None;
+                let report_answer = msg["type"] == "result" && report.answered(msg["id"].as_u64().unwrap_or(0));
                 match msg["type"].as_str() {
+                    Some("result") if report_answer => {
+                        if msg["success"] == false {
+                            // An older integration without panelos/report.
+                            eprintln!("nspanel-app: device report not accepted: {}", msg["error"]["message"]);
+                            report.linked = false;
+                        }
+                    }
                     Some("event") if msg["id"] == sub_id => {
                         let changed = apply_compressed(&mut states, &msg["event"]);
                         if !changed.is_empty() {
@@ -301,11 +325,15 @@ fn session(
                         if let Some(show) = ev.get("show") {
                             emit(Event::Show(show.clone()));
                         }
+                        if let Some(key) = ev["command"]["key"].as_str() {
+                            emit(Event::Command { key: key.to_string(), value: ev["command"]["value"].clone() });
+                        }
                     }
                     Some("result") if msg["id"] == panel_id && msg["success"] == false => {
                         emit(Event::Panel(None));
                         panel_retry_at = Some(Instant::now() + Duration::from_secs(60));
                     }
+                    Some("result") if msg["id"] == panel_id => report = Report { linked: true, ..Default::default() },
                     Some("event") if forecast_ids.iter().any(|(id, _)| msg["id"] == *id) => {
                         let hourly = forecast_ids.iter().any(|(id, h)| msg["id"] == *id && *h);
                         let items = msg["event"]["forecast"].as_array().cloned().unwrap_or_default();
@@ -335,11 +363,19 @@ fn session(
             }
         }
 
+        if let Some(msg) = report.next(&shared.device) {
+            next_id += 1;
+            let mut msg = msg;
+            msg["id"] = next_id.into();
+            send_json(&mut ws, &msg)?;
+            report.sent(next_id);
+        }
+
         if panel_retry_at.is_some_and(|t| Instant::now() >= t) {
             panel_retry_at = None;
             next_id += 1;
             panel_id = next_id;
-            send_json(&mut ws, &json!({"id": panel_id, "type": "nspanel_pro/subscribe", "panel_id": PANEL_ID}))?;
+            send_json(&mut ws, &json!({"id": panel_id, "type": "panelos/subscribe", "panel_id": PANEL_ID}))?;
         }
 
         // Keep-alive: Home Assistant answers {"type":"ping"} with a pong. A
@@ -354,6 +390,69 @@ fn session(
                 return Err("no answer to ping".into());
             }
         }
+    }
+}
+
+/// What the panel's device in Home Assistant was last told, so a report
+/// carries only changes. Checked at most every 200 ms.
+#[derive(Default)]
+struct Report {
+    /// The integration accepted the panel's subscription.
+    linked: bool,
+    device_sent: bool,
+    dashboard: Option<String>,
+    states: Map<String, Value>,
+    options: Map<String, Value>,
+    pending: HashSet<u64>,
+    checked: Option<Instant>,
+}
+
+impl Report {
+    fn next(&mut self, device: &std::sync::Mutex<crate::esphome::DeviceState>) -> Option<Value> {
+        if !self.linked || self.checked.is_some_and(|t| t.elapsed() < Duration::from_millis(200)) {
+            return None;
+        }
+        self.checked = Some(Instant::now());
+        let snapshot = device.lock().unwrap().clone();
+        if !snapshot.ready {
+            return None;
+        }
+        let changed = |now: Map<String, Value>, sent: &mut Map<String, Value>| {
+            let diff: Map<String, Value> = now.into_iter().filter(|(k, v)| sent.get(k) != Some(v)).collect();
+            sent.extend(diff.clone());
+            diff
+        };
+        let states = changed(crate::panel_device::states(&snapshot), &mut self.states);
+        let options = changed(crate::panel_device::options(&snapshot), &mut self.options);
+        let dashboard = (self.dashboard.as_deref() != Some(snapshot.web_dashboard.as_str())).then(|| snapshot.web_dashboard.clone());
+        if states.is_empty() && options.is_empty() && dashboard.is_none() && self.device_sent {
+            return None;
+        }
+        let mut msg = json!({"type": "panelos/report", "panel_id": PANEL_ID});
+        if let Some(d) = dashboard {
+            msg["dashboard"] = d.clone().into();
+            self.dashboard = Some(d);
+        }
+        if !self.device_sent {
+            msg["device"] = crate::panel_device::device_info(&crate::esphome::mac_address().to_lowercase());
+            self.device_sent = true;
+        }
+        if !options.is_empty() {
+            msg["options"] = options.into();
+        }
+        if !states.is_empty() {
+            msg["states"] = states.into();
+        }
+        Some(msg)
+    }
+
+    fn sent(&mut self, id: u64) {
+        self.pending.insert(id);
+    }
+
+    /// True (once) for the answer to one of the reports.
+    fn answered(&mut self, id: u64) -> bool {
+        self.pending.remove(&id)
     }
 }
 

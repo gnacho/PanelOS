@@ -28,6 +28,7 @@ There is no firewall (the kernel is built without netfilter); every service abov
 
 - The panel logs in with Home Assistant's normal login (OAuth, QR code). The refresh token is in `/mnt/persist/nspanel/ha_auth.json` (0600) and never logged. Logging out revokes it in Home Assistant.
 - The login token goes only to Home Assistant itself (camera, artwork), never to another host.
+- **Pictures of the screen** for the PanelOS page in Home Assistant are taken only when an administrator has the page open, and go only to Home Assistant over the panel's own connection.
 - **No TLS yet:** the connection is plain `http://` and `ws://`, readable by anyone on the same network. Use the panel only in a network you trust, and pair it with a Home Assistant user that is not an administrator.
 
 ## SSH
@@ -54,6 +55,8 @@ These stay on while PanelOS is in development; they make testing and debugging p
 | `/tmp/nspanel-voice-test.wav`, `/tmp/nspanel-voice-followup.wav` | sent to Home Assistant as speech instead of the microphones | root only |
 | `/tmp/nspanel-proximity-test` | proximity test view (`docs/bringup.md`) | root only |
 | `NSPANEL_API_DEBUG`, `NSPANEL_AEC_DUMP` | API message log, microphone dump | root only |
+| `NSPANEL_WEB_STATS`, `NSPANEL_DEV_DARK`, `WEBKIT_*` | web view frame timing in the log; backlight kept off; WebKit's own switches passed to the web helper | root only |
+| `/mnt/persist/panelos-web-data/console-log` | the dashboard web view writes the page's console messages to the log | dashboard details in `/var/log/messages` (RAM) |
 | debugfs, `/dev/mem`, magic SysRq, unsigned kernel modules | kernel debugging | root only |
 
 All of these need root on the panel, which needs the SSH key.

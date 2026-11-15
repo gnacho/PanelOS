@@ -234,6 +234,16 @@
 	status = "okay";
 };
 
+/*
+ * Mali-G31 (Panfrost) for the web view. It runs on the logic rail; vdd_log
+ * keeps its stock limits (1.1-1.35 V), so only the operating points from
+ * 1.125 V up (480 and 520 MHz) are used.
+ */
+&gpu {
+	mali-supply = <&vdd_log>;
+	status = "okay";
+};
+
 &i2c0 {
 	status = "okay";
 

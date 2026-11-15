@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+### Home Assistant
+
+- **The panel is a device of its own**: the integration is now `panelos` ("PanelOS") and adds the panel as a device (maker PanelOS, model NSPanel Pro 86 Gen1) with the display, the settings and the sensors. The panel reports them over its own Home Assistant connection (`panelos/report`) and takes the commands back on its subscription. The ESPHome device keeps the voice satellite (volume, microphone, wake word sensors), is named "NSPanel Pro Voice" and is shown as connected via the panel's device. Entities that were on the ESPHome device keep their entity ids, history and settings.
+- Integration options as a menu: Dashboard mode (dashboard, header, sidebar), Assistant mode, Sensor reporting.
+- **PanelOS page in the sidebar** (administrators), in the PanelOS look: all settings of a panel beside a live picture of its screen, the card resources it loads, its device facts; the sidebar icon is the PanelOS mark.
+
+### Dashboard mode
+
+- **Smooth scrolling**: while the dashboard is all there is on the screen, the browser draws straight into the display's buffers on the GPU and the display flips to them; no read-back, no copy, no drawing on the CPU. A frame reaches the screen in about 20 ms instead of 50, swipes run at 38–56 frames per second instead of 14–25.
+- **Faster loading**: card resources the dashboard shown does not need are not loaded on the panel, worked out again whenever the dashboard changes (integration option, on by default; resources can be kept); about a quarter less load time on a dashboard with 35 resources.
+- **Loading screen**: the PanelOS mark writes itself in Morse while a dashboard loads, covering Home Assistant's start-up, and the dashboard fades in once its cards and icons are there.
+- **Size**: dashboards can be drawn smaller or larger (50–150 %).
+- **Pull to refresh**: pulling the dashboard down reloads it, as in a phone's browser, when the content is at its top; the top edge stays the swipe to the settings.
+- Noto Sans as a second font in the web view: card texts no longer show boxes for characters such as Mushroom's separator.
+- Dashboard mode is a secondary function next to the assistant; the docs say what a dashboard for the panel should look like (light and simple).
+- **Home Assistant dashboards in a web view**: WPE WebKit on the GPU (Panfrost), logged in as the panel's own user like the Home Assistant apps, custom cards included; header and sidebar can be hidden. A swipe down from the top edge opens the settings. The browser is a separate SquashFS bundle on the persistent partition; without it the panel shows its native dashboard.
+
+### Installation
+
+- **Removing the stock Android** (optional install step 14, `tools/remove_android.sh`, over Wi-Fi, panel closed): PanelOS is copied to the boot partition, so a normal boot and the test-boot safety net start PanelOS instead of Android, and the old userdata partition (about 3.5 GiB) becomes `/mnt/data` for larger content. The way back writes the stock partitions from the backup (restore guide, case D). Not tried on a panel yet.
+- e2fsprogs in the image (`mkfs.ext4`, `e2fsck`); `tools/build_image.sh` warns when the image would not fit the boot partition.
+
+### Known issues
+
+- Touch: while the panel is touched or covered, the touch driver sometimes rereads the controller hundreds of times a second for seconds and drops those frames (measurements in docs/hardware.md); a long press does not register in the web view yet.
+
 ## 0.0.3
 
 ### Security

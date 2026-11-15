@@ -1,6 +1,6 @@
 //! Assistant mode (Echo Show / Nest Hub-like home screen): clock, weather
 //! with forecasts, the media player, quick tiles, and a full-screen
-//! conversation. What it shows is set in Home Assistant (nspanel_pro
+//! conversation. What it shows is set in Home Assistant (PanelOS
 //! integration); without the integration it falls back to the panel's
 //! weather entity and shows no media player or tiles.
 

@@ -256,6 +256,45 @@ Optional: the assistant mode (smart-display home screen) is configured with the 
 
 Unplug the panel's power (or switch off its circuit) for 10 seconds and switch it on again. After the logo and the animation, the panel must show your dashboard again.
 
+## 14. Remove the stock Android (optional)
+
+PanelOS does not need the stock Android. While Android is on the panel, it is the way back to the stock firmware ([restore.md](restore.md), case A) and the safety net of test boots. Once PanelOS has run well for a while, its partitions can be taken over, all over Wi-Fi, with the panel closed:
+
+- the **boot** partition gets a second copy of PanelOS. A normal boot, and so the safety net of a test boot, then starts PanelOS instead of Android;
+- the old **userdata** partition (about 3.5 GiB) becomes PanelOS's storage for larger content (`/mnt/data`).
+
+The other Android partitions stay as they are, unused. The way back to the stock firmware is then the backup of step 6, written over Wi-Fi while PanelOS runs ([restore.md](restore.md), case D).
+
+Before you start: the backup of step 6 is on the computer (best with its restore test), and PanelOS has run for some days without trouble.
+
+> **Not tried on a panel yet.** The stock boot and recovery images have the same layout (Android boot image with its own kernel) and the stock bootloader loads both the same way; that PanelOS starts from the boot partition has not been tried on a panel yet. Treat steps 2–4 below as new.
+
+1. See what is on the panel (changes nothing):
+
+   ```
+   cd /root/PanelOS && tools/remove_android.sh $PANEL check
+   ```
+
+2. Copy the running PanelOS to the boot partition. It asks first, then writes and checks. **From here on the stock Android does not start any more.**
+
+   ```
+   tools/remove_android.sh $PANEL copy
+   ```
+
+3. Start once from the boot partition. The panel restarts, PanelOS comes up again in about a minute, and the recovery partition becomes the default again:
+
+   ```
+   tools/remove_android.sh $PANEL test
+   ```
+
+   If the panel does not come back within 5 minutes, unplug its power for 10 seconds. If it still does not start, follow [restore.md](restore.md), case C. This is the only point of this step where the panel may have to be opened.
+
+4. Format the old userdata partition for PanelOS (needs a PanelOS with `mkfs.ext4`, from version 0.0.4). PanelOS mounts it at `/mnt/data` at every start:
+
+   ```
+   tools/remove_android.sh $PANEL data
+   ```
+
 ## More panels
 
 Do steps 1–2, 5–6 and 8–13 for each further panel. Steps 3, 4 and 7 are not needed again: the computer is ready, and the same image fits every NSPanel Pro 86. In step 5 set `PANEL` and `NAME` for the new panel, so its backup goes into its own folder.
@@ -285,6 +324,8 @@ Until PanelOS can update itself (planned: updates from Home Assistant's Settings
    ```
 
    Then the next panel: set `PANEL` again and repeat these three commands.
+
+3. On a panel without the stock Android (step 14) the boot partition keeps the previous version as the fallback. Once the new version has proven itself, copy it there too: `tools/remove_android.sh $PANEL copy`.
 
 ## Going back to the stock firmware
 

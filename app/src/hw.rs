@@ -25,7 +25,9 @@ impl Backlight {
     }
 
     /// Sets the level in 0..=1000 (per mille); writes only on change.
+    /// Development aid: `NSPANEL_DEV_DARK` keeps the backlight off (tests at night).
     pub fn set_permille(&mut self, permille: u32) {
+        let permille = if std::env::var_os("NSPANEL_DEV_DARK").is_some() { 0 } else { permille };
         let level = (self.max * permille.min(1000) + 500) / 1000;
         if level != self.current {
             if fs::write(format!("{BACKLIGHT}/brightness"), level.to_string()).is_ok() {

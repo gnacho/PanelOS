@@ -34,12 +34,65 @@ pub struct Settings {
     /// "dashboard" (native Home Assistant dashboard) or "assistant"
     /// (clock, weather, media, quick tiles, full-screen conversation).
     pub display_mode: String,
-    /// Last assistant mode configuration received from the nspanel_pro
+    /// Last assistant mode configuration received from the PanelOS
     /// integration (kept so a restart starts with the right entities).
     pub assistant: AssistantConfig,
     /// How much the reported sensors must change before Home Assistant gets
-    /// a new value (nspanel_pro integration options).
+    /// a new value (PanelOS integration options).
     pub reporting: Reporting,
+    /// Dashboard mode in the web view (PanelOS integration options).
+    pub web: WebConfig,
+}
+
+/// What the web view shows in dashboard mode.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebConfig {
+    /// Dashboard url_path from the integration; empty = the panel's own
+    /// choice (`Settings::dashboard`).
+    pub dashboard: String,
+    pub show_header: bool,
+    pub show_sidebar: bool,
+    /// Card resources (URL paths) the web view does not load.
+    pub skip_resources: Vec<String>,
+    /// Size of the page, percent.
+    pub zoom: u32,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        Self { dashboard: String::new(), show_header: true, show_sidebar: false, skip_resources: Vec::new(), zoom: 100 }
+    }
+}
+
+impl WebConfig {
+    pub fn from_integration(v: &serde_json::Value) -> Self {
+        let d = Self::default();
+        let dashboard = v.get("dashboard").and_then(serde_json::Value::as_str).unwrap_or("");
+        Self {
+            // url_path characters only (it goes into the page URL)
+            dashboard: if dashboard.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                dashboard.to_string()
+            } else {
+                String::new()
+            },
+            show_header: v.get("show_header").and_then(serde_json::Value::as_bool).unwrap_or(d.show_header),
+            show_sidebar: v.get("show_sidebar").and_then(serde_json::Value::as_bool).unwrap_or(d.show_sidebar),
+            skip_resources: v
+                .get("skip_resources")
+                .and_then(serde_json::Value::as_array)
+                .map(|list| {
+                    list.iter()
+                        .filter_map(serde_json::Value::as_str)
+                        .filter(|p| p.starts_with('/') && p.len() <= 300)
+                        .take(100)
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            zoom: v.get("zoom").and_then(serde_json::Value::as_u64).map(|z| z.clamp(50, 150) as u32).unwrap_or(100),
+        }
+    }
 }
 
 /// Change thresholds of the sensors Home Assistant records. Every value sent
@@ -84,7 +137,7 @@ impl Reporting {
     }
 }
 
-/// What the assistant mode shows; set in Home Assistant (nspanel_pro
+/// What the assistant mode shows; set in Home Assistant (PanelOS
 /// integration options). Without the integration: the weather entity above,
 /// no media player, no tiles.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -116,6 +169,7 @@ impl Default for Settings {
             display_mode: "dashboard".into(),
             assistant: AssistantConfig::default(),
             reporting: Reporting::default(),
+            web: WebConfig::default(),
         }
     }
 }

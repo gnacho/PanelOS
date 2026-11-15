@@ -1,0 +1,44 @@
+# PanelOS web bundle: the Home Assistant frontend in WPE WebKit, rendered
+# on the GPU (Mali-G31 through Panfrost). Built as a separate root file
+# system (SquashFS) that the panel keeps on its persistent partition and runs
+# chrooted, so the boot image stays small. Same toolchain as the main image.
+BR2_aarch64=y
+BR2_cortex_a35=y
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN=y
+BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_AARCH64_GLIBC_STABLE=y
+# WebKit needs about 2 to 3 GB per compile job (8 jobs ran out of 15 GB).
+BR2_JLEVEL=5
+# Fixes for the package versions of this Buildroot (buildroot/patches/<package>)
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_NSPANEL_PATH)/patches"
+BR2_TARGET_GENERIC_HOSTNAME="panelos-web"
+BR2_INIT_NONE=y
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_EUDEV=y
+# GPU: Mesa with the Panfrost driver (EGL, GLES, GBM)
+BR2_PACKAGE_MESA3D=y
+BR2_PACKAGE_MESA3D_LLVM=y
+BR2_PACKAGE_MESA3D_GALLIUM_DRIVER_PANFROST=y
+BR2_PACKAGE_MESA3D_OPENGL_EGL=y
+BR2_PACKAGE_MESA3D_OPENGL_ES=y
+BR2_PACKAGE_MESA3D_GBM=y
+# Web engine and the helper the panel app talks to; cog on DRM for testing
+# without the panel app
+BR2_PACKAGE_WPEWEBKIT=y
+BR2_PACKAGE_PANELOS_WEB=y
+BR2_PACKAGE_NOTO_SANS=y
+BR2_PACKAGE_COG=y
+BR2_PACKAGE_COG_PLATFORM_DRM=y
+# BR2_PACKAGE_COG_PLATFORM_FDO is not set
+# HTTPS for Home Assistant URLs with TLS
+BR2_PACKAGE_CA_CERTIFICATES=y
+BR2_PACKAGE_GLIB_NETWORKING=y
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_FONTCONFIG=y
+BR2_PACKAGE_DEJAVU=y
+# BR2_PACKAGE_DEJAVU_MONO is not set
+# BR2_PACKAGE_DEJAVU_SERIF is not set
+# BR2_PACKAGE_DEJAVU_SANS_CONDENSED is not set
+# BR2_PACKAGE_DEJAVU_SERIF_CONDENSED is not set
+# BR2_TARGET_ROOTFS_TAR is not set
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS4_ZSTD=y

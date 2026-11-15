@@ -12,6 +12,7 @@ import { Icon, RoundButton, ChipRow } from "widgets.slint";
 import { TileData, RowData, RowView } from "rows.slint";
 import { MoreInfoData, MoreInfo, SettingsData, SettingsPage, Screensaver, PairingScreen, AssistPanel, TimerAlarm, FoundHa, SetupScreen } from "overlays.slint";
 import { ForecastItem, AssistantData, AssistantHome, AssistFull, MessageCard, WeatherFull, MediaFull } from "assistant.slint";
+import { WebLoading, PullToRefresh } from "loading.slint";
 
 export { Theme, TileData, RowData, MoreInfoData, SettingsData, ForecastItem, AssistantData, FoundHa }
 
@@ -86,6 +87,23 @@ export component MainWindow inherits Window {
     in property <bool> prox-test-near: false;
     in property <string> prox-test-prompt: "";
     property <bool> dashboard-visible: root.display-mode == 0 || root.show-dashboard;
+    // Dashboard mode in the web view (the Home Assistant frontend); without
+    // the web bundle the native dashboard below is shown.
+    in property <bool> web-active: false;
+    in property <bool> web-ready: false;
+    in property <image> web-frame;
+    // A page loads: the loading screen covers the web view until it is ready
+    // (web-loading false fades it, web-overlay false removes it).
+    in property <bool> web-loading: true;
+    in property <bool> web-overlay: true;
+    // The line under the loading screen's mark (two texts that cross-fade).
+    in property <string> loading-line-a;
+    in property <string> loading-line-b;
+    in property <bool> loading-show-a: true;
+    // Pull to refresh: how far the page is pulled down (0 none, 1 far enough to reload).
+    in property <float> web-pull: 0;
+    in property <image> loading-image;
+    out property <bool> web-shown: root.paired && root.dashboard-visible && root.web-active;
 
     out property <length> scroll-y: flick.content-y;
     out property <length> list-height: flick.height;
@@ -109,6 +127,7 @@ export component MainWindow inherits Window {
     callback setup-pick(string);
     callback setup-key(string);
     callback setup-connect();
+    callback web-touch(int, float, float);  // 0 down, 1 move, 2 up; screen coordinates
     scroll-by(d) => {
         flick.content-y = max(min(0px, flick.content-y - d), flick.height - flick.content-height);
     }
@@ -120,7 +139,7 @@ export component MainWindow inherits Window {
     Rectangle {
         height: 64px;
         y: 0;
-        visible: root.dashboard-visible || !root.paired;
+        visible: (root.dashboard-visible && !root.web-active) || !root.paired;
         HorizontalLayout {
             padding-left: 18px;
             padding-right: 10px;
@@ -190,7 +209,7 @@ export component MainWindow inherits Window {
         }
     }
 
-    if root.paired && root.dashboard-visible && root.views.length > 1: ChipRow {
+    if root.paired && root.dashboard-visible && !root.web-active && root.views.length > 1: ChipRow {
         x: 16px;
         y: 64px;
         width: root.width - 32px;
@@ -204,7 +223,7 @@ export component MainWindow inherits Window {
         height: root.height - 64px - root.tabs-height;
         width: root.width;
         content-height: list.preferred-height;
-        visible: root.paired && root.dashboard-visible;
+        visible: root.paired && root.dashboard-visible && !root.web-active;
         list := VerticalLayout {
             width: root.width;
             padding-left: 16px;
@@ -226,6 +245,48 @@ export component MainWindow inherits Window {
                 wrap: word-wrap;
             }
         }
+    }
+
+    // The web view fills the screen; a swipe down from the top edge opens the
+    // panel's settings (in assistant mode: back to its home screen).
+    if root.web-shown: Rectangle {
+        background: Theme.background;
+        Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.web-frame;
+        }
+        if !root.web-ready: Text {
+            text: "Loading the dashboard…";
+            font-size: 16px;
+            color: Theme.muted;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        TouchArea {
+            pointer-event(ev) => {
+                if ev.kind == PointerEventKind.down {
+                    root.web-touch(0, self.mouse-x / 1px, self.mouse-y / 1px);
+                } else if ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel {
+                    root.web-touch(2, self.mouse-x / 1px, self.mouse-y / 1px);
+                }
+            }
+            moved => { root.web-touch(1, self.mouse-x / 1px, self.mouse-y / 1px); }
+        }
+    }
+
+    if root.web-shown && root.web-pull > 0: PullToRefresh {
+        pull: root.web-pull;
+        x: (root.width - self.width) / 2;
+        y: -self.height + root.web-pull * 80px;
+    }
+
+    if root.web-shown && root.web-overlay: WebLoading {
+        loading: root.web-loading;
+        background-image: root.loading-image;
+        line-a: root.loading-line-a;
+        line-b: root.loading-line-b;
+        show-a: root.loading-show-a;
     }
 
     if root.paired && !root.dashboard-visible: AssistantHome {

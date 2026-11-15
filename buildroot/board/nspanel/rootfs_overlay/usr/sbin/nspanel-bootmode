@@ -2,7 +2,9 @@
 # Which system the stock U-Boot starts on every boot.
 #
 #   nspanel-bootmode open      always boot the open system (recovery partition)
-#   nspanel-bootmode android   normal boot again (stock Android on the boot partition)
+#   nspanel-bootmode android   normal boot again: the boot partition (the stock
+#                              Android, or the second PanelOS copy once Android
+#                              is removed with tools/remove_android.sh)
 #   nspanel-bootmode status
 #
 # The stock (Rockchip) U-Boot reads an Android bootloader message ("BCB") at
@@ -43,7 +45,7 @@ open)
 android)
 	dd if=/dev/zero of="$misc" bs=512 seek=$BCB_OFFSET_SECTORS count=$((BCB_SIZE / 512)) conv=notrunc 2>/dev/null
 	sync
-	echo "default boot: normal (stock Android on the boot partition)"
+	echo "default boot: normal (the boot partition)"
 	;;
 status | "")
 	cmd=$(current)

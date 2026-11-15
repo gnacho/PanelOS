@@ -15,8 +15,9 @@ Version **0.0.3** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0
 - **Native Home Assistant dashboard**: drawn by the panel itself from a Home Assistant dashboard (tiles, shutters, climate, media, camera), details layers, themes, screensaver, automatic brightness, wake on approach. Pairing with a QR code, no token typing.
 - **Voice satellite**: on-device wake words (microWakeWord), Assist pipelines, echo cancellation, timers, announcements, follow-up listening.
 - **Assistant mode**: smart-display home screen with clock, weather, media and quick tiles, and a full-screen conversation view.
+- **Dashboard mode** (secondary): a Home Assistant dashboard in a web view, custom cards included; within the limits of the panel's hardware, so a light, simple dashboard made for it works best ([docs/home_assistant.md](docs/home_assistant.md#dashboard-mode)).
 - **First-start setup on the panel**: Home Assistant found on the network (mDNS) or its address typed on a keypad; pairing with a QR code.
-- **Home Assistant device** over the ESPHome native API, announced over mDNS like any ESPHome device: settings and sensors as entities of the built-in ESPHome integration; an optional custom integration (`custom_components/nspanel_pro`) configures the assistant mode and shows views or messages on the panel.
+- **Home Assistant device**: the PanelOS integration (`custom_components/panelos`) adds the panel as a device with its display, settings and sensors, sets its dashboard and assistant modes and shows views or messages on it; the voice satellite is an ESPHome device (announced over mDNS like any ESPHome device), connected via the panel.
 - **Super fast boot**: about 12 s from power on to the dashboard, more than four times faster than the stock firmware (about 53 s). The PanelOS logo already shows in the bootloader, then the boot animation; the UI comes with the right time and current Home Assistant data. After a power cut it waits for Home Assistant and the network as long as it takes and comes back by itself.
 
 Details: [docs/app.md](docs/app.md).
@@ -53,7 +54,7 @@ In short: turn on developer mode and ADB in the eWeLink app, back up the panel, 
 ## Repository layout
 
 - `app/` the panel app (Rust + Slint), see [docs/app.md](docs/app.md)
-- `custom_components/nspanel_pro/` optional Home Assistant integration (assistant mode settings, screen actions), installable with the Home Assistant Marketplace or HACS, see [docs/home_assistant.md](docs/home_assistant.md)
+- `custom_components/panelos/` Home Assistant integration (the panel's device, dashboard and assistant mode settings, screen actions), installable with the Home Assistant Marketplace or HACS, see [docs/home_assistant.md](docs/home_assistant.md)
 - `docs/` hardware notes ([docs/hardware.md](docs/hardware.md)), backup and restore, bring-up notes ([docs/bringup.md](docs/bringup.md)), security and development aids ([docs/security.md](docs/security.md)), design decisions and plans, feature list
 - `kernel/` board device tree (`dts/`), mainline kernel patches (`patches/`), config fragment (`configs/`)
 - `buildroot/` Buildroot external tree (`BR2_EXTERNAL`): root filesystem defconfig, init scripts, boot splash, small tools

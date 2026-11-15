@@ -22,6 +22,74 @@ type Job = Box<dyn FnOnce() + Send>;
 /// Set by SIGUSR1: write the current screen to /tmp/nspanel-screen.ppm.
 static SCREENSHOT: AtomicBool = AtomicBool::new(false);
 
+type ScreenSink = Box<dyn FnOnce(u32, u32, Vec<u8>)>;
+
+/// Web frame rendered straight into a shared display buffer: (buffer, times).
+static WEB_NEXT: Mutex<Option<(usize, crate::webstats::FrameTimes)>> = Mutex::new(None);
+/// Shared buffers the helper may render into again.
+static WEB_FREED: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+/// How the UI thread drives the direct web view (see `set_web_direct`).
+pub struct WebDirect {
+    /// True while the web view is all there is on the screen.
+    pub allowed: Box<dyn Fn() -> bool>,
+    /// The answer of `allowed` changed.
+    pub changed: Box<dyn Fn(bool)>,
+    /// Shared buffers the helper may use again.
+    pub release: Box<dyn Fn(&[usize])>,
+}
+
+thread_local! {
+    static WEB_DIRECT: std::cell::RefCell<Option<(WebDirect, bool)>> = const { std::cell::RefCell::new(None) };
+    /// Waiting for a picture of the screen (width, height, RGB).
+    static SCREEN_REQUESTS: std::cell::RefCell<Vec<ScreenSink>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Web helper (any thread): shared buffer `i` holds a new frame. A frame
+/// that was not shown yet is given back.
+pub fn web_frame_ready(i: usize, times: crate::webstats::FrameTimes) {
+    if let Some((old, _)) = WEB_NEXT.lock().unwrap().replace((i, times)) {
+        WEB_FREED.lock().unwrap().push(old);
+    }
+}
+
+/// UI thread: lets the event loop show web frames straight from the shared
+/// buffers while `allowed` says so.
+pub fn set_web_direct(direct: WebDirect) {
+    WEB_DIRECT.with(|w| *w.borrow_mut() = Some((direct, false)));
+}
+
+/// Whether web frames go straight to the screen now; tells `changed`.
+fn web_direct_now() -> bool {
+    WEB_DIRECT.with(|w| {
+        let mut w = w.borrow_mut();
+        let Some((direct, was)) = w.as_mut() else { return false };
+        let now = (direct.allowed)();
+        if now != *was {
+            *was = now;
+            (direct.changed)(now);
+        }
+        now
+    })
+}
+
+fn web_release(list: &[usize]) {
+    if list.is_empty() {
+        return;
+    }
+    WEB_DIRECT.with(|w| {
+        if let Some((direct, _)) = w.borrow().as_ref() {
+            (direct.release)(list);
+        }
+    });
+}
+
+/// Calls `sink` on the UI thread with what is on the screen, at the next
+/// turn of the event loop.
+pub fn request_screen(sink: impl FnOnce(u32, u32, Vec<u8>) + 'static) {
+    SCREEN_REQUESTS.with(|r| r.borrow_mut().push(Box::new(sink)));
+}
+
 extern "C" fn on_sigusr1(_: libc::c_int) {
     SCREENSHOT.store(true, Ordering::SeqCst);
 }
@@ -112,9 +180,12 @@ pub struct PanelPlatform {
     display: RefCell<Display>,
     touch: RefCell<Option<Touch>>,
     wakeup: Wakeup,
-    /// Development: FIFO with lines "tap x y" / "down x y" / "move x y" / "up x y".
+    /// Development: FIFO with lines "tap x y" / "down x y" / "move x y" / "up x y"
+    /// / "swipe x1 y1 x2 y2 ms" (moves every 16 ms).
     dev_input: Option<RawFd>,
     dev_buf: RefCell<String>,
+    /// Touches of a swipe from the development input, with when they are due (µs).
+    gesture: RefCell<VecDeque<(u64, TouchEvent)>>,
 }
 
 impl PanelPlatform {
@@ -137,6 +208,7 @@ impl PanelPlatform {
             wakeup: Wakeup::new(),
             dev_input,
             dev_buf: RefCell::new(String::new()),
+            gesture: RefCell::new(VecDeque::new()),
         }
     }
 
@@ -177,12 +249,31 @@ impl PanelPlatform {
                 continue;
             }
             let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() == 6 && parts[0] == "swipe" {
+                let n: Vec<f32> = parts[1..].iter().filter_map(|v| v.parse().ok()).collect();
+                if n.len() == 5 {
+                    let start = crate::webstats::now_us();
+                    let dur = (n[4].max(16.0) * 1000.0) as u64;
+                    let steps = (dur / 16_000).max(1);
+                    let mut g = self.gesture.borrow_mut();
+                    g.push_back((start, TouchEvent::Down(n[0], n[1])));
+                    for i in 1..=steps {
+                        let k = i as f32 / steps as f32;
+                        let (x, y) = (n[0] + (n[2] - n[0]) * k, n[1] + (n[3] - n[1]) * k);
+                        g.push_back((start + i * 16_000, TouchEvent::Move(x, y)));
+                    }
+                    g.push_back((start + steps * 16_000 + 1000, TouchEvent::Up(n[2], n[3])));
+                    crate::webstats::gesture("swipe", start + steps * 16_000);
+                }
+                continue;
+            }
             if parts.len() != 3 {
                 continue;
             }
             let (Ok(x), Ok(y)) = (parts[1].parse::<f32>(), parts[2].parse::<f32>()) else { continue };
             match parts[0] {
                 "tap" => {
+                    crate::webstats::gesture("tap", crate::webstats::now_us());
                     out.push(TouchEvent::Down(x, y));
                     out.push(TouchEvent::Up(x, y));
                 }
@@ -227,23 +318,77 @@ impl Platform for PanelPlatform {
                     eprintln!("nspanel-app: screenshot failed: {e}");
                 }
             }
+            let sinks = SCREEN_REQUESTS.with(|r| std::mem::take(&mut *r.borrow_mut()));
+            if !sinks.is_empty() {
+                let (w, h, rgb) = self.display.borrow().front_rgb();
+                for sink in sinks {
+                    sink(w, h, rgb.clone());
+                }
+            }
+            // Swipe from the development input: the touches that are due.
+            loop {
+                let due = {
+                    let mut g = self.gesture.borrow_mut();
+                    match g.front() {
+                        Some(&(t, _)) if t <= crate::webstats::now_us() => g.pop_front().map(|(_, e)| e),
+                        _ => None,
+                    }
+                };
+                match due {
+                    Some(event) => self.dispatch_touch(event),
+                    None => break,
+                }
+            }
+            crate::webstats::report_if_due();
             slint::platform::update_timers_and_animations();
 
+            let direct = web_direct_now();
+            let mut freed = std::mem::take(&mut *WEB_FREED.lock().unwrap());
             {
                 let mut display = self.display.borrow_mut();
                 if !display.flip_pending() {
-                    let drawn = self.window.draw_if_needed(|renderer| {
-                        let (buffer, stride) = display.back_buffer();
-                        renderer.render(buffer, stride);
-                    });
-                    if drawn {
-                        display.flip().map_err(platform_error)?;
+                    let started = crate::webstats::now_us();
+                    let next = WEB_NEXT.lock().unwrap().take();
+                    match (direct, next) {
+                        (true, Some((i, times))) => {
+                            // The helper's buffer straight to the screen.
+                            crate::webstats::frame_on_ui(times);
+                            match display.show_web(i) {
+                                Ok(()) => crate::webstats::drawn(started),
+                                Err(e) => {
+                                    eprintln!("nspanel-app: web frame to the screen: {e}");
+                                    freed.push(i);
+                                }
+                            }
+                        }
+                        (true, None) => {}
+                        (false, next) => {
+                            if let Some((i, _)) = next {
+                                freed.push(i);
+                            }
+                            let drawn = self.window.draw_if_needed(|renderer| {
+                                let (buffer, stride) = display.back_buffer();
+                                renderer.render(buffer, stride);
+                            });
+                            if drawn {
+                                display.flip().map_err(platform_error)?;
+                                crate::webstats::drawn(started);
+                            }
+                        }
+                    }
+                } else if !direct {
+                    if let Some((i, _)) = WEB_NEXT.lock().unwrap().take() {
+                        freed.push(i);
                     }
                 }
             }
+            web_release(&freed);
 
             let flip_pending = self.display.borrow().flip_pending();
-            let timeout_ms: i32 = if self.window.has_active_animations() {
+            let web_waiting = WEB_NEXT.lock().unwrap().is_some() && !flip_pending;
+            let mut timeout_ms: i32 = if web_waiting {
+                0
+            } else if self.window.has_active_animations() {
                 if flip_pending { -1 } else { 16 }
             } else {
                 match slint::platform::duration_until_next_timer_update() {
@@ -251,6 +396,10 @@ impl Platform for PanelPlatform {
                     None => -1,
                 }
             };
+            if let Some(&(t, _)) = self.gesture.borrow().front() {
+                let wait = (t.saturating_sub(crate::webstats::now_us()) / 1000) as i32;
+                timeout_ms = if timeout_ms < 0 { wait } else { timeout_ms.min(wait) };
+            }
 
             let display_fd = self.display.borrow().fd();
             let touch_fd = self.touch.borrow().as_ref().map(|t| t.fd()).unwrap_or(-1);
@@ -271,7 +420,14 @@ impl Platform for PanelPlatform {
             }
 
             if fds[0].revents & libc::POLLIN != 0 {
-                self.display.borrow_mut().handle_events().map_err(platform_error)?;
+                let was_pending = self.display.borrow().flip_pending();
+                let released = self.display.borrow_mut().handle_events().map_err(platform_error)?;
+                if was_pending && !self.display.borrow().flip_pending() {
+                    crate::webstats::flipped();
+                }
+                if let Some(i) = released {
+                    web_release(&[i]);
+                }
             }
 
             if fds[1].revents & libc::POLLIN != 0 {

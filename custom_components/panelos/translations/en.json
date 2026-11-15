@@ -1,0 +1,205 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a PanelOS panel",
+        "description": "Adds a panel running PanelOS as a device with its display, settings and sensors, and sets what its dashboard and assistant modes show. The panel's voice satellite comes with the ESPHome integration and is shown as connected via this device.",
+        "data": {
+          "panel_id": "Panel ID (the panel's network name)",
+          "weather_entity": "Weather",
+          "media_player_entity": "Media player",
+          "tile_entities": "Quick tiles",
+          "show_conversation": "Full-screen conversation"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "This panel is already set up."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PanelOS",
+        "menu_options": {
+          "dashboard": "Dashboard mode",
+          "assistant": "Assistant mode",
+          "sensor_reporting": "Sensor reporting"
+        }
+      },
+      "dashboard": {
+        "title": "Dashboard mode",
+        "description": "The panel shows a Home Assistant dashboard in its web view, the same as in a browser, custom cards included.",
+        "data": {
+          "dashboard": "Dashboard",
+          "show_header": "Header",
+          "show_sidebar": "Sidebar",
+          "zoom": "Size",
+          "skip_unused_resources": "Leave out unused card resources",
+          "keep_resources": "Always load these card resources"
+        },
+        "data_description": {
+          "dashboard": "Which dashboard the panel shows. \"Chosen on the panel\" leaves it to the panel's own settings and its Dashboard entity.",
+          "show_header": "The dashboard's top bar with its title and the tabs of its views. Without it the dashboard gets the whole screen, but its views can only be reached through links on the dashboard.",
+          "show_sidebar": "Home Assistant's menu (all dashboards, settings and other pages). Without it the panel stays on the chosen dashboard.",
+          "zoom": "How large the dashboard is drawn on the panel; below 100 % more fits on the screen.",
+          "skip_unused_resources": "Home Assistant loads every card resource on every dashboard, used or not; on the panel each one costs load time. With this on, the panel leaves out the ones the dashboard it shows does not need (a resource counts as needed when its name matches a custom card type or a setting of the dashboard), worked out again whenever the dashboard changes.",
+          "keep_resources": "For a resource the dashboard needs although its name does not match any of its cards."
+        }
+      },
+      "assistant": {
+        "title": "Assistant mode",
+        "data": {
+          "weather_entity": "Weather",
+          "media_player_entity": "Media player",
+          "tile_entities": "Quick tiles",
+          "show_conversation": "Full-screen conversation"
+        }
+      },
+      "sensor_reporting": {
+        "title": "Sensor reporting",
+        "description": "How much a sensor must change before the panel sends Home Assistant a new value. Every value sent is a row in the recorder's database (history, logbook, statistics). Lower numbers give finer history and quicker automations but more database writes; higher numbers mean fewer writes but only larger changes show up. The panel's own brightness, theme and Wi-Fi roaming do not depend on these.",
+        "data": {
+          "illuminance_change": "Illuminance",
+          "soc_temperature_change": "SoC temperature",
+          "wifi_signal_change": "Wi-Fi signal"
+        },
+        "data_description": {
+          "illuminance_change": "Change from the last value sent, in percent; in a dark room at least a third of this number in lux, so sensor noise is not sent. The panel checks the light twice a second, so a light switched on shows up at once. Lower: finer light history and automations that react to small changes. Higher: fewer writes; automations see only bigger changes.",
+          "soc_temperature_change": "The processor temperature is read every minute and averaged over about five minutes; a new value is sent when the average moves at least this much. Lower: detailed temperature history. Higher: fewer writes; only larger warming or cooling shows up.",
+          "wifi_signal_change": "The signal is read every minute and averaged over about five minutes; a new value is sent when the average moves at least this much. Lower: detailed history, useful for finding weak spots. Higher: fewer writes; short dips do not show up."
+        }
+      }
+    }
+  },
+  "selector": {
+    "view": {
+      "options": {
+        "home": "Home screen",
+        "dashboard": "Dashboard",
+        "weather": "Weather",
+        "media": "Media player",
+        "camera": "Camera"
+      }
+    }
+  },
+  "services": {
+    "show_view": {
+      "name": "Show view",
+      "description": "Shows a view on a PanelOS panel for a while.",
+      "fields": {
+        "panel_id": {
+          "name": "Panel",
+          "description": "The panel's ID, as in its PanelOS entry; empty = every panel."
+        },
+        "view": {
+          "name": "View",
+          "description": "What to show."
+        },
+        "entity_id": {
+          "name": "Camera",
+          "description": "The camera for the camera view."
+        },
+        "seconds": {
+          "name": "Seconds",
+          "description": "How long to show it; 0 = until someone touches the screen."
+        }
+      }
+    },
+    "show_message": {
+      "name": "Show message",
+      "description": "Shows a message on a PanelOS panel.",
+      "fields": {
+        "panel_id": {
+          "name": "Panel",
+          "description": "The panel's ID, as in its PanelOS entry; empty = every panel."
+        },
+        "title": {
+          "name": "Title",
+          "description": "Heading of the message."
+        },
+        "message": {
+          "name": "Message",
+          "description": "Text of the message."
+        },
+        "icon": {
+          "name": "Icon",
+          "description": "Material Design icon (mdi:...)."
+        },
+        "seconds": {
+          "name": "Seconds",
+          "description": "How long to show it; 0 = until someone touches the screen."
+        },
+        "chime": {
+          "name": "Chime",
+          "description": "Play a short chime on the panel."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "presence": {
+        "name": "Presence"
+      }
+    },
+    "button": {
+      "restart_app": {
+        "name": "Restart app"
+      },
+      "reboot": {
+        "name": "Reboot"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brightness"
+      }
+    },
+    "select": {
+      "dashboard": {
+        "name": "Dashboard"
+      },
+      "theme": {
+        "name": "Theme"
+      },
+      "screensaver": {
+        "name": "Screensaver after"
+      },
+      "screensaver_style": {
+        "name": "Screensaver style"
+      },
+      "display_mode": {
+        "name": "Display mode"
+      }
+    },
+    "sensor": {
+      "illuminance": {
+        "name": "Illuminance"
+      },
+      "soc_temperature": {
+        "name": "SoC temperature"
+      },
+      "wifi_signal": {
+        "name": "Wi-Fi signal"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "app_version": {
+        "name": "App version"
+      }
+    },
+    "switch": {
+      "screen": {
+        "name": "Screen"
+      },
+      "auto_brightness": {
+        "name": "Automatic brightness"
+      },
+      "proximity_wake": {
+        "name": "Wake on approach"
+      }
+    }
+  }
+}

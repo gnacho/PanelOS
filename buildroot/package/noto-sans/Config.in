@@ -1,0 +1,8 @@
+config BR2_PACKAGE_NOTO_SANS
+	bool "noto-sans"
+	help
+	  Noto Sans (variable, Latin / Greek / Cyrillic) from Google Fonts,
+	  for the web view: a wide fallback next to DejaVu Sans, e.g. for
+	  punctuation that cards use (U+2E31 word separator middle dot).
+
+	  https://fonts.google.com/noto/specimen/Noto+Sans

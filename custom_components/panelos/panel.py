@@ -1,0 +1,434 @@
+"""One panel: what it reported, its device, and the way back to it.
+
+A panel follows ``panelos/subscribe`` (one or more websocket connections,
+each a "link"), reports its states with ``panelos/report`` and gets the
+commands of its entities as events on its subscription.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable
+import logging
+from typing import Any
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.entity import Entity, entity_sources
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.typing import UNDEFINED
+
+from .const import (
+    CONF_DASHBOARD,
+    CONF_DEVICE,
+    CONF_MEDIA_PLAYER,
+    CONF_PANEL_ID,
+    CONF_SHOW_CONVERSATION,
+    CONF_SHOW_HEADER,
+    CONF_KEEP_RESOURCES,
+    CONF_SHOW_SIDEBAR,
+    CONF_SKIP_UNUSED,
+    CONF_TILES,
+    CONF_WEATHER,
+    CONF_ZOOM,
+    DOMAIN,
+    ENTITY_KEYS,
+    ESPHOME_ENTITIES,
+    REPORTING,
+    SIGNAL_CONFIG_UPDATED,
+    SIGNAL_LINKS,
+    SIGNAL_PAGE,
+)
+from .resources import async_resource_list
+
+_LOGGER = logging.getLogger(__name__)
+
+KEY_DOMAIN = {key: domain for domain, keys in ENTITY_KEYS.items() for key in keys}
+_SELECT_KEYS = frozenset(ENTITY_KEYS["select"])
+_DEVICE_FIELDS = ("name", "manufacturer", "model", "sw_version", "hw_version", "mac")
+_TEXT_MAX = 255
+_OPTIONS_MAX = 200
+_MISSING = object()
+
+type Send = Callable[[dict[str, Any]], None]
+type Factory = Callable[["Panel", str], Entity]
+
+
+def links(hass: HomeAssistant) -> dict[int, tuple[str, int, Send]]:
+    """Panels following panelos/subscribe: key → (panel id, connection id, send)."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault("links", {})
+
+
+def find_entry(hass: HomeAssistant, panel_id: str) -> ConfigEntry | None:
+    """The entry of a panel; a single entry also serves a panel without an id."""
+    entries = hass.config_entries.async_entries(DOMAIN)
+    for entry in entries:
+        if {**entry.data, **entry.options}.get(CONF_PANEL_ID) == panel_id:
+            return entry
+    return entries[0] if len(entries) == 1 else None
+
+
+def panel_config(entry: ConfigEntry) -> dict[str, Any]:
+    """What the panel gets on its subscription (its settings)."""
+    options = {**entry.data, **entry.options}
+    return {
+        "panel_id": options.get(CONF_PANEL_ID, ""),
+        "weather_entity": options.get(CONF_WEATHER, ""),
+        "media_player_entity": options.get(CONF_MEDIA_PLAYER, ""),
+        "tile_entities": list(options.get(CONF_TILES, [])),
+        "show_conversation": bool(options.get(CONF_SHOW_CONVERSATION, True)),
+        "dashboard": options.get(CONF_DASHBOARD, ""),
+        "show_header": bool(options.get(CONF_SHOW_HEADER, True)),
+        "show_sidebar": bool(options.get(CONF_SHOW_SIDEBAR, False)),
+        "skip_resources": list(getattr(getattr(entry, "runtime_data", None), "skip", [])),
+        "zoom": max(50, min(150, int(options.get(CONF_ZOOM, 100)))),
+        **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
+    }
+
+
+def _scalar(value: Any) -> bool:
+    return value is None or isinstance(value, (bool, int, float)) or (isinstance(value, str) and len(value) <= _TEXT_MAX)
+
+
+def _user_settings(entry: er.RegistryEntry | er.DeletedRegistryEntry | None) -> dict[str, Any]:
+    """What a user may have set on an entity, to carry over to its new entry."""
+    if entry is None:
+        return {}
+    settings: dict[str, Any] = {
+        key: value
+        for key, value in (
+            ("name", entry.name),
+            ("icon", entry.icon),
+            ("area_id", entry.area_id),
+            ("hidden_by", entry.hidden_by),
+            ("disabled_by", entry.disabled_by),
+            ("aliases", entry.aliases or None),
+            ("labels", entry.labels or None),
+        )
+        if value is not None and value is not UNDEFINED
+    }
+    if entry.options and entry.options is not UNDEFINED:
+        settings["options"] = {domain: dict(options) for domain, options in entry.options.items()}
+    return settings
+
+
+class Panel:
+    """Live data and device of one panel (the entry's runtime data)."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        self.hass = hass
+        self.entry = entry
+        self.panel_id: str = {**entry.data, **entry.options}.get(CONF_PANEL_ID, "")
+        self.states: dict[str, Any] = {}
+        self.options: dict[str, list[str]] = {}
+        self.device_id: str | None = None
+        self.signal = f"{DOMAIN}_update_{entry.entry_id}"
+        self._adders: dict[str, tuple[AddEntitiesCallback, Factory]] = {}
+        self._added: set[str] = set()
+        # Entities an older PanelOS on the panel still has on its ESPHome
+        # device (entity id → key): ours follow once ESPHome drops them, with
+        # the same entity id and the user's settings.
+        self._waiting: dict[str, str] = {}
+        self._saved: dict[str, dict[str, Any]] = {}
+        self._unsub_waiting: Callable[[], None] | None = None
+        # Pages waiting for a picture of the screen (panelos/page/screen).
+        self._screen_waiters: list[asyncio.Future[bytes]] = []
+        # The dashboard the web view shows (the panel reports it) and the
+        # card resources it leaves out there (worked out by refresh_skip).
+        self.web_dashboard = ""
+        self.skip: list[str] = []
+        self.resources: list[dict[str, Any]] = []
+        self._skip_task: asyncio.Task | None = None
+
+    def unique_id(self, key: str) -> str:
+        return f"{self.panel_id}-{key}"
+
+    # -- links -------------------------------------------------------------
+
+    def _sends(self, connection_id: int | None = None) -> list[Send]:
+        return [
+            send
+            for pid, cid, send in links(self.hass).values()
+            if (connection_id is None or cid == connection_id) and find_entry(self.hass, pid) is self.entry
+        ]
+
+    @property
+    def connected(self) -> bool:
+        return bool(self._sends())
+
+    def linked_on(self, connection_id: int) -> bool:
+        """True when this connection follows the panel's subscription."""
+        return bool(self._sends(connection_id))
+
+    def send_command(self, key: str, value: Any) -> None:
+        sends = self._sends()
+        if not sends:
+            raise HomeAssistantError(f"The PanelOS panel '{self.panel_id}' is not connected")
+        for send in sends:
+            send({"key": key, "value": value})
+
+    @callback
+    def _links_changed(self) -> None:
+        async_dispatcher_send(self.hass, self.signal, None)
+
+    # -- screen picture ----------------------------------------------------
+
+    async def async_screenshot(self, timeout: float = 8) -> bytes:
+        """A PNG of what the panel shows now (one request serves every waiter)."""
+        future: asyncio.Future[bytes] = self.hass.loop.create_future()
+        first = not self._screen_waiters
+        self._screen_waiters.append(future)
+        try:
+            if first:
+                self.send_command("screenshot", None)
+            async with asyncio.timeout(timeout):
+                return await future
+        except TimeoutError as err:
+            raise HomeAssistantError(f"The PanelOS panel '{self.panel_id}' sent no picture") from err
+        finally:
+            if future in self._screen_waiters:
+                self._screen_waiters.remove(future)
+
+    @callback
+    def screen_received(self, png: bytes) -> None:
+        waiters, self._screen_waiters = self._screen_waiters, []
+        for future in waiters:
+            if not future.done():
+                future.set_result(png)
+
+    # -- setup -------------------------------------------------------------
+
+    @callback
+    def async_setup(self) -> None:
+        """Register the device, link the voice device and take over old entities."""
+        info = dict(self.entry.data.get(CONF_DEVICE, {}))
+        voice_entry = self._voice_entry()
+        if not info.get("mac") and voice_entry and voice_entry.unique_id:
+            info["mac"] = voice_entry.unique_id
+        if not info.get("name") and voice_entry:
+            info["name"] = voice_entry.title
+        self._register_device(info)
+        if voice_entry:
+            self._link_voice_device(voice_entry)
+        if info.get("mac"):
+            self._take_over_esphome_entities(info["mac"])
+        self.entry.async_on_unload(async_dispatcher_connect(self.hass, SIGNAL_LINKS, self._links_changed))
+        self.entry.async_on_unload(self._stop_waiting)
+        # A dashboard saved in Home Assistant may need other card resources.
+        self.entry.async_on_unload(self.hass.bus.async_listen("lovelace_updated", self._lovelace_updated))
+        # Dashboards and resources are there once Home Assistant has started.
+        self.entry.async_on_unload(async_at_started(self.hass, lambda _hass: self.refresh_skip()))
+
+    @callback
+    def _lovelace_updated(self, event: Event) -> None:
+        path = event.data.get("url_path") or "lovelace"
+        if path in (self.dashboard, None) or (path == "lovelace" and self.dashboard in ("", "lovelace")):
+            self.refresh_skip()
+
+    def _voice_entry(self) -> ConfigEntry | None:
+        """The panel's ESPHome entry (voice satellite): same device name."""
+        for entry in self.hass.config_entries.async_entries("esphome"):
+            if entry.data.get("device_name") == self.panel_id:
+                return entry
+        return None
+
+    def _register_device(self, info: dict[str, str]) -> None:
+        connections = {(dr.CONNECTION_NETWORK_MAC, dr.format_mac(info["mac"]))} if info.get("mac") else set()
+        device = dr.async_get(self.hass).async_get_or_create(
+            config_entry_id=self.entry.entry_id,
+            identifiers={(DOMAIN, self.panel_id)},
+            connections=connections,
+            name=info.get("name") or self.panel_id,
+            manufacturer=info.get("manufacturer") or "PanelOS",
+            model=info.get("model"),
+            sw_version=info.get("sw_version"),
+            hw_version=info.get("hw_version"),
+        )
+        self.device_id = device.id
+
+    def _link_voice_device(self, voice_entry: ConfigEntry) -> None:
+        """The ESPHome device is "connected via" this one (the panel)."""
+        dev_reg = dr.async_get(self.hass)
+        for device in dr.async_entries_for_config_entry(dev_reg, voice_entry.entry_id):
+            if device.via_device_id is not None:
+                continue
+            dev_reg.async_update_device(device.id, via_device_id=self.device_id)
+            ours = dev_reg.async_get(self.device_id) if self.device_id else None
+            if ours and ours.area_id is None and device.area_id:
+                dev_reg.async_update_device(ours.id, area_id=device.area_id)
+
+    # -- entities ----------------------------------------------------------
+
+    def _take_over_esphome_entities(self, mac: str) -> None:
+        """Until PanelOS 0.0.3 these entities were on the ESPHome device."""
+        ent_reg = er.async_get(self.hass)
+        loaded = entity_sources(self.hass)
+        for key, (esphome_platform, name) in ESPHOME_ENTITIES.items():
+            domain = KEY_DOMAIN[key]
+            if ent_reg.async_get_entity_id(domain, DOMAIN, self.unique_id(key)):
+                continue
+            old_unique_id = f"{mac.upper()}/0/{esphome_platform}/{name}"
+            old_id = ent_reg.async_get_entity_id(domain, "esphome", old_unique_id)
+            if old_id is None:
+                # Already dropped by ESPHome (the panel runs a newer PanelOS):
+                # the same entity id, while it is free.
+                deleted = ent_reg.deleted_entities.get((domain, "esphome", old_unique_id))
+                if (
+                    deleted
+                    and not ent_reg.async_is_registered(deleted.entity_id)
+                    and self.hass.states.async_available(deleted.entity_id)
+                ):
+                    self._create_entry(key, deleted.entity_id, _user_settings(deleted))
+                continue
+            if old_id in loaded:
+                self._waiting[old_id] = key
+                self._saved[old_id] = _user_settings(ent_reg.async_get(old_id))
+                continue
+            ent_reg.async_update_entity_platform(
+                old_id,
+                DOMAIN,
+                new_config_entry_id=self.entry.entry_id,
+                new_unique_id=self.unique_id(key),
+                new_device_id=self.device_id,
+            )
+            _LOGGER.info("%s moved from the panel's ESPHome device to its PanelOS device", old_id)
+        if self._waiting and self._unsub_waiting is None:
+            _LOGGER.warning(
+                "The panel '%s' still has %s on its ESPHome device (an older PanelOS); "
+                "they move here once the panel runs PanelOS 0.0.4 or later",
+                self.panel_id,
+                ", ".join(sorted(self._waiting)),
+            )
+            self._unsub_waiting = self.hass.bus.async_listen(
+                er.EVENT_ENTITY_REGISTRY_UPDATED, self._registry_updated, event_filter=self._is_waiting_removal
+            )
+
+    @callback
+    def _stop_waiting(self) -> None:
+        if self._unsub_waiting:
+            self._unsub_waiting()
+            self._unsub_waiting = None
+
+    @callback
+    def _is_waiting_removal(self, data: er.EventEntityRegistryUpdatedData) -> bool:
+        return data["action"] == "remove" and data["entity_id"] in self._waiting
+
+    @callback
+    def _registry_updated(self, event: Event[er.EventEntityRegistryUpdatedData]) -> None:
+        old_id = event.data["entity_id"]
+        key = self._waiting.pop(old_id)
+        if not self._waiting:
+            self._stop_waiting()
+        self.entry.async_create_task(self.hass, self._add_moved(old_id, key))
+
+    async def _add_moved(self, old_id: str, key: str) -> None:
+        # ESPHome removes the entity itself just after its registry entry.
+        for _ in range(50):
+            if self.hass.states.get(old_id) is None:
+                break
+            await asyncio.sleep(0.1)
+        self._create_entry(key, old_id, self._saved.pop(old_id, {}))
+        self._add(key)
+
+    def _create_entry(self, key: str, entity_id: str, saved: dict[str, Any]) -> None:
+        """Registry entry of one of our entities with an old entity id and settings."""
+        ent_reg = er.async_get(self.hass)
+        new = ent_reg.async_get_or_create(
+            KEY_DOMAIN[key],
+            DOMAIN,
+            self.unique_id(key),
+            config_entry=self.entry,
+            device_id=self.device_id,
+            suggested_object_id=entity_id.split(".", 1)[1],
+        )
+        options = saved.pop("options", {})
+        if saved:
+            ent_reg.async_update_entity(new.entity_id, **saved)
+        for domain, values in options.items():
+            ent_reg.async_update_entity_options(new.entity_id, domain, values)
+        _LOGGER.info("%s moved from the panel's ESPHome device to its PanelOS device", new.entity_id)
+
+    @callback
+    def add_platform(self, domain: str, add_entities: AddEntitiesCallback, factory: Factory) -> None:
+        """Called by each platform: adds its entities (later the waiting ones)."""
+        self._adders[domain] = (add_entities, factory)
+        waiting = set(self._waiting.values())
+        for key in ENTITY_KEYS[domain]:
+            if key not in waiting:
+                self._add(key)
+
+    @callback
+    def _add(self, key: str) -> None:
+        adder = self._adders.get(KEY_DOMAIN[key])
+        if adder is None or key in self._added:
+            return
+        self._added.add(key)
+        add_entities, factory = adder
+        add_entities([factory(self, key)])
+
+    # -- reports -----------------------------------------------------------
+
+    @callback
+    def apply_report(self, msg: dict[str, Any]) -> None:
+        changed: set[str] = set()
+        for key, value in (msg.get("states") or {}).items():
+            if key in KEY_DOMAIN and _scalar(value) and self.states.get(key, _MISSING) != value:
+                self.states[key] = value
+                changed.add(key)
+        for key, options in (msg.get("options") or {}).items():
+            if key in _SELECT_KEYS and isinstance(options, list):
+                clean = [o[:_TEXT_MAX] for o in options[:_OPTIONS_MAX] if isinstance(o, str)]
+                if self.options.get(key) != clean:
+                    self.options[key] = clean
+                    changed.add(key)
+        if isinstance(device := msg.get("device"), dict):
+            self._device_reported(device)
+        if isinstance(dashboard := msg.get("dashboard"), str) and dashboard != self.web_dashboard:
+            self.web_dashboard = dashboard[:_TEXT_MAX]
+            self.refresh_skip()
+            changed.add("dashboard")
+        if changed:
+            async_dispatcher_send(self.hass, self.signal, changed)
+            async_dispatcher_send(self.hass, SIGNAL_PAGE)
+
+    # -- card resources ------------------------------------------------------
+
+    @property
+    def dashboard(self) -> str:
+        """The dashboard the web view shows: the one set here, else the panel's."""
+        return {**self.entry.data, **self.entry.options}.get(CONF_DASHBOARD) or self.web_dashboard
+
+    @callback
+    def refresh_skip(self) -> None:
+        """Works out again which card resources the shown dashboard needs."""
+        if self._skip_task and not self._skip_task.done():
+            self._skip_task.cancel()
+        self._skip_task = self.entry.async_create_task(self.hass, self._async_refresh_skip())
+
+    async def _async_refresh_skip(self) -> None:
+        options = {**self.entry.data, **self.entry.options}
+        dashboard = self.dashboard
+        self.resources = await async_resource_list(self.hass, dashboard) if dashboard else []
+        keep = set(options.get(CONF_KEEP_RESOURCES, []))
+        skip = (
+            [r["url"].split("?")[0] for r in self.resources if not r["needed"] and r["url"] not in keep]
+            if options.get(CONF_SKIP_UNUSED, True)
+            else []
+        )
+        async_dispatcher_send(self.hass, SIGNAL_PAGE)
+        if skip != self.skip:
+            self.skip = skip
+            async_dispatcher_send(self.hass, SIGNAL_CONFIG_UPDATED, self.panel_id)
+
+    def _device_reported(self, device: dict[str, Any]) -> None:
+        info = {key: device[key][:64] for key in _DEVICE_FIELDS if isinstance(device.get(key), str) and device[key]}
+        if info == self.entry.data.get(CONF_DEVICE):
+            return
+        self.hass.config_entries.async_update_entry(self.entry, data={**self.entry.data, CONF_DEVICE: info})
+        self._register_device(info)
+        if voice_entry := self._voice_entry():
+            self._link_voice_device(voice_entry)

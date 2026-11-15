@@ -2,12 +2,14 @@
 # Persistent storage for this system's own settings (Wi-Fi, later the Home
 # Assistant pairing and the dashboard choice).
 #
-# While the stock Android is still on the eMMC, a directory on its "cache"
-# partition (ext4) is used: /mnt/persist/nspanel. When Android goes away,
-# this system gets its own data partition instead.
+# A directory on the old Android "cache" partition (ext4): /mnt/persist/nspanel.
+# Once the stock Android is removed (tools/remove_android.sh data), its old
+# userdata partition, formatted ext4 with the label panelos-data, is mounted
+# at /mnt/data for larger content.
 
 MNT=/mnt/persist
 DIR=$MNT/nspanel
+DATA=/mnt/data
 
 log() { echo "<5>nspanel-persist: $*" > /dev/kmsg; }
 
@@ -32,9 +34,19 @@ start)
 	else
 		log "cannot mount $dev, settings will not persist"
 	fi
+	if ud=$(find_part userdata) && blkid "$ud" 2>/dev/null | grep -q 'LABEL="panelos-data"'; then
+		mkdir -p "$DATA"
+		command -v e2fsck >/dev/null && e2fsck -p "$ud" >/dev/null 2>&1
+		if mount -t ext4 -o rw,noatime "$ud" "$DATA"; then
+			log "mounted $ud at $DATA"
+		else
+			log "cannot mount $ud at $DATA"
+		fi
+	fi
 	;;
 stop)
 	sync
+	mountpoint -q "$DATA" && umount "$DATA"
 	mountpoint -q "$MNT" && umount "$MNT"
 	;;
 restart | reload)

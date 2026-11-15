@@ -1,10 +1,14 @@
 //! Display output through DRM/KMS: two dumb buffers (XRGB8888) shown with
 //! page flips, so the UI never tears and the CPU draws only into the buffer
 //! that is not on screen.
+//!
+//! Three more buffers are shared with the web helper (dma-buf): while the web
+//! view is all there is on the screen, the helper renders into them on the
+//! GPU and the display flips to them directly, with no copy on the CPU.
 
 use std::fs::OpenOptions;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd, RawFd};
 
 use drm::buffer::{Buffer, DrmFourcc};
 use drm::control::{connector, crtc, framebuffer, Device as ControlDevice, Event, PageFlipFlags};
@@ -46,6 +50,20 @@ impl AsFd for Card {
 impl BasicDevice for Card {}
 impl ControlDevice for Card {}
 
+/// Which buffer is (or is about to be) on screen.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Shown {
+    /// The UI's own buffer.
+    Own,
+    /// A buffer the web helper rendered into.
+    Web(usize),
+}
+
+struct WebBuffer {
+    framebuffer: framebuffer::Handle,
+    pixels: &'static [Xrgb8888],
+}
+
 pub struct Display {
     card: Card,
     crtc: crtc::Handle,
@@ -56,6 +74,9 @@ pub struct Display {
     pub height: u32,
     back: usize,
     flip_pending: bool,
+    web: Vec<WebBuffer>,
+    shown: Shown,
+    next: Option<Shown>,
 }
 
 impl Display {
@@ -122,7 +143,47 @@ impl Display {
             height: height as u32,
             back: 1,
             flip_pending: false,
+            web: Vec::new(),
+            shown: Shown::Own,
+            next: None,
         })
+    }
+
+    /// Creates `n` buffers for the web helper; returns each one's dma-buf and
+    /// pitch in bytes. They live as long as the program.
+    pub fn create_web_buffers(&mut self, n: usize) -> io::Result<Vec<(OwnedFd, u32)>> {
+        let mut out = Vec::new();
+        for _ in 0..n {
+            let buffer: &'static mut _ =
+                Box::leak(Box::new(self.card.create_dumb_buffer((self.width, self.height), DrmFourcc::Xrgb8888, 32)?));
+            let framebuffer = self.card.add_framebuffer(&*buffer, 24, 32)?;
+            let fd = self.card.buffer_to_prime_fd(buffer.handle(), drm::CLOEXEC | drm::RDWR)?;
+            let pitch = buffer.pitch();
+            let mapping = Box::leak(Box::new(self.card.map_dumb_buffer(buffer)?));
+            let bytes: &'static mut [u8] = &mut mapping[..];
+            // SAFETY: page aligned mapping that lives for the whole program.
+            let pixels = unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast::<Xrgb8888>(), bytes.len() / 4) };
+            self.web.push(WebBuffer { framebuffer, pixels });
+            out.push((fd, pitch));
+        }
+        Ok(out)
+    }
+
+    /// Shows web buffer `i` at the next vertical blank.
+    pub fn show_web(&mut self, i: usize) -> io::Result<()> {
+        let framebuffer = self.web.get(i).ok_or_else(|| io::Error::other("no such web buffer"))?.framebuffer;
+        self.card.page_flip(self.crtc, framebuffer, PageFlipFlags::EVENT, None)?;
+        self.flip_pending = true;
+        self.next = Some(Shown::Web(i));
+        Ok(())
+    }
+
+    /// The web buffer on screen, if one is.
+    pub fn web_on_screen(&self) -> Option<usize> {
+        match self.shown {
+            Shown::Web(i) => Some(i),
+            Shown::Own => None,
+        }
     }
 
     pub fn fd(&self) -> RawFd {
@@ -144,32 +205,56 @@ impl Display {
         self.card
             .page_flip(self.crtc, self.framebuffers[self.back], PageFlipFlags::EVENT, None)?;
         self.flip_pending = true;
+        self.next = Some(Shown::Own);
         Ok(())
     }
 
     /// Writes the buffer that is on screen to a PPM file (development aid).
     pub fn dump_front(&self, path: &str) -> io::Result<()> {
         use std::io::Write;
-        let front = &self.pixels[self.back ^ 1];
-        let (w, h) = (self.width as usize, self.height as usize);
-        let mut out = Vec::with_capacity(w * h * 3 + 32);
+        let (w, h, rgb) = self.front_rgb();
+        let mut out = Vec::with_capacity(rgb.len() + 32);
         write!(out, "P6\n{w} {h}\n255\n")?;
+        out.extend_from_slice(&rgb);
+        std::fs::write(path, out)
+    }
+
+    /// What is on the screen now: width, height, RGB rows top down.
+    pub fn front_rgb(&self) -> (u32, u32, Vec<u8>) {
+        let front: &[Xrgb8888] = match self.shown {
+            Shown::Web(i) => self.web[i].pixels,
+            Shown::Own => &self.pixels[self.back ^ 1],
+        };
+        let (w, h) = (self.width as usize, self.height as usize);
+        let mut out = Vec::with_capacity(w * h * 3);
         for y in 0..h {
             for px in &front[y * self.stride..y * self.stride + w] {
                 out.extend_from_slice(&[px.r, px.g, px.b]);
             }
         }
-        std::fs::write(path, out)
+        (self.width, self.height, out)
     }
 
-    /// Reads DRM events after the fd became readable.
-    pub fn handle_events(&mut self) -> io::Result<()> {
+    /// Reads DRM events after the fd became readable; returns the web
+    /// buffer that left the screen, if one did.
+    pub fn handle_events(&mut self) -> io::Result<Option<usize>> {
+        let mut released = None;
         for event in self.card.receive_events()? {
             if let Event::PageFlip(_) = event {
                 self.flip_pending = false;
-                self.back ^= 1;
+                let now = self.next.take().unwrap_or(Shown::Own);
+                if now == Shown::Own {
+                    // Only the UI's own flips swap its two buffers.
+                    self.back ^= 1;
+                }
+                if let Shown::Web(old) = self.shown {
+                    if now != Shown::Web(old) {
+                        released = Some(old);
+                    }
+                }
+                self.shown = now;
             }
         }
-        Ok(())
+        Ok(released)
     }
 }

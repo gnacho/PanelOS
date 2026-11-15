@@ -2,8 +2,9 @@
 # Safety net for one-shot test boots. A new image is first booted once with
 # the misc boot command cleared ("nspanel-bootmode android", then
 # "reboot-to recovery"). If such a boot gets no network within 90 s, reboot:
-# the stock Android starts and the previous image can be written back over
-# ADB without anyone at the panel. Normal boots (default boot = open system)
+# the boot partition starts (the stock Android, or once Android is removed the
+# second PanelOS copy) and the previous image can be written back over ADB or
+# SSH without anyone at the panel. Normal boots (default boot = open system)
 # never reboot.
 
 log() { echo "<4>nspanel-testboot: $*" > /dev/kmsg; }
@@ -19,7 +20,7 @@ start)
 			sleep 1
 			i=$((i + 1))
 		done
-		log "no network after 90 s, rebooting to the stock system"
+		log "no network after 90 s, rebooting to the boot partition"
 		sync
 		reboot
 	) &

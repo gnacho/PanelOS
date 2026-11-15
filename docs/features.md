@@ -37,9 +37,11 @@
 - Voice: Assist satellite over the ESPHome native API with on-device wake words and echo cancellation (see docs/app.md).
 - Diagnostics: Wi-Fi signal, SoC temperature, app version.
 
-## Home Assistant entities (over the ESPHome native API, see docs/app.md)
+## Home Assistant entities (see docs/home_assistant.md)
 
-Proximity, presence, illuminance, last touch, screensaver, current page, screen brightness, volume, announce (notify), stop audio, Wi-Fi signal, SoC temperature, app version, plus settings (idle timeout, sleep, auto brightness limits, wake sensitivity).
+On the panel's device (PanelOS integration): screen, dashboard, theme, screensaver, display mode, brightness, automatic brightness, wake on approach, illuminance, presence, SoC temperature, Wi-Fi signal, IP address, app version, restart, reboot. On the voice device (ESPHome): the Assist satellite, volume, microphone switch, wake word sensors.
+
+Later: last touch, current page, stop audio, auto brightness limits, wake sensitivity.
 
 ## Later
 

@@ -77,7 +77,8 @@ fi
            CFG80211 MAC80211 RTW88_8723DS PWRSEQ_SIMPLE RESET_GPIO EXT4_FS \
            TOUCHSCREEN_HYNITRON_CSTXXX INPUT_EVDEV I2C_CHARDEV IIO STK3310 \
            SND SND_SOC SND_SOC_ROCKCHIP_I2S SND_SOC_RK817 SND_SIMPLE_CARD \
-           SND_SOC_ROCKCHIP_PDM SND_SOC_DMIC DW_WATCHDOG WATCHDOG_HANDLE_BOOT_ENABLED; do
+           SND_SOC_ROCKCHIP_PDM SND_SOC_DMIC DW_WATCHDOG WATCHDOG_HANDLE_BOOT_ENABLED \
+           DRM_PANFROST PM_DEVFREQ SQUASHFS SQUASHFS_ZSTD BLK_DEV_LOOP; do
     grep -q "^CONFIG_$o=y" .config || { echo "NOT BUILT IN: CONFIG_$o"; missing=1; }
   done
   [ "$missing" -eq 0 ] || exit 1
@@ -177,6 +178,8 @@ size=$(stat -c %s "$OUT/recovery-dev.img")
 limit=$((131072 * 512))
 echo "recovery-dev.img: $size bytes (recovery partition: $limit; boot partition: $((65536 * 512)))"
 [ "$size" -le "$limit" ] || { echo "ERROR: image does not fit the recovery partition"; exit 1; }
+# Without the stock Android the boot partition holds a second copy (tools/remove_android.sh).
+[ "$size" -le $((65536 * 512)) ] || echo "WARNING: image does not fit the boot partition (second copy once Android is removed)"
 (cd "$OUT" && md5sum recovery-dev.img > recovery-dev.img.md5 && cat recovery-dev.img.md5)
 mkdir -p /tmp/nspanel_out
 cp "$OUT/recovery-dev.img" "$OUT/recovery-dev.img.md5" /tmp/nspanel_out/

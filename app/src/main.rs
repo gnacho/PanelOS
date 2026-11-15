@@ -3,7 +3,7 @@
 //! Login by QR code (OAuth), live states over the WebSocket API, details
 //! layers, settings, screensaver, automatic brightness and theme; assistant
 //! mode (home screen, full-screen conversation, layers opened from Home
-//! Assistant through the nspanel_pro integration).
+//! Assistant through the PanelOS integration).
 
 mod artwork;
 mod assistant;
@@ -17,14 +17,18 @@ mod esphome;
 mod ha;
 mod hw;
 mod icons;
+mod loading_text;
 mod api_link;
 mod mdns;
 mod pairing;
+mod panel_device;
 mod platform;
 mod roam;
 mod settings;
 mod touch;
 mod voice;
+mod web;
+mod webstats;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -51,6 +55,10 @@ slint::include_modules!();
 /// Budapest time as a POSIX TZ rule (works without zoneinfo files).
 const DEFAULT_TZ: &str = "CET-1CEST,M3.5.0,M10.5.0/3";
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Pull to refresh: a pull counts after this many px down, and reloads the
+/// page after this many more.
+const PULL_START: f32 = 16.0;
+const PULL_DISTANCE: f32 = 110.0;
 
 extern "C" {
     // POSIX; not exported by the libc crate for this target.
@@ -97,6 +105,14 @@ struct UiState {
     /// Five-minute averages of the once-a-minute readings Home Assistant gets.
     soc_temp_avg: Option<f64>,
     wifi_avg: Option<f64>,
+    /// Dashboard mode in the web view (None without the web bundle).
+    web: Option<Arc<web::WebView>>,
+    /// A swipe down from the top edge of the web view (start y): opens the
+    /// panel's settings instead of going to the page.
+    web_swipe: Option<f32>,
+    /// Pull to refresh: where the finger came down, and how far it pulled (0..1, None: not pulling).
+    web_pull: Option<(f32, f32)>,
+    web_pulled: Option<f32>,
     timers: HashMap<String, TimerInfo>,
     ringing: Option<Instant>,
     /// Same as `ringing.is_some()`, for the voice thread.
@@ -540,7 +556,7 @@ fn apply_assistant_config(ui: &MainWindow) {
     }
 }
 
-/// show_view / show_message from Home Assistant (nspanel_pro integration).
+/// show_view / show_message from Home Assistant (PanelOS integration).
 fn handle_show(ui: &MainWindow, v: &Value) {
     let kind = v["type"].as_str().unwrap_or("view");
     let seconds = v["seconds"].as_u64().unwrap_or(30);
@@ -780,7 +796,7 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
             });
             apply_view(ui, camera);
             if need_list {
-                // Also gives the ESPHome "Dashboard" select its options.
+                // Also gives the "Dashboard" select of the panel's device its options.
                 send(Command::ListDashboards);
             }
         }
@@ -836,6 +852,12 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
                     Some(v) => assistant::from_integration(v),
                     None => settings::AssistantConfig::default(),
                 };
+                let web = config.as_ref().map(settings::WebConfig::from_integration).unwrap_or_default();
+                if web != s.settings.web {
+                    eprintln!("nspanel-app: dashboard mode settings from Home Assistant: {web:?}");
+                    s.settings.web = web;
+                    s.settings.save();
+                }
                 let reporting = config.as_ref().map(settings::Reporting::from_integration).unwrap_or_default();
                 if reporting != s.settings.reporting {
                     eprintln!("nspanel-app: sensor reporting from Home Assistant: {reporting:?}");
@@ -856,10 +878,43 @@ fn handle_event(ui: &MainWindow, event: Event, camera: &CameraControl) {
             }
         }
         Event::Show(v) => handle_show(ui, &v),
+        Event::Command { key, .. } if key == "screenshot" => {
+            // Encoded off the UI thread (about 50 ms on the panel).
+            let tx = with_state(|s| s.commands.clone());
+            platform::request_screen(move |w, h, rgb| {
+                std::thread::spawn(move || {
+                    if let (Some(png), Some(tx)) = (panel_device::png_base64(w, h, &rgb), tx) {
+                        let _ = tx.send(Command::Screen(png));
+                    }
+                });
+            });
+        }
+        Event::Command { key, value } => {
+            let control = with_state(|s| panel_device::command(&key, &value, &s.device.lock().unwrap()));
+            match control {
+                Some(control) => apply_control(ui, control, camera),
+                None => eprintln!("nspanel-app: unknown command from Home Assistant: {key} = {value}"),
+            }
+        }
         Event::Forecast { hourly, items } => {
             with_state(|s| if hourly { s.forecast_hourly = items } else { s.forecast_daily = items });
             refresh_assistant(ui);
         }
+    }
+}
+
+/// Carries out a request from Home Assistant (ESPHome API or the PanelOS
+/// integration) on the UI thread.
+fn apply_control(ui: &MainWindow, control: esphome::Control, camera: &CameraControl) {
+    match control {
+        esphome::Control::Setting(k, v) => on_setting(ui, &k, &v, camera),
+        esphome::Control::Screen(true) => wake(ui),
+        esphome::Control::Screen(false) => with_state(|s| {
+            if !s.screensaver {
+                start_screensaver(ui, s);
+            }
+        }),
+        esphome::Control::Timer { kind, id, name, left, active, .. } => handle_timer(ui, kind, id, name, left, active),
     }
 }
 
@@ -1076,6 +1131,7 @@ fn report_device(s: &mut UiState) {
     d.mic_muted = s.settings.mic_muted;
     d.display_mode = s.settings.display_mode.clone();
     d.volume = s.settings.volume;
+    d.ready = true;
     let after = (
         d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone(),
         d.proximity_wake, d.screen_on, d.dashboard.clone(), d.presence, d.display_mode.clone(), d.volume,
@@ -1194,8 +1250,38 @@ fn fade_backlight() {
     });
 }
 
+/// Web view: the page for the chosen dashboard, rendered only while it is
+/// on the screen.
+fn update_web(ui: &MainWindow, s: &mut UiState) {
+    let Some(view) = s.web.clone() else { return };
+    let Some(config) = s.config.as_ref() else { return };
+    let dashboard = if !s.settings.web.dashboard.is_empty() {
+        s.settings.web.dashboard.clone()
+    } else {
+        let own = s.shared.dashboard.lock().unwrap().clone();
+        if own.is_empty() { "lovelace".to_string() } else { own }
+    };
+    let url = format!("{}/{}?external_auth=1", config.ha_url.trim_end_matches('/'), dashboard);
+    // Before the page: the helper loads it once the resource filter is ready.
+    view.set_skip(s.settings.web.skip_resources.clone());
+    view.set_zoom(s.settings.web.zoom);
+    {
+        let mut d = s.device.lock().unwrap();
+        if d.web_dashboard != dashboard {
+            d.web_dashboard = dashboard.clone();
+        }
+    }
+    view.load(&url, !s.settings.web.show_header, !s.settings.web.show_sidebar);
+    let on_screen = ui.get_paired()
+        && (ui.get_display_mode() == 0 || ui.get_show_dashboard())
+        && !s.screensaver
+        && !ui.get_settings_open();
+    view.set_visible(on_screen);
+}
+
 /// Runs twice a second: theme, screensaver, proximity wake, backlight target.
 fn tick(ui: &MainWindow) {
+    with_state(|s| update_web(ui, s));
     let wake_now = with_state(|s| {
         s.lux = s.light.lux();
         update_theme(ui, s);
@@ -1450,7 +1536,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // The boot splash owns the display until now: it shows the finished logo,
     // gives up DRM master and keeps the picture until this app has drawn.
     let splash = splash_handoff();
-    let display = display::Display::open("/dev/dri/card0")?;
+    let mut display = display::Display::open("/dev/dri/card0")?;
+    // Display buffers the web helper renders into while the web view is all
+    // there is on the screen.
+    match display.create_web_buffers(3) {
+        Ok(buffers) => web::set_scanout_buffers(buffers),
+        Err(e) => eprintln!("nspanel-app: no display buffers for the web view: {e}"),
+    }
     let (width, height) = (display.width, display.height);
     let touch = match touch::Touch::open() {
         Ok(t) => {
@@ -1483,6 +1575,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ui.set_intro_x(x as f32);
         ui.set_intro_y(y as f32);
     }
+    // Loading screen background (dashboard mode).
+    {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&include_bytes!("../ui/images/loading.png")[..]))
+            .read_info()
+            .map_err(|e| format!("loading.png: {e}"))?;
+        let mut rgb = vec![0; reader.output_buffer_size().unwrap_or(0)];
+        let info = reader.next_frame(&mut rgb).map_err(|e| format!("loading.png: {e}"))?;
+        if info.color_type == png::ColorType::Rgb {
+            let pic = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&rgb[..info.buffer_size()], info.width, info.height);
+            ui.set_loading_image(slint::Image::from_rgb8(pic));
+        }
+    }
     let intro = slint::Timer::default();
     let weak = ui.as_weak();
     intro.start(slint::TimerMode::SingleShot, Duration::from_millis(250), move || {
@@ -1512,7 +1616,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SCREENSAVER_CHOICES.iter().map(|(_, l)| SharedString::from(*l)).collect::<Vec<_>>(),
     )));
 
-    let device = Arc::new(std::sync::Mutex::new(esphome::DeviceState::default()));
+    let device = shared.device.clone();
     let (device_notify, device_rx) = mpsc::channel::<()>();
     let mic_muted = Arc::new(std::sync::atomic::AtomicBool::new(settings.mic_muted));
     let wake_words = Arc::new(std::sync::Mutex::new(settings.wake_words.clone()));
@@ -1555,6 +1659,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             last_report: Instant::now() - Duration::from_secs(120),
             soc_temp_avg: None,
             wifi_avg: None,
+            web: None,
+            web_swipe: None,
+            web_pull: None,
+            web_pulled: None,
             timers: HashMap::new(),
             ringing: None,
             ringing_flag: ringing_flag.clone(),
@@ -1601,18 +1709,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cam = cam.clone();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(ui) = weak.upgrade() else { return };
-            match control {
-                esphome::Control::Setting(k, v) => on_setting(&ui, &k, &v, &cam),
-                esphome::Control::Screen(true) => wake(&ui),
-                esphome::Control::Screen(false) => with_state(|s| {
-                    if !s.screensaver {
-                        start_screensaver(&ui, s);
-                    }
-                }),
-                esphome::Control::Timer { kind, id, name, left, active, .. } => {
-                    handle_timer(&ui, kind, id, name, left, active)
-                }
-            }
+            apply_control(&ui, control, &cam);
         });
     });
     if fixture.is_none() {
@@ -1792,6 +1889,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(show) = v.get("show") {
                 handle_show(&ui, show);
             }
+            // Measurements: another page in the web view, or a scripted scroll
+            // of the page's largest scrolling element (no touch, no click).
+            if let Some(url) = v.get("web_load").and_then(Value::as_str) {
+                if let Some(view) = with_state(|s| s.web.clone()) {
+                    view.dev(&format!("LOAD {url}"));
+                }
+            }
+            if let Some(list) = v.get("web_skip").and_then(Value::as_array) {
+                let paths = list.iter().filter_map(Value::as_str).map(str::to_string).collect();
+                if let Some(view) = with_state(|s| s.web.clone()) {
+                    view.set_skip(paths);
+                }
+            }
+            if v.get("web_scroll_find").is_some() {
+                if let Some(view) = with_state(|s| s.web.clone()) {
+                    view.dev("SCROLLFIND");
+                }
+            }
+            if let Some(a) = v.get("web_scroll").and_then(Value::as_array) {
+                let px = a.first().and_then(Value::as_i64).unwrap_or(300);
+                let ms = a.get(1).and_then(Value::as_u64).unwrap_or(400);
+                if let Some(view) = with_state(|s| s.web.clone()) {
+                    webstats::gesture("scripted scroll", webstats::now_us() + ms * 1000);
+                    view.dev(&format!("SCROLLTEST {px} {ms}"));
+                }
+            }
             if let Some(a) = v.get("assist").and_then(Value::as_array) {
                 ui.set_assist_heard(a.get(1).and_then(Value::as_str).unwrap_or("").into());
                 ui.set_assist_answer(a.get(2).and_then(Value::as_str).unwrap_or("").into());
@@ -1898,6 +2021,153 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         s.art_url = None;
     });
     refresh_assistant(&ui);
+
+    if web::available() {
+        // Only the newest frame matters: one UI job at a time takes it.
+        type Latest = Option<(slint::SharedPixelBuffer<slint::Rgba8Pixel>, webstats::FrameTimes)>;
+        let latest: Arc<std::sync::Mutex<Latest>> = Arc::default();
+        let weak = ui.as_weak();
+        let view = web::WebView::start(
+            auth.clone(),
+            Box::new(move |frame, times| {
+                if latest.lock().unwrap().replace((frame, times)).is_some() {
+                    return;
+                }
+                let latest = latest.clone();
+                let weak = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let (Some(ui), Some((frame, times))) = (weak.upgrade(), latest.lock().unwrap().take()) {
+                        webstats::frame_on_ui(times);
+                        ui.set_web_frame(slint::Image::from_rgba8(frame));
+                        ui.set_web_ready(true);
+                    }
+                });
+            }),
+        );
+        // Loading screen: shown while a page loads, faded and removed when it is ready.
+        let weak = ui.as_weak();
+        view.on_loading(move |on| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                ui.set_web_loading(on);
+                if on {
+                    loading_text::start(&ui);
+                    ui.set_web_overlay(true);
+                } else {
+                    loading_text::stop();
+                    let weak = ui.as_weak();
+                    slint::Timer::single_shot(Duration::from_millis(500), move || {
+                        if let Some(ui) = weak.upgrade() {
+                            if !ui.get_web_loading() {
+                                ui.set_web_overlay(false);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+        let weak = ui.as_weak();
+        let changed_view = view.clone();
+        let release_view = view.clone();
+        platform::set_web_direct(platform::WebDirect {
+            // Straight to the screen only while nothing is drawn over the web view.
+            allowed: Box::new(move || {
+                let Some(ui) = weak.upgrade() else { return false };
+                ui.get_web_shown()
+                    && ui.get_web_ready()
+                    && !(ui.get_web_overlay()
+                        || ui.get_web_pull() > 0.0
+                        || ui.get_more_info_open()
+                        || ui.get_weather_open()
+                        || ui.get_media_open()
+                        || ui.get_camera_full()
+                        || ui.get_settings_open()
+                        || ui.get_screensaver()
+                        || ui.get_message_open()
+                        || ui.get_assist_state() > 0
+                        || ui.get_timer_ringing()
+                        || ui.get_setup()
+                        || ui.get_prox_test()
+                        || ui.get_intro_visible())
+            }),
+            changed: Box::new(move |on| changed_view.set_direct(on)),
+            release: Box::new(move |list| {
+                for i in list {
+                    release_view.dev(&format!("FREE {i}"));
+                }
+            }),
+        });
+        with_state(|s| {
+            s.web = Some(view);
+            update_web(&ui, s);
+        });
+        ui.set_web_active(true);
+    }
+    let weak = ui.as_weak();
+    ui.on_web_touch(move |kind, x, y| {
+        let Some(ui) = weak.upgrade() else { return };
+        // Inside with_state only the decision; UI callbacks run after it.
+        // The top edge (24 px) belongs to the settings swipe and never reaches
+        // the page; a pull down from below it, on content scrolled to its top,
+        // reloads the page (pull to refresh).
+        let (swiped, pulled) = with_state(|s| {
+            let Some(view) = s.web.clone() else { return (false, None) };
+            match kind {
+                0 if y < 24.0 => s.web_swipe = Some(y),
+                1 if s.web_swipe.is_some() => {
+                    if y - s.web_swipe.unwrap_or(y) > 60.0 {
+                        s.web_swipe = None;
+                        return (true, None);
+                    }
+                }
+                2 if s.web_swipe.is_some() => s.web_swipe = None,
+                0 => {
+                    view.touch('d', x, y);
+                    view.check_top(x, y);
+                    s.web_pull = Some((x, y));
+                    s.web_pulled = None;
+                }
+                1 => {
+                    view.touch('m', x, y);
+                    if let Some((x0, y0)) = s.web_pull {
+                        let (dx, dy) = ((x - x0).abs(), y - y0);
+                        if s.web_pulled.is_none() && dy > PULL_START && dy > 2.0 * dx && view.at_top() == Some(true) {
+                            s.web_pulled = Some(0.0);
+                        } else if s.web_pulled.is_none() && (dy < -PULL_START || dx > PULL_START) {
+                            // Scrolling or sideways: not a pull.
+                            s.web_pull = None;
+                        }
+                        if s.web_pulled.is_some() {
+                            s.web_pulled = Some(((dy - PULL_START) / PULL_DISTANCE).clamp(0.0, 1.0));
+                        }
+                    }
+                    return (false, s.web_pulled);
+                }
+                _ => {
+                    view.touch('u', x, y);
+                    if s.web_pulled.is_some_and(|p| p >= 1.0) {
+                        view.reload();
+                    }
+                    s.web_pull = None;
+                    s.web_pulled = None;
+                    return (false, Some(0.0));
+                }
+            }
+            (false, None)
+        });
+        if let Some(p) = pulled {
+            ui.set_web_pull(p);
+        }
+        if swiped {
+            if ui.get_display_mode() == 1 {
+                ui.set_show_dashboard(false);
+            } else {
+                ui.set_settings_open(true);
+                ui.invoke_settings_opened();
+            }
+        }
+    });
 
     let weak = ui.as_weak();
     camera::spawn(config.ha_url.clone(), auth, camera.clone(), move |frame| {

@@ -2839,6 +2839,7 @@ dependencies = [
  "jpeg-decoder",
  "libc",
  "minimp3",
+ "png",
  "prost",
  "prost-build",
  "protox",

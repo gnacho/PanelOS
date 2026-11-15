@@ -23,6 +23,8 @@ tungstenite = { version = "0.30", default-features = false, features = ["handsha
 ureq = { version = "2.12", default-features = false }
 qrcode = { version = "0.14", default-features = false }
 jpeg-decoder = { version = "0.3", default-features = false }
+# Pictures of the screen for the PanelOS page in Home Assistant
+png = "0.18"
 prost = "0.14"
 minimp3 = "0.5"
 alsa = "0.12"

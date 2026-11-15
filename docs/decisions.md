@@ -23,7 +23,7 @@ The current base is the latest stable kernel (7.3.x). There is no 7.x longterm k
 ## Updates (planned)
 
 - One signed bundle per release (kernel, DTB, root filesystem, panel app), published as a GitHub release. The panel verifies the signature before installing.
-- A/B with test boot and automatic fallback: the new system goes to the spare slot and boots once from there (the stock U-Boot's one-shot recovery boot). It becomes the default only after a health check (Wi-Fi, app running, Home Assistant connected); otherwise the next boot returns to the previous version.
+- A/B with test boot and automatic fallback: the new system goes to the spare slot and boots once from there (the stock U-Boot's one-shot recovery boot). It becomes the default only after a health check (Wi-Fi, app running, Home Assistant connected); otherwise the next boot returns to the previous version. The two slots are the recovery partition and, once the stock Android is removed (`tools/remove_android.sh`), the boot partition.
 - Home Assistant: an `update` entity (installed version, latest version, release notes, install command, progress), so the update shows up under Settings → Updates like any other; auto-update is optional.
 - On the panel: a settings page with the version, "check for updates", "install" and an auto-update switch.
 - First install over Wi-Fi ADB from the stock firmware (no opening the case), every later update over the air.
@@ -43,7 +43,7 @@ The current base is the latest stable kernel (7.3.x). There is no 7.x longterm k
 | Mode | What it is | Engine |
 |---|---|---|
 | Native dashboard (default) | Predefined card types; content from a Home Assistant dashboard chosen for the panel; own look, themes, more-info dialogs | Rust/Slint app |
-| Assistant | Smart-display screens: clock, weather, now playing, timers, what Assist heard and answered, a few quick tiles; changes with the conversation | Same app; configured with the own Home Assistant integration (`custom_components/nspanel_pro`). No View Assist dependency: View Assist needs a web browser on the display |
+| Assistant | The panel as a smart display: big clock and date, the weather now and for the next hours, what is playing (artwork and controls), a few quick tiles, timers; while you talk to it, what it heard and what it answers, full screen | Same app; set in the PanelOS integration (`custom_components/panelos`) |
 | Web (planned) | The real Home Assistant frontend as a kiosk, custom (HACS) cards included | WPE WebKit + cog on DRM, GPU through Panfrost; its speed on the PX30 has to be measured first |
 
 - The **voice satellite** works in every mode: PDM microphones → on-device wake word → Home Assistant Assist pipeline, echo cancellation with the player's own output as reference, TTS and media through the speaker.

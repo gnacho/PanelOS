@@ -23,6 +23,7 @@ Which case is yours?
 - **A.** PanelOS runs, and you want the stock firmware back.
 - **B.** The stock firmware runs, and PanelOS should be removed completely.
 - **C.** The panel does not start at all (black screen for minutes, after unplugging and plugging in again too).
+- **D.** PanelOS runs, the stock Android was removed (install guide, step 14), and you want the stock firmware back.
 
 ## A. From PanelOS back to the stock firmware
 
@@ -134,6 +135,16 @@ rkdeveloptool wl 204800 $BACKUP/recovery.img
 ```
 
 Do not write the `uboot`, `trust` or other partitions unless you know exactly why: the USB download mode itself depends on them.
+
+## D. Android was removed: back to the stock firmware
+
+PanelOS writes the stock boot and recovery partitions back from this panel's backup, clears the old userdata partition and restarts into the stock firmware:
+
+```
+cd /root/PanelOS && tools/remove_android.sh $PANEL restore $BACKUP
+```
+
+It asks first, checks every partition after writing it, and stops before the restart if something does not match (PanelOS keeps running then; run the command again). The stock firmware should then start like after a factory reset: its own settings and the eWeLink pairing gone, developer mode and ADB to be turned on again (install guide, step 1). Not tried on a panel yet.
 
 ## Test the restore before you need it
 

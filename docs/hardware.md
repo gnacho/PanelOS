@@ -95,6 +95,23 @@ Init sequence (DCS, in order; delays in ms after the command):
 | 11 | (sleep out) | 120 |
 | 29 | (display on) | 120 |
 
+## Touch controller: interrupt bursts (open)
+
+The kernel log sometimes fills with `Hynitron-TS 1-005a: cst3xx touch read failure`, hundreds of lines a second for up to several seconds. Measured on 2026-11-15 (one panel, kernel log, `/proc/interrupts`):
+
+| When (local time) | Lines | Length | Next to it |
+|---|---|---|---|
+| 10:47:00 | ≈590 | ≈4 s | app start |
+| 11:00:43 | ≈720 | ≈4 s | proximity "approach" in the same second |
+| 11:23:34 | 240 | 0.35 s | proximity "approach" 1 s later |
+| 11:26:45 | 3012 | 7.2 s | proximity "approach" at 65535 counts (the sensor's maximum: a hand on the glass), again 2 s later |
+
+The touch interrupt had fired 68 716 times in 16.3 h of uptime. Three of the four bursts came with the proximity sensor seeing a hand, so while the panel was touched or covered; the first came while the app started.
+
+What the driver does (`drivers/input/touchscreen/hynitron_cstxxx.c`, `cst3xx_touch_report`): on every interrupt it reads 28 bytes from register 0xd000. It prints this one message both when the I²C read fails and when the frame does not check out: byte 6 is not 0xab, or byte 0 is 0xab (a frame that was already read). In both cases it returns **without** writing the end-of-read command (0xab to 0xd000), so the controller keeps its interrupt line low (the interrupt is level triggered) and the read runs again at once. That explains the rate. The frames of a burst are dropped, so touches during a burst are lost. A frame read while nobody touches the panel starts with 0xab (`ab 01 1c 70 3b 00 ab 00 00 00 2e 35 ab …`).
+
+Not known yet: whether the failing reads are I²C errors or frames in another format (for example a palm or large-area frame, which would fit the covered proximity sensor), and whether this is why a long press does not register in the web view. A read-only watcher that saves the controller's frame during a burst (`i2ctransfer -f -y 1 w2@0x5a 0xd0 0x00 r28`, triggered by the interrupt rate) is how to find out. A likely fix in `kernel/patches/0002`: on a frame that does not check out, still send the end-of-read command and log the raw bytes once (rate limited); it needs a new kernel, so it goes through a one-shot test boot.
+
 ## GPIO and pin map (from the vendor device tree)
 
 | Function | Pin | Notes |

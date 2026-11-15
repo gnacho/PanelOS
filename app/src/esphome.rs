@@ -1,6 +1,8 @@
 //! ESPHome native API server (TCP 6053): Home Assistant's built-in ESPHome
-//! integration adds the panel as a device with its settings and sensors as
-//! entities.
+//! integration adds the panel's voice satellite as a device, with its volume,
+//! microphone switch and wake word sensors. The panel's display, settings and
+//! sensors are the PanelOS integration's device (`panel_device.rs`), which
+//! the voice device is connected via.
 //!
 //! Only Home Assistant's address (and `api_allow` in app.json) may connect.
 //! The connection is encrypted once Home Assistant has handed the panel a key
@@ -29,9 +31,11 @@ use proto::*;
 pub const PORT: u16 = 6053;
 /// Device identity, the same in the API and in the mDNS announcement.
 pub const DEVICE_NAME: &str = "nspanel-pro";
-pub const FRIENDLY_NAME: &str = "NSPanel Pro";
+pub const FRIENDLY_NAME: &str = "NSPanel Pro Voice";
 pub const ESPHOME_VERSION: &str = "2026.10.0";
-pub const PROJECT_NAME: &str = "bazsc20ne.nspanel-pro";
+/// "maker.model": Home Assistant shows the device as "Voice satellite by
+/// PanelOS".
+pub const PROJECT_NAME: &str = "PanelOS.Voice satellite";
 
 /// What the panel reports to Home Assistant; updated by the UI thread.
 #[derive(Debug, Clone, Default)]
@@ -54,6 +58,11 @@ pub struct DeviceState {
     pub volume: u8,
     /// "dashboard" or "assistant".
     pub display_mode: String,
+    /// Filled from the settings at least once (nothing is reported before).
+    pub ready: bool,
+    /// url_path of the dashboard the web view shows (for the integration's
+    /// choice of card resources).
+    pub web_dashboard: String,
 }
 
 /// Requests from Home Assistant, carried out on the UI thread.
@@ -79,55 +88,19 @@ pub struct VoiceLink {
 // the wake word configuration when ANNOUNCE is set.
 const VOICE_FEATURES: u32 = 1 | 2 | 4 | 8 | 16;
 
-const THEMES: [(&str, &str); 3] = [("dark", "Dark"), ("light", "Light"), ("auto", "Auto")];
-const STYLES: [(&str, &str); 2] = [("clock", "Clock"), ("black", "Screen off")];
-pub const DISPLAY_MODES: [(&str, &str); 2] = [("dashboard", "Dashboard"), ("assistant", "Assistant")];
-
 #[derive(Clone, Copy, PartialEq)]
 enum Id {
-    Theme,
-    Brightness,
-    AutoBrightness,
-    Screensaver,
-    ScreensaverStyle,
-    ProximityWake,
-    Screen,
-    Dashboard,
-    Illuminance,
-    SocTemp,
-    Wifi,
-    Presence,
-    Ip,
-    Version,
-    RestartApp,
-    Reboot,
     MicMute,
-    DisplayMode,
     Volume,
     WakeLevel,
     WakeScore,
     WakeSnr,
 }
 
+// Keys and names as since the first version: Home Assistant knows the
+// entities by them.
 const ENTITIES: &[(Id, u32, &str, &str, &str)] = &[
-    (Id::Screen, 1, "screen", "Screen", "mdi:tablet"),
-    (Id::Dashboard, 2, "dashboard", "Dashboard", "mdi:view-dashboard"),
-    (Id::Theme, 3, "theme", "Theme", "mdi:theme-light-dark"),
-    (Id::Brightness, 4, "brightness", "Brightness", "mdi:brightness-6"),
-    (Id::AutoBrightness, 5, "auto_brightness", "Automatic brightness", "mdi:brightness-auto"),
-    (Id::Screensaver, 6, "screensaver", "Screensaver after", "mdi:timer-outline"),
-    (Id::ScreensaverStyle, 7, "screensaver_style", "Screensaver style", "mdi:clock-outline"),
-    (Id::ProximityWake, 8, "proximity_wake", "Wake on approach", "mdi:motion-sensor"),
-    (Id::Illuminance, 9, "illuminance", "Illuminance", ""),
-    (Id::Presence, 10, "presence", "Presence", ""),
-    (Id::SocTemp, 11, "soc_temperature", "SoC temperature", ""),
-    (Id::Wifi, 12, "wifi_signal", "Wi-Fi signal", ""),
-    (Id::Ip, 13, "ip_address", "IP address", "mdi:ip-network"),
-    (Id::Version, 14, "app_version", "App version", "mdi:package-variant"),
-    (Id::RestartApp, 15, "restart_app", "Restart app", "mdi:restart"),
-    (Id::Reboot, 16, "reboot", "Reboot", "mdi:power-cycle"),
     (Id::MicMute, 17, "mute_microphone", "Mute microphone", "mdi:microphone-off"),
-    (Id::DisplayMode, 18, "display_mode", "Display mode", "mdi:monitor-dashboard"),
     (Id::Volume, 19, "volume", "Volume", "mdi:volume-high"),
     // Sent with every wake word, before the run starts (voice::WakeLevel).
     (Id::WakeLevel, 20, "wake_level", "Wake level", "mdi:microphone"),
@@ -140,58 +113,20 @@ static LAST_WAKE: Mutex<Option<(f32, f32, Option<f32>)>> = Mutex::new(None);
 /// Streamed answer audio as the API receives it: last frame, longest wait.
 static TTS_RX: Mutex<(Option<Instant>, Duration)> = Mutex::new((None, Duration::ZERO));
 
-const CONFIG: i32 = EntityCategory::Config as i32;
 const DIAGNOSTIC: i32 = EntityCategory::Diagnostic as i32;
 
 #[derive(Clone, PartialEq, Debug)]
 enum Value {
-    Str(String),
     Float(Option<f32>),
     Bool(bool),
 }
 
-fn dashboard_titles(s: &DeviceState) -> Vec<String> {
-    let mut titles: Vec<String> = s.dashboards.iter().map(|(_, t)| t.clone()).collect();
-    if titles.is_empty() {
-        titles.push(if s.dashboard.is_empty() { "Overview".into() } else { s.dashboard.clone() });
-    }
-    titles
-}
-
 fn value_of(id: Id, s: &DeviceState) -> Option<Value> {
-    let label = |list: &[(&str, &str)], v: &str| list.iter().find(|(k, _)| *k == v).map(|(_, l)| l.to_string()).unwrap_or_default();
     Some(match id {
-        Id::Theme => Value::Str(label(&THEMES, &s.theme)),
-        Id::ScreensaverStyle => Value::Str(label(&STYLES, &s.screensaver_style)),
-        Id::DisplayMode => Value::Str(label(&DISPLAY_MODES, &s.display_mode)),
-        Id::Screensaver => Value::Str(
-            crate::settings::SCREENSAVER_CHOICES
-                .iter()
-                .find(|(secs, _)| *secs == s.screensaver_seconds)
-                .map(|(_, l)| l.to_string())
-                .unwrap_or_default(),
-        ),
-        Id::Dashboard => Value::Str(
-            s.dashboards
-                .iter()
-                .find(|(u, _)| *u == s.dashboard)
-                .map(|(_, t)| t.clone())
-                .unwrap_or_else(|| if s.dashboard.is_empty() { "Overview".into() } else { s.dashboard.clone() }),
-        ),
-        Id::Brightness => Value::Float(Some(s.brightness as f32)),
         Id::Volume => Value::Float(Some(s.volume as f32)),
-        Id::AutoBrightness => Value::Bool(s.auto_brightness),
-        Id::ProximityWake => Value::Bool(s.proximity_wake),
-        Id::Screen => Value::Bool(s.screen_on),
         Id::MicMute => Value::Bool(s.mic_muted),
-        Id::Illuminance => Value::Float(s.lux.map(|v| v as f32)),
-        Id::SocTemp => Value::Float(s.soc_temp.map(|v| v as f32)),
-        Id::Wifi => Value::Float(s.wifi_dbm.map(|v| v as f32)),
-        Id::Presence => Value::Bool(s.presence),
-        Id::Ip => Value::Str(s.ip.clone()),
-        Id::Version => Value::Str(env!("CARGO_PKG_VERSION").to_string()),
         // Pushed by the voice thread (forward_voice), not diffed here.
-        Id::RestartApp | Id::Reboot | Id::WakeLevel | Id::WakeScore | Id::WakeSnr => return None,
+        Id::WakeLevel | Id::WakeScore | Id::WakeSnr => return None,
     })
 }
 
@@ -219,7 +154,8 @@ pub fn mdns_service() -> crate::mdns::Service {
     }
 }
 
-fn mac_address() -> String {
+/// Wi-Fi MAC address, upper case with colons.
+pub fn mac_address() -> String {
     std::fs::read_to_string("/sys/class/net/wlan0/address")
         .map(|s| s.trim().to_uppercase())
         .unwrap_or_else(|_| "00:00:00:00:00:00".into())
@@ -230,74 +166,26 @@ fn mac_plain() -> String {
     mac_address().replace(':', "").to_lowercase()
 }
 
-fn list_entities(stream: &mut Conn, s: &DeviceState) -> io::Result<()> {
+fn list_entities(stream: &mut Conn) -> io::Result<()> {
     for &(id, key, object_id, name, icon) in ENTITIES {
-        let common = |category: i32| (object_id.to_string(), key, name.to_string(), icon.to_string(), category);
+        let (object_id, name, icon) = (object_id.to_string(), name.to_string(), icon.to_string());
         match id {
-            Id::Theme | Id::Screensaver | Id::ScreensaverStyle | Id::Dashboard | Id::DisplayMode => {
-                let options: Vec<String> = match id {
-                    Id::Theme => THEMES.iter().map(|(_, l)| l.to_string()).collect(),
-                    Id::DisplayMode => DISPLAY_MODES.iter().map(|(_, l)| l.to_string()).collect(),
-                    Id::ScreensaverStyle => STYLES.iter().map(|(_, l)| l.to_string()).collect(),
-                    Id::Screensaver => crate::settings::SCREENSAVER_CHOICES.iter().map(|(_, l)| l.to_string()).collect(),
-                    _ => dashboard_titles(s),
+            Id::Volume => send(stream, 49, &ListEntitiesNumberResponse {
+                object_id, key, name, icon, min_value: 0.0, max_value: 100.0, step: 5.0,
+                unit_of_measurement: "%".into(), mode: NumberMode::Slider as i32, ..Default::default()
+            })?,
+            Id::MicMute => send(stream, 17, &ListEntitiesSwitchResponse { object_id, key, name, icon, ..Default::default() })?,
+            Id::WakeLevel | Id::WakeScore | Id::WakeSnr => {
+                let (unit, decimals) = match id {
+                    Id::WakeLevel => ("dBFS", 1),
+                    Id::WakeScore => ("", 2),
+                    _ => ("dB", 1),
                 };
-                let (object_id, key, name, icon, category) = common(CONFIG);
-                send(stream, 52, &ListEntitiesSelectResponse {
-                    object_id, key, name, icon, options, entity_category: category, ..Default::default()
-                })?;
-            }
-            Id::Brightness | Id::Volume => {
-                let (min, step, category) = if id == Id::Volume { (0.0, 5.0, 0) } else { (1.0, 1.0, CONFIG) };
-                let (object_id, key, name, icon, category) = common(category);
-                send(stream, 49, &ListEntitiesNumberResponse {
-                    object_id, key, name, icon, min_value: min, max_value: 100.0, step,
-                    entity_category: category, unit_of_measurement: "%".into(),
-                    mode: NumberMode::Slider as i32, ..Default::default()
-                })?;
-            }
-            Id::AutoBrightness | Id::ProximityWake | Id::Screen | Id::MicMute => {
-                let category = if matches!(id, Id::Screen | Id::MicMute) { 0 } else { CONFIG };
-                let (object_id, key, name, icon, category) = common(category);
-                send(stream, 17, &ListEntitiesSwitchResponse {
-                    object_id, key, name, icon, entity_category: category, ..Default::default()
-                })?;
-            }
-            Id::Illuminance | Id::SocTemp | Id::Wifi | Id::WakeLevel | Id::WakeScore | Id::WakeSnr => {
-                let (unit, class, decimals, category) = match id {
-                    Id::Illuminance => ("lx", "illuminance", 0, 0),
-                    Id::SocTemp => ("°C", "temperature", 1, DIAGNOSTIC),
-                    Id::WakeLevel => ("dBFS", "", 1, DIAGNOSTIC),
-                    Id::WakeScore => ("", "", 2, DIAGNOSTIC),
-                    Id::WakeSnr => ("dB", "", 1, DIAGNOSTIC),
-                    _ => ("dBm", "signal_strength", 0, DIAGNOSTIC),
-                };
-                let (object_id, key, name, icon, category) = common(category);
                 send(stream, 16, &ListEntitiesSensorResponse {
                     object_id, key, name, icon, unit_of_measurement: unit.into(), accuracy_decimals: decimals,
-                    device_class: class.into(), state_class: SensorStateClass::StateClassMeasurement as i32,
-                    entity_category: category, ..Default::default()
-                })?;
-            }
-            Id::Presence => {
-                let (object_id, key, name, icon, category) = common(0);
-                send(stream, 12, &ListEntitiesBinarySensorResponse {
-                    object_id, key, name, icon, device_class: "occupancy".into(), entity_category: category,
+                    state_class: SensorStateClass::StateClassMeasurement as i32, entity_category: DIAGNOSTIC,
                     ..Default::default()
-                })?;
-            }
-            Id::Ip | Id::Version => {
-                let (object_id, key, name, icon, category) = common(DIAGNOSTIC);
-                send(stream, 18, &ListEntitiesTextSensorResponse {
-                    object_id, key, name, icon, entity_category: category, ..Default::default()
-                })?;
-            }
-            Id::RestartApp | Id::Reboot => {
-                let (object_id, key, name, icon, category) = common(CONFIG);
-                send(stream, 61, &ListEntitiesButtonResponse {
-                    object_id, key, name, icon, entity_category: category,
-                    device_class: "restart".into(), ..Default::default()
-                })?;
+                })?
             }
         }
     }
@@ -306,23 +194,12 @@ fn list_entities(stream: &mut Conn, s: &DeviceState) -> io::Result<()> {
 
 fn send_state(stream: &mut Conn, id: Id, key: u32, value: &Value) -> io::Result<()> {
     match (id, value) {
-        (Id::Theme | Id::Screensaver | Id::ScreensaverStyle | Id::Dashboard | Id::DisplayMode, Value::Str(v)) => {
-            send(stream, 53, &SelectStateResponse { key, state: v.clone(), missing_state: v.is_empty(), ..Default::default() })
-        }
-        (Id::Brightness | Id::Volume, Value::Float(v)) => send(stream, 50, &NumberStateResponse {
+        (Id::Volume, Value::Float(v)) => send(stream, 50, &NumberStateResponse {
             key, state: v.unwrap_or(0.0), missing_state: v.is_none(), ..Default::default()
         }),
-        (Id::AutoBrightness | Id::ProximityWake | Id::Screen | Id::MicMute, Value::Bool(v)) => {
-            send(stream, 26, &SwitchStateResponse { key, state: *v, ..Default::default() })
-        }
-        (Id::Illuminance | Id::SocTemp | Id::Wifi | Id::WakeLevel | Id::WakeScore | Id::WakeSnr, Value::Float(v)) => send(stream, 25, &SensorStateResponse {
+        (Id::MicMute, Value::Bool(v)) => send(stream, 26, &SwitchStateResponse { key, state: *v, ..Default::default() }),
+        (Id::WakeLevel | Id::WakeScore | Id::WakeSnr, Value::Float(v)) => send(stream, 25, &SensorStateResponse {
             key, state: v.unwrap_or(0.0), missing_state: v.is_none(), ..Default::default()
-        }),
-        (Id::Presence, Value::Bool(v)) => {
-            send(stream, 21, &BinarySensorStateResponse { key, state: *v, ..Default::default() })
-        }
-        (Id::Ip | Id::Version, Value::Str(v)) => send(stream, 27, &TextSensorStateResponse {
-            key, state: v.clone(), missing_state: v.is_empty(), ..Default::default()
         }),
         _ => Ok(()),
     }
@@ -332,64 +209,19 @@ fn entity_by_key(key: u32) -> Option<Id> {
     ENTITIES.iter().find(|e| e.1 == key).map(|e| e.0)
 }
 
-fn handle_command(kind: u32, payload: &[u8], s: &DeviceState, control: &dyn Fn(Control)) {
+fn handle_command(kind: u32, payload: &[u8], control: &dyn Fn(Control)) {
     let setting = |k: &str, v: String| control(Control::Setting(k.to_string(), v));
     match kind {
-        54 => {
-            let Ok(m) = SelectCommandRequest::decode(payload) else { return };
-            match entity_by_key(m.key) {
-                Some(Id::Theme) => {
-                    if let Some((k, _)) = THEMES.iter().find(|(_, l)| *l == m.state) {
-                        setting("theme", k.to_string());
-                    }
-                }
-                Some(Id::ScreensaverStyle) => {
-                    if let Some((k, _)) = STYLES.iter().find(|(_, l)| *l == m.state) {
-                        setting("screensaver_style", k.to_string());
-                    }
-                }
-                Some(Id::DisplayMode) => {
-                    if let Some((k, _)) = DISPLAY_MODES.iter().find(|(_, l)| *l == m.state) {
-                        setting("display_mode", k.to_string());
-                    }
-                }
-                Some(Id::Screensaver) => {
-                    if let Some(i) = crate::settings::SCREENSAVER_CHOICES.iter().position(|(_, l)| *l == m.state) {
-                        setting("screensaver_index", i.to_string());
-                    }
-                }
-                Some(Id::Dashboard) => {
-                    if let Some(i) = s.dashboards.iter().position(|(_, t)| *t == m.state) {
-                        setting("dashboard_index", i.to_string());
-                    }
-                }
-                _ => {}
-            }
-        }
         51 => {
             let Ok(m) = NumberCommandRequest::decode(payload) else { return };
-            match entity_by_key(m.key) {
-                Some(Id::Brightness) => setting("brightness", format!("{}", m.state.round() as i32)),
-                Some(Id::Volume) => setting("volume", format!("{}", m.state.round() as i32)),
-                _ => {}
+            if entity_by_key(m.key) == Some(Id::Volume) {
+                setting("volume", format!("{}", m.state.round() as i32));
             }
         }
         33 => {
             let Ok(m) = SwitchCommandRequest::decode(payload) else { return };
-            match entity_by_key(m.key) {
-                Some(Id::AutoBrightness) => setting("auto_brightness", m.state.to_string()),
-                Some(Id::ProximityWake) => setting("proximity_wake", m.state.to_string()),
-                Some(Id::Screen) => control(Control::Screen(m.state)),
-                Some(Id::MicMute) => setting("mic_muted", m.state.to_string()),
-                _ => {}
-            }
-        }
-        62 => {
-            let Ok(m) = ButtonCommandRequest::decode(payload) else { return };
-            match entity_by_key(m.key) {
-                Some(Id::RestartApp) => setting("restart_app", String::new()),
-                Some(Id::Reboot) => setting("reboot", String::new()),
-                _ => {}
+            if entity_by_key(m.key) == Some(Id::MicMute) {
+                setting("mic_muted", m.state.to_string());
             }
         }
         _ => {}
@@ -630,9 +462,6 @@ fn serve(
     stream.set_read_timeout(Duration::from_millis(15))?;
     let mut subscribed = false;
     let mut voice_subscribed = false;
-    // Select options are only read by Home Assistant when it lists the
-    // entities; when the dashboard list changes, reconnect so it lists again.
-    let mut listed_dashboards: Option<Vec<String>> = None;
     let mut sent: HashMap<u32, Value> = HashMap::new();
     let mut last_rx = Instant::now();
     let mut ping_sent: Option<Instant> = None;
@@ -659,12 +488,8 @@ fn serve(
                 Basic::Done => continue,
                 Basic::Other => {}
             }
-            let snapshot = state.lock().unwrap().clone();
             match kind {
-                11 => {
-                    listed_dashboards = Some(dashboard_titles(&snapshot));
-                    list_entities(&mut stream, &snapshot)?;
-                }
+                11 => list_entities(&mut stream)?,
                 20 => {
                     subscribed = true;
                     sent.clear();
@@ -673,7 +498,7 @@ fn serve(
                         send_wake_info(&mut stream, level_dbfs, score, snr_db)?;
                     }
                 }
-                33 | 51 | 54 | 62 => handle_command(kind, &payload, &snapshot, control),
+                33 | 51 => handle_command(kind, &payload, control),
                 89 | 91 | 92 | 106 | 115 | 119 | 121 | 123 => {
                     handle_voice(kind, &payload, voice, &mut stream, control, &mut voice_subscribed)?
                 }
@@ -686,10 +511,6 @@ fn serve(
         let changed = notify.try_iter().count() > 0;
         if subscribed && (changed || sent.is_empty()) {
             let snapshot = state.lock().unwrap().clone();
-            if listed_dashboards.as_ref().is_some_and(|l| *l != dashboard_titles(&snapshot)) {
-                eprintln!("nspanel-app: dashboard list changed, asking Home Assistant to reconnect");
-                return Ok(());
-            }
             for &(id, key, ..) in ENTITIES {
                 if let Some(v) = value_of(id, &snapshot) {
                     if sent.get(&key) != Some(&v) {
@@ -793,14 +614,6 @@ pub fn spawn(
                 return;
             }
         };
-        // Home Assistant reads the entity list once per connection: wait (at
-        // most 20 s) for the dashboard list, so the "Dashboard" select is
-        // complete from the start and needs no reconnect. Home Assistant's
-        // connection waits in the listen backlog meanwhile.
-        let started = Instant::now();
-        while state.lock().unwrap().dashboards.is_empty() && started.elapsed() < Duration::from_secs(20) {
-            std::thread::sleep(Duration::from_millis(200));
-        }
         let mut refused: Option<(IpAddr, Instant)> = None;
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };

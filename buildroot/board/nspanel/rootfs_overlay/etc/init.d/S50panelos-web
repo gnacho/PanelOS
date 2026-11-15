@@ -1,0 +1,35 @@
+#!/bin/sh
+# Web bundle for the dashboard mode: Mesa (GPU) and WPE WebKit in a
+# SquashFS image on the persistent partition, mounted at /opt/panelos-web
+# for the panel app, which runs the browser chrooted in it. Without the
+# image the panel app shows its native dashboard.
+
+IMG=/mnt/persist/panelos-web.squashfs
+ROOT=/opt/panelos-web
+DATA=/mnt/persist/panelos-web-data
+
+log() { echo "<5>panelos-web: $*" > /dev/kmsg; }
+
+case "$1" in
+start)
+	[ -f "$IMG" ] || exit 0
+	mkdir -p "$ROOT"
+	if ! mountpoint -q "$ROOT"; then
+		mount -t squashfs -o loop,ro "$IMG" "$ROOT" || { log "cannot mount $IMG"; exit 0; }
+	fi
+	for d in dev proc sys; do
+		mountpoint -q "$ROOT/$d" || mount --bind "/$d" "$ROOT/$d"
+	done
+	mountpoint -q "$ROOT/tmp" || mount -t tmpfs -o mode=1777,size=64m tmpfs "$ROOT/tmp"
+	mkdir -p "$DATA"
+	chmod 700 "$DATA"
+	mountpoint -q "$ROOT/data" || mount --bind "$DATA" "$ROOT/data"
+	log "web bundle mounted"
+	;;
+stop)
+	for d in data tmp sys proc dev ""; do
+		mountpoint -q "$ROOT/$d" && umount "$ROOT/$d"
+	done
+	;;
+esac
+exit 0

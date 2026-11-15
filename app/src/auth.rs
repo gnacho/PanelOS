@@ -122,6 +122,14 @@ impl Auth {
         }
     }
 
+    /// A valid access token and how many seconds it stays valid (for the
+    /// web view, which asks for tokens like Home Assistant's mobile apps).
+    pub fn access_token_with_lifetime(&self) -> Result<(String, u64), TokenError> {
+        let token = self.access_token()?;
+        let left = self.inner.lock().unwrap().expires_at.saturating_sub(now());
+        Ok((token, left))
+    }
+
     /// Logs out: revokes the refresh token in Home Assistant (in the
     /// background, best effort) and forgets the stored login.
     pub fn forget(&self) {

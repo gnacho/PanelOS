@@ -1,1 +1,3 @@
-# Packages of this external tree (the panel app will go here).
+# Packages of this external tree.
+source "$BR2_EXTERNAL_NSPANEL_PATH/package/panelos-web/Config.in"
+source "$BR2_EXTERNAL_NSPANEL_PATH/package/noto-sans/Config.in"

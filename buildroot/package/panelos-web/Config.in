@@ -1,0 +1,8 @@
+config BR2_PACKAGE_PANELOS_WEB
+	bool "panelos-web"
+	depends on BR2_PACKAGE_WPEWEBKIT
+	depends on BR2_PACKAGE_MESA3D_GBM
+	help
+	  The Home Assistant frontend in WPE WebKit for the PanelOS
+	  panel app: renders off screen on the GPU and hands every
+	  frame to the app through shared memory.

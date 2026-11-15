@@ -1,0 +1,148 @@
+// Shown over the web view while a dashboard loads: the PanelOS mark writes
+// itself in Morse (P = dot dash dash dot) over the calm Morse pattern, again
+// and again, until the page is ready; then it fades and the dashboard shows.
+
+export component WebLoading inherits Rectangle {
+    // false: fades out (the page is ready).
+    in property <bool> loading: true;
+    // The dark Morse pattern with a calm panel behind the mark
+    // (ui/images/loading.png from branding/build_loading.py, decoded by the app).
+    in property <image> background-image;
+    // The line under the mark: two texts that cross-fade when it changes.
+    in property <string> line-a;
+    in property <string> line-b;
+    in property <bool> show-a: true;
+
+    background: #000000;
+    opacity: root.loading ? 1 : 0;
+    animate opacity { duration: 450ms; easing: ease-out; }
+
+    // Morse timing, unit 100 ms: one round of the mark in 2.4 s.
+    property <float> ms: mod(animation-tick() / 1ms, 2400);
+    property <length> u: 16px;
+    // Grows in over 160 ms (dots) or over the dash's length (dashes).
+    pure function grow(start: float, len: float) -> float {
+        return clamp((root.ms - start) / len, 0, 1);
+    }
+    // The whole mark fades at the end of each round.
+    property <float> fade: 1 - clamp((root.ms - 1900) / 400, 0, 1);
+
+    Image {
+        source: root.background-image;
+        width: 480px;
+        height: 480px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    mark := Rectangle {
+        width: 5 * root.u;
+        height: 3 * root.u;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        opacity: root.fade;
+
+        // dot
+        Rectangle {
+            x: 0; y: 0;
+            width: root.u; height: root.u;
+            border-radius: root.u / 2;
+            background: #FF4A1C;
+            opacity: root.grow(0, 160);
+        }
+        // dash
+        Rectangle {
+            x: 2 * root.u; y: 0;
+            width: max(root.u, 3 * root.u * root.grow(200, 300)); height: root.u;
+            border-radius: root.u / 2;
+            background: #F5F3EE;
+            opacity: root.ms >= 200 ? 1 : 0;
+        }
+        // dash
+        Rectangle {
+            x: 0; y: 2 * root.u;
+            width: max(root.u, 3 * root.u * root.grow(600, 300)); height: root.u;
+            border-radius: root.u / 2;
+            background: #F5F3EE;
+            opacity: root.ms >= 600 ? 1 : 0;
+        }
+        // dot
+        Rectangle {
+            x: 4 * root.u; y: 2 * root.u;
+            width: root.u; height: root.u;
+            border-radius: root.u / 2;
+            background: #FF4A1C;
+            opacity: root.grow(1000, 160);
+        }
+    }
+
+    for line[i] in [root.line-a, root.line-b]: Text {
+        text: line;
+        x: 0;
+        y: mark.y + mark.height + 26px;
+        width: parent.width;
+        horizontal-alignment: center;
+        font-size: 17px;
+        color: #A3A19C;
+        opacity: (i == 0) == root.show-a ? 1 : 0;
+        animate opacity { duration: 300ms; easing: ease-in-out; }
+    }
+
+    // Taps do not reach the page while it loads.
+    TouchArea {}
+}
+
+// Pull to refresh: a dark disc comes down with the finger and the mark writes
+// itself in it; complete (the last dot in) means letting go reloads the page.
+export component PullToRefresh inherits Rectangle {
+    in property <float> pull;  // 0..1
+    property <length> u: 6px;
+    pure function part(start: float) -> float {
+        return clamp((root.pull - start) / 0.25, 0, 1);
+    }
+
+    // Placed by the user: centred, y = -48px + pull * 80px.
+    width: 48px;
+    height: 48px;
+    border-radius: self.width / 2;
+    background: #121314;
+    border-width: 1px;
+    border-color: #2A2C31;
+
+    Rectangle {
+        width: 5 * root.u;
+        height: 3 * root.u;
+        // dot
+        Rectangle {
+            x: 0; y: 0;
+            width: root.u; height: root.u;
+            border-radius: root.u / 2;
+            background: #FF4A1C;
+            opacity: root.part(0);
+        }
+        // dash
+        Rectangle {
+            x: 2 * root.u; y: 0;
+            width: max(root.u, 3 * root.u * root.part(0.25)); height: root.u;
+            border-radius: root.u / 2;
+            background: #F5F3EE;
+            opacity: root.pull > 0.25 ? 1 : 0;
+        }
+        // dash
+        Rectangle {
+            x: 0; y: 2 * root.u;
+            width: max(root.u, 3 * root.u * root.part(0.5)); height: root.u;
+            border-radius: root.u / 2;
+            background: #F5F3EE;
+            opacity: root.pull > 0.5 ? 1 : 0;
+        }
+        // dot
+        Rectangle {
+            x: 4 * root.u; y: 2 * root.u;
+            width: root.u; height: root.u;
+            border-radius: root.u / 2;
+            background: #FF4A1C;
+            opacity: root.part(0.75);
+        }
+    }
+}
