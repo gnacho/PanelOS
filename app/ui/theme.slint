@@ -9,6 +9,15 @@ export global Act {
     callback act(string, string);
 }
 
+// The animations' clock base. Slint turns a time into a 32-bit float before any arithmetic, and the
+// animation clock counts from the start: after days such a float only has steps of tens of
+// milliseconds and motion stutters. Animations therefore count from this base, which the app sets
+// anew whenever nothing animated is in view (the screensaver starts, the screen goes off), so the
+// number stays small and exact however long the panel runs.
+export global Clock {
+    in-out property <duration> base;
+}
+
 export global Theme {
     in-out property <bool> dark: true;
 

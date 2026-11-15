@@ -1,6 +1,6 @@
 // Small building blocks: icon text, round buttons, chips, toggles, sliders.
 
-import { Theme } from "theme.slint";
+import { Theme, Clock } from "theme.slint";
 
 export component Icon inherits Text {
     font-family: "Material Design Icons";
@@ -99,7 +99,7 @@ export component Marquee {
     property <length> gap: 48px;
     property <float> v: root.speed <= 1 ? 14 : root.speed <= 2 ? 22 : root.speed <= 3 ? 32 : root.speed <= 4 ? 46 : 64;   // px / s
     property <float> period: (self.tw + self.gap) / 1px / self.v + 1.5;                                                  // s
-    property <float> t: Math.mod(animation-tick() / 1ms / 1000, self.period);
+    property <float> t: Math.mod((animation-tick() - Clock.base) / 1ms / 1000, self.period);
     property <length> off: max(0, self.t - 1.5) * self.v * 1px;
     probe := Text { visible: false; text: root.text; font-size: root.font-size; font-weight: root.font-weight; }
     Rectangle {

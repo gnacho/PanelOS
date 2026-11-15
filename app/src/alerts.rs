@@ -113,13 +113,18 @@ pub fn show(ui: &AppWindow, v: &Value) {
             let key = cat_key(&cat).to_string();
             // the integration's own texts, else the panel's pack for the category (picked once per state)
             let pick = |own: String, place: &str| if own.is_empty() { texts::fresh(&format!("status.{key}.{place}")) } else { own };
-            let tint = v["colour"].as_str().and_then(crate::pages::parse_color).unwrap_or(Color::from_rgb_u8(0xFF, 0x4A, 0x1C));
+            // the screen's own colour, else a deep teal (white text never stands on Signal)
+            let tint = v["colour"].as_str().and_then(crate::pages::parse_color).unwrap_or(Color::from_rgb_u8(0x0b, 0x72, 0x85));
             let button = v["button"].as_bool().unwrap_or(false);
             let countdown = v["countdown"].as_f64().filter(|m| *m > 0.0).map(|m| (m * 60.0) as u64);
             arrived = with_state(|s| {
                 if let Some(old) = s.statuses.iter_mut().find(|x| x.id == id) {
                     // sent again (a reconnect): the same screen, the integration's changes only
                     old.tint = tint;
+                    // the countdown it brings is what is left now: counted from now
+                    if countdown.is_some() {
+                        old.started = Instant::now();
+                    }
                     old.countdown = countdown;
                     if !button {
                         old.button.clear();

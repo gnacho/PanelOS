@@ -37,6 +37,9 @@ fn grid(scene: usize, view: &str) -> Color {
     TABLE.with(|t| colour(t[SCENES[scene]][view][0].as_str().unwrap_or("#ff2bd6")))
 }
 
+/// The scene clock's step (seconds): a whole number of the scenes' 40 s loops.
+const SCENE_WRAP_S: f32 = 1200.0;
+
 /// Updates the scenes that are in use (once a second).
 pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     // any page on the list with a synthwave look (a kind may be there more than once)
@@ -88,10 +91,22 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
         ui.set_home_fl_grid(g);
     }
     ui.set_home_fl_star(mix);
+    // The scene clock moves its base on by 20 minutes (30 times the 40 s loop of the floor, the
+    // palms and the star) and the car on the road with it, in the same step: nothing jumps.
+    let cars = ui.get_home_fl_cars();
+    let st = ui.get_scene_t();
+    if st > SCENE_WRAP_S {
+        // (several steps at once when no scene ran for a long time)
+        let shift = (st / SCENE_WRAP_S).floor() * SCENE_WRAP_S;
+        ui.set_scene_base(ui.get_scene_base() + shift as i64 * 1000);
+        if let Some(mut c) = slint::Model::row_data(&cars, 0) {
+            c.born -= shift;
+            slint::Model::set_row_data(&cars, 0, c);
+        }
+    }
     // One car at a time: a new one when the last is gone (random line, never
     // the same one twice, random kind and vivid colour, 10–30 s to the horizon).
     let now = ui.get_scene_t();
-    let cars = ui.get_home_fl_cars();
     let last = slint::Model::row_data(&cars, 0);
     if last.as_ref().is_none_or(|c| now - c.born > c.dur + 0.5) {
         let old_line = last.map(|c| c.line).unwrap_or(9.0);

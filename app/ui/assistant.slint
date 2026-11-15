@@ -2,7 +2,7 @@
 // weather, forecast, media, quick tiles), the full-screen conversation,
 // and the layers Home Assistant can open (weather, media, message).
 
-import { Theme } from "theme.slint";
+import { Theme, Clock } from "theme.slint";
 import { Icon, RoundButton, BigSlider, MarkButton } from "widgets.slint";
 import { TileData, RowData, RowView } from "rows.slint";
 
@@ -289,7 +289,7 @@ export component AssistFull inherits Rectangle {
     // Activity bars: moving while listening / thinking, still with the answer.
     for i in 5: Rectangle {
         property <length> h: root.state <= 2
-            ? 14px + 34px * abs(sin((animation-tick() / 1ms) * (root.state == 1 ? 0.40deg : 0.25deg) + i * 55deg))
+            ? 14px + 34px * abs(sin(((animation-tick() - Clock.base) / 1ms) * (root.state == 1 ? 0.40deg : 0.25deg) + i * 55deg))
             : 14px;
         x: root.width / 2 - 64px + i * 26px;
         y: 64px - self.h / 2;

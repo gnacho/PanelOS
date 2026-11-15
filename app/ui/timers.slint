@@ -9,7 +9,7 @@
 // Images are drawn at their exact size (the renderer scales without filtering). Coloured shapes are a
 // white mask (colorize = the colour) with a grey + alpha shading layer on top.
 import { Theme, Act } from "theme.slint";
-import { Icon } from "widgets.slint";
+import { Icon, GlowText } from "widgets.slint";
 import { FlapCard } from "panels.slint";
 import { Keyboard } from "overlays.slint";
 
@@ -547,7 +547,9 @@ export component TimersPage inherits Rectangle {
         if root.n > 0: TouchArea { clicked => { Act.act("timers.quick-close", ""); } }
         Rectangle { x: (root.width - 80px) / 2; y: root.top + 18px; width: 80px; height: 80px; border-radius: 40px; background: root.synth-quick ? #0000008c : TFg.c.with-alpha(0.05);
             Icon { width: parent.width; height: parent.height; text: "\u{F13AB}"; font-size: 42px; color: root.synth-quick ? #ffffffcc : TFg.c.with-alpha(0.40); } }
-        Text { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; color: root.synth-quick ? #ffffffd9 : TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
+        if !root.synth-quick: Text { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
+        // over the bright sun: white with a firm rim
+        if root.synth-quick: GlowText { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; font-weight: 600; color: #ffffff; k: 2; horizontal-alignment: center; }
         for m[i] in [1, 3, 5, 10, 15, 30]: Rectangle {
             x: 60px + Math.mod(i, 3) * 124px; y: root.top + 150px + Math.floor(i / 3) * 62px; width: 112px; height: 54px; border-radius: 27px;
             background: root.synth-quick ? (qs-touch.pressed ? #000000b3 : #0000008c) : (qs-touch.pressed ? TFg.c.with-alpha(0.2) : TFg.c.with-alpha(0.10));

@@ -148,7 +148,8 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     let mut list = tiles(&s.states, &entities, crate::accent(s));
     // the mixing desk: a tiny label tape under each fader (the integration's tape text, else the
     // name's last word), coloured by kind
-    if crate::page_looks(ui, "quick").contains(&1) && crate::draw::AVAILABLE {
+    let looks = crate::page_looks(ui, "quick");
+    if looks.contains(&1) || looks.contains(&2) {
         let own = crate::page_option(s, "quick", "tapes").and_then(|v| v.as_array().cloned()).unwrap_or_default();
         for (i, (t, id)) in list.iter_mut().zip(&entities).enumerate() {
             let text = own
@@ -162,9 +163,13 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
                 "media_player" => crate::draw::Tint::Red,
                 _ => crate::draw::Tint::Blue,
             };
-            let seed = crate::draw::seed(id);
-            t.tape = crate::draw::get(crate::draw::Job::DeskTape { text, tint, seed });
-            t.has_tape = t.tape.size().width > 0;
+            // the flight deck's plates show the short text too
+            t.label = text.clone().into();
+            if looks.contains(&1) && crate::draw::AVAILABLE {
+                let seed = crate::draw::seed(id);
+                t.tape = crate::draw::get(crate::draw::Job::DeskTape { text, tint, seed });
+                t.has_tape = t.tape.size().width > 0;
+            }
         }
     }
     let mood = mood(&list);

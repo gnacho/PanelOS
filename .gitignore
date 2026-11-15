@@ -13,6 +13,9 @@ dl/
 # Rust
 target/
 
+# Python
+__pycache__/
+
 # Secrets and local config
 .env
 *.secret

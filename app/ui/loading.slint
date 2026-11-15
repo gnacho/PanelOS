@@ -1,3 +1,4 @@
+import { Clock } from "theme.slint";
 // Shown over the web view while a dashboard loads: the PanelOS mark writes
 // itself in Morse (P = dot dash dash dot) over the calm Morse pattern, again
 // and again, until the page is ready; then it fades and the dashboard shows.
@@ -11,7 +12,7 @@
 export component MorseWrite inherits Rectangle {
     in property <length> u: 16px;
     in property <bool> dark: true;
-    property <float> ms: mod(animation-tick() / 1ms, 2400);
+    property <float> ms: mod((animation-tick() - Clock.base) / 1ms, 2400);
     pure function ease(t: float) -> float {
         return 1 - Math.pow(1 - clamp(t, 0, 1), 3);
     }

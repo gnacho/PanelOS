@@ -1,7 +1,7 @@
 // Full-screen layers: entity details ("more info"), settings, screensaver,
 // pairing (QR login).
 
-import { Theme } from "theme.slint";
+import { Theme, Clock } from "theme.slint";
 import { Icon, LogoMark, ThemeSwitch, RoundButton, TextButton, Chip, ChipRow, Toggle, BigSlider, MorseMark } from "widgets.slint";
 import { MorseWrite } from "loading.slint";
 
@@ -2076,7 +2076,7 @@ export component OfflineScreen inherits Rectangle {
     function pick-text(list: [string], stride: int) -> string {
         list[Math.mod(floor(root.variant / stride), list.length)]
     }
-    property <float> now: animation-tick() / 1ms;
+    property <float> now: (animation-tick() - Clock.base) / 1ms;
     property <float> left-ms: root.retry-total > 0 ? max(0, root.retry-start + root.retry-total - root.now) : 0;
     property <float> wait: root.retry-total > 0 ? root.left-ms / root.retry-total : 0;
     property <int> seconds: ceil(root.left-ms / 1000);

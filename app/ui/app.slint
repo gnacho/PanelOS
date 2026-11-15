@@ -12,7 +12,7 @@ import "./fonts/DejaVuSansMono.ttf";
 import "./fonts/DejaVuSansMono-Bold.ttf";
 import "./fonts/Caveat[wght].ttf";
 
-import { Theme, Act } from "theme.slint";
+import { Theme, Act, Clock } from "theme.slint";
 import { PairingScreen, FoundHa, SetupScreen, WifiNet, WifiScreen, WifiPasswordScreen, HiddenNetworkScreen, HaPickScreen, ConnectingScreen, OfflineScreen, Phrases } from "overlays.slint";
 import { Person, TimerInfo, ClockData, ClockFace, StatusBar, PageDots, People, WeatherHour, WeatherDay, WeatherData, WeatherPanel } from "panels.slint";
 import { HomeItem, HomeEvent, HomeMusic, HomeGrid } from "home.slint";
@@ -119,7 +119,7 @@ export component AppWindow inherits Window {
     in property <bool> cam-can-talk;
     in property <float> cam-hold;
     // breathing ring round the visitor's picture (only computed while it shows)
-    in property <float> cam-pulse: 0.5 + 0.5 * Math.sin(animation-tick() / 1600ms * 360deg);
+    in property <float> cam-pulse: 0.5 + 0.5 * Math.sin((animation-tick() - Clock.base) / 1600ms * 360deg);
     in property <bool> cam-replies;
     in property <[string]> cam-reply-list;
     in property <int> info-look;
@@ -138,7 +138,7 @@ export component AppWindow inherits Window {
     in property <string> info-crit-source;
     in property <float> info-crit-hold;
     // breathing (2 s), only computed while a critical alert shows
-    in property <float> info-crit-pulse: 0.5 + 0.5 * Math.sin(animation-tick() / 2000ms * 360deg);
+    in property <float> info-crit-pulse: 0.5 + 0.5 * Math.sin((animation-tick() - Clock.base) / 2000ms * 360deg);
     in property <bool> info-settings;
     in property <string> info-clock;
     in property <string> info-pager-empty;
@@ -198,7 +198,9 @@ export component AppWindow inherits Window {
     in property <bool> strip-has-picto;
     in property <color> strip-tint;
     in property <bool> strip-critical;
-    in property <float> strip-pulse: 0.5 + 0.5 * Math.sin(animation-tick() / 2000ms * 360deg);
+    in property <float> strip-pulse: 0.5 + 0.5 * Math.sin((animation-tick() - Clock.base) / 2000ms * 360deg);
+    // nothing animated in view (screensaver, screen off): the animations' clock starts again
+    public function reset-clock() { Clock.base = animation-tick(); }
     in property <int> cal-view;
     in property <int> cal-look;
     in property <[CalBoard]> cal-board-rows;
@@ -292,7 +294,10 @@ export component AppWindow inherits Window {
     in property <color> home-fl-grid: #ff2bd6;
     in property <float> home-fl-star;
     // the synthwave scenes' clock and the palms' sway run in the UI
-    out property <float> scene-t: animation-tick() / 1s;
+    // the synthwave scenes' clock in seconds, from a base the app moves on every 20 minutes (a whole
+    // number of the scenes' loops), so the number stays small and exact however long the panel runs
+    in-out property <duration> scene-base;
+    out property <float> scene-t: (animation-tick() - root.scene-base) / 1s;
     property <[image]> palms-l: [@image-url("timers/sw/palm-l-00.png"), @image-url("timers/sw/palm-l-01.png"), @image-url("timers/sw/palm-l-02.png"), @image-url("timers/sw/palm-l-03.png"), @image-url("timers/sw/palm-l-04.png"), @image-url("timers/sw/palm-l-05.png"), @image-url("timers/sw/palm-l-06.png"), @image-url("timers/sw/palm-l-07.png"), @image-url("timers/sw/palm-l-08.png"), @image-url("timers/sw/palm-l-09.png"), @image-url("timers/sw/palm-l-10.png"), @image-url("timers/sw/palm-l-11.png"), @image-url("timers/sw/palm-l-12.png"), @image-url("timers/sw/palm-l-13.png"), @image-url("timers/sw/palm-l-14.png"), @image-url("timers/sw/palm-l-15.png")];
     property <[image]> palms-r: [@image-url("timers/sw/palm-r-00.png"), @image-url("timers/sw/palm-r-01.png"), @image-url("timers/sw/palm-r-02.png"), @image-url("timers/sw/palm-r-03.png"), @image-url("timers/sw/palm-r-04.png"), @image-url("timers/sw/palm-r-05.png"), @image-url("timers/sw/palm-r-06.png"), @image-url("timers/sw/palm-r-07.png"), @image-url("timers/sw/palm-r-08.png"), @image-url("timers/sw/palm-r-09.png"), @image-url("timers/sw/palm-r-10.png"), @image-url("timers/sw/palm-r-11.png"), @image-url("timers/sw/palm-r-12.png"), @image-url("timers/sw/palm-r-13.png"), @image-url("timers/sw/palm-r-14.png"), @image-url("timers/sw/palm-r-15.png")];
     // a palm frame by the clock: 16 frames swaying there and back in 4 s
@@ -631,6 +636,8 @@ export component AppWindow inherits Window {
                 width: root.width;
                 height: root.height;
                 background: Theme.background;
+                // a page's drawing stays on its page (the half cassette's reel slides past its edge)
+                clip: true;
 
                 // several weather pages may each have their own background and widgets
                 property <int> home-theme: slot.theme >= 0 ? slot.theme : root.weather.theme;
@@ -775,7 +782,7 @@ export component AppWindow inherits Window {
                     edit-label: root.timers-edit-label; edit-sound: root.timers-edit-sound; edit-ha-sound: root.timers-edit-ha-sound; edit-keyboard: root.timers-edit-keyboard; kb-layer: root.timers-kb-layer;
                     edit-info: root.timers-edit-info; edit-tint: root.timers-edit-tint;
                 }
-                if slot.kind == "thermostat" && root.thermo-look == 3: FastLane {
+                if slot.kind == "thermostat" && slot.variant == 3: FastLane {
                     scene: root.home-fl-scene; back-a: root.home-fl-back-a; floor-a: root.home-fl-floor-a; back-b: root.home-fl-back-b; floor-b: root.home-fl-floor-b;
                     mix: root.home-fl-mix; grid: root.home-fl-grid; star-k: root.home-fl-star; t: root.home-fl-t; cars: root.home-fl-cars;
                     palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r;
@@ -1006,7 +1013,7 @@ export component AppWindow inherits Window {
         theme-changed(m) => { root.theme-mode-changed(m); }
     }
     if root.connecting: ConnectingScreen {
-        morse-t: animation-tick() / 1s;
+        morse-t: (animation-tick() - Clock.base) / 1s;
         ha-url: root.pair-ha-url;
         slow: root.connect-slow;
         progress: root.connect-progress;
@@ -1016,7 +1023,7 @@ export component AppWindow inherits Window {
         theme-changed(m) => { root.theme-mode-changed(m); }
     }
     if root.offline-cause > 0: OfflineScreen {
-        morse-t: animation-tick() / 1s;
+        morse-t: (animation-tick() - Clock.base) / 1s;
         cause: root.offline-cause;
         retry-start: root.offline-retry-start;
         retry-total: root.offline-retry-total;

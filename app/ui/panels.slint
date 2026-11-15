@@ -1,7 +1,7 @@
 // Assistant mode panels (swipeable pages), the clock faces (screensaver
 // first, also usable as a panel) and the shared frame.
 
-import { Theme, Act } from "theme.slint";
+import { Theme, Act, Clock } from "theme.slint";
 import { Icon, GlowText } from "widgets.slint";
 import { PhotoSky } from "photo_sky.slint";
 
@@ -631,7 +631,7 @@ export component ClockFace inherits Rectangle {
     // 6: smaller clock bouncing slowly around the screen
     property <length> wander-w: 260px;
     property <length> wander-h: 150px;
-    property <float> wander-t: animation-tick() / 1ms / 1000;
+    property <float> wander-t: (animation-tick() - Clock.base) / 1ms / 1000;
     // Triangle wave: position along one axis bouncing between 0 and range.
     function bounce(dist: float, range: float) -> float {
         range - abs(Math.mod(dist, 2 * range) - range)
@@ -704,7 +704,7 @@ export struct WeatherData {
 // Animated sky for the mood variant (cheap shapes, driven by the clock).
 component Sky inherits Rectangle {
     in property <int> mood;
-    property <float> t: animation-tick() / 1ms / 1000;
+    property <float> t: (animation-tick() - Clock.base) / 1ms / 1000;
     property <bool> night: root.mood == 7;
     // Background per condition.
     background: root.mood == 0 ? @linear-gradient(180deg, #2f7fd6 0%, #8cc6ff 100%)

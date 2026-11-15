@@ -653,6 +653,26 @@ fn refresh_pages(ui: &AppWindow) {
             ui.set_music_style(v);
         }
     }
+    // the turntable's wooden deck and grooves, the cassette's shell and hubs (full or half), once
+    // and again when the wood or the cassette changes
+    let looks = page_looks(ui, "music");
+    let wood = with_state(|s| page_option(s, "music", "wood").and_then(|v| v.as_str().map(str::to_string))).unwrap_or_else(|| "walnut".into());
+    thread_local!(static MUSIC_ART: RefCell<String> = const { RefCell::new(String::new()) });
+    let half = looks.contains(&4) && !looks.contains(&3);
+    let key = format!("{wood}|{half}|{}|{}", looks.contains(&2), looks.iter().any(|l| *l == 3 || *l == 4));
+    if MUSIC_ART.with(|m| m.replace(key.clone())) != key {
+        if looks.contains(&2) {
+            let deck = quick::picture(&format!("music/tt/deck-{wood}.png"));
+            ui.set_music_tt_deck(if deck.size().width > 0 { deck } else { quick::picture("music/tt/deck.png") });
+            ui.set_music_tt_grooves(quick::picture("music/tt/grooves.png"));
+        }
+        if looks.iter().any(|l| *l == 3 || *l == 4) {
+            let size = if half { "half" } else { "full" };
+            ui.set_music_cs_back(quick::picture(&format!("music/cs/{size}-back.png")));
+            ui.set_music_cs_front(quick::picture(&format!("music/cs/{size}-front.png")));
+            ui.set_music_cs_hub(quick::picture(&format!("music/cs/{size}-hub.png")));
+        }
+    }
     with_state(|s| {
         // The timers page's functions (alarm, timer, stopwatch) and its colourful timers.
         if let Some(list) = page_option(s, "timers", "functions").and_then(|v| v.as_array().cloned()) {
@@ -1723,6 +1743,8 @@ fn saver_window(s: &UiState, leaving: bool) -> bool {
 fn start_screensaver(ui: &AppWindow, s: &mut UiState) {
     s.screensaver = true;
     s.saver_auto = false;
+    // the pages are covered now: their animations' clock starts again unseen
+    ui.invoke_reset_clock();
     s.show_until = None;
     ui.set_set_view(0);
     ui.set_strip_on(false);

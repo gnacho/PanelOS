@@ -124,6 +124,11 @@ component Controls inherits HorizontalLayout {
 
 export component MusicPage inherits Rectangle {
     in property <int> style;               // 0 plain, 1 full cover, 2 turntable, 3 cassette, 4 half cassette
+    // turning parts: time since a base set every minute (the speeds make whole turns per minute, so the
+    // new base is not seen; a small number stays exact however long the panel runs)
+    property <duration> spin-base;
+    Timer { interval: 60s; running: true; triggered => { root.spin-base = animation-tick(); } }
+    property <float> spin-ms: (animation-tick() - root.spin-base) / 1ms;
     in property <string> title;
     in property <string> artist;
     in property <string> album;
@@ -257,7 +262,9 @@ export component MusicPage inherits Rectangle {
         Rectangle {
             x: (tt.cx - 70) * 1px; y: (tt.cy - 70) * 1px; width: 140px; height: 140px;   // ~1.3 × the label: its middle shows
             background: root.acc.mix(#000000, 0.5);
-            if root.has-art: Image { width: parent.width; height: parent.height; source: root.art; image-fit: cover; }
+            if root.has-art: Image { width: parent.width; height: parent.height; source: root.art; image-fit: cover;
+                rotation-angle: root.playing ? root.spin-ms * 0.198deg : 0deg;      // 33 rpm
+                rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
             if !root.has-art: Icon { text: root.kind-icon; font-size: 52px; color: #ffffffcc; }
         }
         Rectangle {
@@ -416,8 +423,10 @@ export component MusicPage inherits Rectangle {
         }
         Path { x: -((0.7 * cs.k) * 1px) / 2; y: -((0.7 * cs.k) * 1px) / 2; width: 480px + (0.7 * cs.k) * 1px; height: 480px + (0.7 * cs.k) * 1px; viewbox-width: 480; viewbox-height: 480; stroke: #4b3427; stroke-width: (0.7 * cs.k) * 1px; commands: cs.tape; }
         // hubs (on the panel: a sprite frame per rotation step)
-        Image { x: (cs.ox + cs.sx0 * cs.k) * 1px - self.width / 2; y: (cs.oy + cs.hub-y * cs.k) * 1px - self.height / 2; source: root.cs-hub; }
-        Image { x: (cs.ox + cs.tx0 * cs.k) * 1px - self.width / 2; y: (cs.oy + cs.hub-y * cs.k) * 1px - self.height / 2; source: root.cs-hub-r.width > 0 ? root.cs-hub-r : root.cs-hub; }
+        Image { x: (cs.ox + cs.sx0 * cs.k) * 1px - self.width / 2; y: (cs.oy + cs.hub-y * cs.k) * 1px - self.height / 2; source: root.cs-hub;
+            rotation-angle: root.playing ? -(root.spin-ms * 0.09deg) : 0deg; rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
+        Image { x: (cs.ox + cs.tx0 * cs.k) * 1px - self.width / 2; y: (cs.oy + cs.hub-y * cs.k) * 1px - self.height / 2; source: root.cs-hub-r.width > 0 ? root.cs-hub-r : root.cs-hub;
+            rotation-angle: root.playing ? -(root.spin-ms * 0.13deg) : 0deg; rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
         Image { x: (cs.ox - 14) * 1px; y: (cs.oy - 14) * 1px; source: root.cs-front; }
         // label: side letter, title, artist, stripes in the accent
         Rectangle {
