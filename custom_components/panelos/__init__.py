@@ -47,7 +47,9 @@ from .const import (
     CONF_PANEL_ID,
     DOMAIN,
     PLATFORMS,
+    SERVICE_CLEAR_CRITICAL_ALERT,
     SERVICE_CLEAR_STATUS,
+    SERVICE_CRITICAL_ALERT,
     SERVICE_SHOW_MESSAGE,
     SERVICE_SHOW_STATUS,
     SERVICE_SHOW_VIEW,
@@ -57,6 +59,7 @@ from .const import (
     VIEWS,
 )
 from .house import House
+from .sounds import async_register_views
 from .page import async_hide_page, async_setup_page, async_show_page
 from .panel import Panel, find_entry, links, panel_config
 
@@ -88,6 +91,7 @@ SHOW_MESSAGE_SCHEMA = vol.Schema(
 
 
 STATUS_ACTION_SCHEMA = vol.Schema({vol.Required("screen"): vol.All(cv.string, vol.Match(r"^[a-z0-9_]{1,40}$"))})
+CRITICAL_ACTION_SCHEMA = vol.Schema({vol.Required("alert"): vol.All(cv.string, vol.Match(r"^[a-z0-9_]{1,40}$"))})
 
 
 def _loaded_panel(hass: HomeAssistant, panel_id: str) -> Panel | None:
@@ -157,6 +161,7 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         vol.Optional("options"): dict,
         vol.Optional("states"): dict,
         vol.Optional("dashboard"): str,
+        vol.Optional("alarms"): list,
     }
 )
 @callback
@@ -211,6 +216,21 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     # Status screens whose trigger is an action (set on the PanelOS page).
     async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_STATUS, handle_status, schema=STATUS_ACTION_SCHEMA)
     async_register_admin_service(hass, DOMAIN, SERVICE_CLEAR_STATUS, handle_status, schema=STATUS_ACTION_SCHEMA)
+
+    async def handle_critical(call: ServiceCall) -> None:
+        try:
+            if call.service == SERVICE_CRITICAL_ALERT:
+                house.show_critical(call.data["alert"])
+            else:
+                house.clear_critical(call.data["alert"])
+        except vol.Invalid as err:
+            raise ServiceValidationError(str(err)) from err
+
+    # Own critical alerts started by an automation (set on the PanelOS page).
+    async_register_admin_service(hass, DOMAIN, SERVICE_CRITICAL_ALERT, handle_critical, schema=CRITICAL_ACTION_SCHEMA)
+    async_register_admin_service(hass, DOMAIN, SERVICE_CLEAR_CRITICAL_ALERT, handle_critical, schema=CRITICAL_ACTION_SCHEMA)
+    # Sounds uploaded on the page, fetched by the panels.
+    async_register_views(hass)
     return True
 
 

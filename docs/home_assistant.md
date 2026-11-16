@@ -12,6 +12,7 @@ Custom integration for panels running PanelOS (`custom_components/panelos` in th
   - `panelos.show_view`: `view` = `home`, `dashboard`, `weather`, `media` or `camera` (with `entity_id: camera.…`), `seconds` (default 30, 0 = until someone touches the screen), `panel_id` (empty = every panel).
   - `panelos.show_message`: `title` (up to 100 characters), `message` (up to 1000), `icon` (`mdi:…`), `seconds`, `chime`, `panel_id`.
   - `panelos.show_status` / `panelos.clear_status`: `screen` = the ID of a status screen whose trigger is "Automation" (as the PanelOS page shows it).
+  - `panelos.critical_alert` / `panelos.clear_critical_alert`: `alert` = the ID of an own critical alert whose trigger is "Automation".
   The view and message actions fail with an error if no panel is connected.
 
 The voice satellite stays on Home Assistant's built-in ESPHome integration: the panel is an ESPHome device for it, named after the panel with "Voice" added, and shown as connected via the panel's device. Without this integration the panel still works (native dashboard, voice through ESPHome), but its display and settings have no entities in Home Assistant.
@@ -112,10 +113,20 @@ The page uses the websocket commands `panelos/page/subscribe`, `panelos/page/opt
 
 Stored once for all panels (`.storage/panelos.house`), each item with the panels it appears on:
 
-- **Critical alerts**: binary sensors that count as critical (suggested by their device class: smoke, carbon monoxide, gas, water leak, problem, tamper, safety). While one is on, every panel it is shown on takes the whole screen in red with its sound, even in do not disturb, until the sensor clears; holding the button silences it when the alert allows holding.
+- **Critical alerts**: binary sensors that count as critical (suggested by their device class: smoke, carbon monoxide, gas, water leak, problem, tamper, safety), and own critical alerts with their own headline and line, started by a device (on or off, unlocked or locked, above or below a value) or by an automation (`panelos.critical_alert` / `panelos.clear_critical_alert`). While one is on, every panel it is shown on takes the whole screen in red with its sound (SOS by default; another one, or none), even in do not disturb, until it clears; holding the button silences it when the alert allows holding.
 - **Status screens**: a state at home shown on the panels in its own colour (a room in use, a call going on, the robot vacuum at work …), with the panel's own words for its kind unless it has its own headline and line. Triggers: an entity's state (on, off, above or below a number, equal to a text), "after" another status screen ends (with a countdown), or an automation (`panelos.show_status` / `panelos.clear_status`).
 
 A panel that connects gets what is active at that moment.
+
+## Sounds
+
+Timers, alarms and critical alerts each have a sound, picked on the PanelOS page with a button to listen: one of the panel's own sounds (Glass chimes, Marimba, Birds, Mechanical bell, Digital, Synth; for critical alerts also SOS and Warning tone), or one uploaded on the page (MP3, WAV, OGG or FLAC up to 10 MB). The defaults: a timers page rings with its look's own sound, alarms with Birds, critical alerts with SOS (the PanelOS start-up tone keying S O S). An uploaded sound is converted once with Home Assistant's ffmpeg (16-bit WAV, mono, at most a minute; it loops while it rings) and kept in `/config/panelos/sounds`; every panel that uses it fetches it (`GET /api/panelos/sound/<id>`, with its login) and keeps a copy, so it rings even when Home Assistant is away.
+
+The alarms live on the panel (they ring without Home Assistant); the timers page's settings on the PanelOS page show them and change them (`panelos/page/alarms`; the panel reports its list with `alarms` in `panelos/report`). An alarm can also ring with music from Music Assistant (its playlists and radio stations, or what a search finds; `panelos/page/ma`): the panel asks Music Assistant to play it on the panel's own media player, starting quietly and getting louder over half a minute; if no music comes within 12 seconds, the alarm's default sound rings instead. Music Assistant plays on the panel once the panel's media player is among its players.
+
+## The panel's media player
+
+The panel is a media player in Home Assistant (an entity of its voice device): Home Assistant, Music Assistant and automations can play on its speaker (`media_player.play_media`, volume, mute, pause, stop, announcements). Home Assistant's media proxy turns any source into a 48 kHz WAV stream, which the panel plays as it arrives. The volume set there is a share of the panel's own volume.
 
 ## Dashboard mode
 

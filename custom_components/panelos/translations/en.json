@@ -157,6 +157,26 @@
           "description": "The status screen's ID, as shown on the PanelOS page."
         }
       }
+    },
+    "critical_alert": {
+      "name": "Start critical alert",
+      "description": "Starts an own critical alert that is started by an action (set on the PanelOS page) on the panels it is shown on.",
+      "fields": {
+        "alert": {
+          "name": "Critical alert",
+          "description": "The critical alert's ID, as shown on the PanelOS page."
+        }
+      }
+    },
+    "clear_critical_alert": {
+      "name": "End critical alert",
+      "description": "Ends an own critical alert that was started by an action.",
+      "fields": {
+        "alert": {
+          "name": "Critical alert",
+          "description": "The critical alert's ID, as shown on the PanelOS page."
+        }
+      }
     }
   },
   "entity": {

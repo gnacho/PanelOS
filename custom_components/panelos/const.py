@@ -109,6 +109,16 @@ STATUS_CATS = (
 SAFETY_CLASSES = ("smoke", "carbon_monoxide", "gas", "moisture", "problem", "tamper", "safety")
 SERVICE_SHOW_STATUS = "show_status"
 SERVICE_CLEAR_STATUS = "clear_status"
+SERVICE_CRITICAL_ALERT = "critical_alert"
+SERVICE_CLEAR_CRITICAL_ALERT = "clear_critical_alert"
+
+# Sounds: the designed ones the panel has (ids as in the sound values "lib:<id>"), and the owner's
+# uploaded ones ("own:<id>"), converted to 16-bit PCM WAV for the panels and kept here.
+SOUND_LIB = ("chimes", "marimba", "birds", "bell", "digital", "synth", "sos", "warning")
+SOUND_DIR = "panelos/sounds"
+SOUND_UPLOAD_MAX = 10 * 1024 * 1024
+# the longest part of an uploaded sound kept (seconds; it loops while it rings)
+SOUND_KEEP_SECONDS = 60
 
 SERVICE_SHOW_VIEW = "show_view"
 SERVICE_SHOW_MESSAGE = "show_message"

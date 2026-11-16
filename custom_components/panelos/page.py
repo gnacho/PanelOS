@@ -37,6 +37,7 @@ import voluptuous as vol
 
 from homeassistant.components import frontend, panel_custom, websocket_api
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
@@ -80,7 +81,7 @@ from .const import (
     STATUS_CATS,
     TILE_DOMAINS,
 )
-from .house import HOUSE_SCHEMA, House
+from .house import HOUSE_SCHEMA, House, _tone
 from .panel import KEY_DOMAIN, Panel, find_entry, panel_caps, panel_config
 from .resources import async_resource_list
 
@@ -269,6 +270,8 @@ async def async_setup_page(hass: HomeAssistant) -> None:
         ws_page_house,
         ws_page_test,
         ws_page_touch_test,
+        ws_page_alarms,
+        ws_page_ma,
         ws_screen,
     ):
         websocket_api.async_register_command(hass, command)
@@ -335,6 +338,8 @@ def _page_data(hass: HomeAssistant) -> dict[str, Any]:
                 },
                 # The dashboard the web view shows and its card resources.
                 "web_dashboard": panel.dashboard if panel else "",
+                # the panel's alarms (they live on the panel), None until it reports them
+                "alarms": panel.alarms if panel else None,
                 "resources": list(panel.resources) if panel else [],
             }
         )
@@ -504,6 +509,85 @@ def ws_page_test(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         connection.send_error(msg["id"], "not_shown", str(err))
         return
     connection.send_result(msg["id"])
+
+
+_ALARM = vol.Schema(
+    {
+        vol.Required("h"): vol.All(vol.Coerce(int), vol.Range(min=0, max=23)),
+        vol.Required("m"): vol.All(vol.Coerce(int), vol.Range(min=0, max=59)),
+        vol.Optional("days", default=list): vol.All([bool], vol.Length(max=7)),
+        vol.Optional("label", default=""): vol.All(str, vol.Length(max=32)),
+        vol.Optional("on", default=True): bool,
+        vol.Optional("tone", default="auto"): vol.Any(vol.All(str, vol.Match(r"^ma:\S{1,110}$")), _tone),
+        vol.Optional("tone_name", default=""): vol.All(str, vol.Length(max=60)),
+    }
+)
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command(
+    {vol.Required("type"): "panelos/page/alarms", vol.Required("entry_id"): str, vol.Required("alarms"): vol.All([dict], vol.Length(max=20))}
+)
+@callback
+def ws_page_alarms(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Set a panel's alarms (the panel keeps them and rings them itself, then reports them back)."""
+    try:
+        alarms = [_ALARM(a) for a in msg["alarms"]]
+        panel = _panel(hass, msg["entry_id"])
+        if not panel.connected:
+            raise HomeAssistantError(f"The PanelOS panel '{panel.panel_id}' is not connected; its alarms are kept on it")
+    except vol.Invalid as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "not_connected", str(err))
+        return
+    for a in alarms:
+        a["days"] = (a["days"] + [False] * 7)[:7]
+    async_dispatcher_send(hass, SIGNAL_SHOW, panel_config(panel.entry)["panel_id"], {"type": "alarms", "list": alarms})
+    connection.send_result(msg["id"])
+
+
+_MA_KINDS = {"playlist": "Playlist", "radio": "Radio station", "album": "Album", "track": "Track", "artist": "Artist"}
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "panelos/page/ma", vol.Optional("query", default=""): vol.All(str, vol.Length(max=100))})
+@websocket_api.async_response
+async def ws_page_ma(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Music from Music Assistant for an alarm: its playlists and radio stations, or what a search finds."""
+    entries = [e for e in hass.config_entries.async_entries("music_assistant") if e.state is ConfigEntryState.LOADED]
+    if not entries or not hass.services.has_service("music_assistant", "search"):
+        connection.send_result(msg["id"], {"available": False, "items": []})
+        return
+    entry_id = entries[0].entry_id
+    query = msg["query"].strip()
+    found: list[dict[str, Any]] = []
+    try:
+        if query:
+            resp = await hass.services.async_call(
+                "music_assistant", "search",
+                {"config_entry_id": entry_id, "name": query, "limit": 6, "media_type": ["playlist", "radio", "album", "track", "artist"]},
+                blocking=True, return_response=True,
+            )
+            for group in ("playlists", "radio", "albums", "tracks", "artists"):
+                found.extend((resp or {}).get(group, []))
+        else:
+            for kind in ("playlist", "radio"):
+                resp = await hass.services.async_call(
+                    "music_assistant", "get_library", {"config_entry_id": entry_id, "media_type": kind, "limit": 25},
+                    blocking=True, return_response=True,
+                )
+                found.extend((resp or {}).get("items", []))
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "music_assistant", str(err))
+        return
+    items = [
+        {"uri": i["uri"], "name": str(i.get("name") or i["uri"])[:80], "kind": _MA_KINDS.get(i.get("media_type", ""), "Music")}
+        for i in found
+        if isinstance(i, dict) and isinstance(i.get("uri"), str) and len(i["uri"]) <= 110
+    ]
+    connection.send_result(msg["id"], {"available": True, "items": items[:60]})
 
 
 @websocket_api.require_admin

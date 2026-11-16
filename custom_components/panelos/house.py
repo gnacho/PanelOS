@@ -11,8 +11,13 @@ entities' states and sends show requests through the panels' subscriptions
   line empty: the panel picks its own texts for the kind; countdown = minutes
   left, 0 = none); off: ``{"type": "status_clear", "id"}``;
 * critical alert on: ``{"type": "critical", "id": entity_id, "title",
-  "message", "icon", "source", "hold"}``; off (the sensor cleared):
-  ``{"type": "critical_clear", "id"}``.
+  "message", "icon", "source", "hold", "sound", "tone"}``; off (the sensor
+  cleared): ``{"type": "critical_clear", "id"}``. Own critical alerts (started
+  by a device or by the ``panelos.critical_alert`` action) have the id
+  ``own:<id>`` and their own headline and line.
+
+Sounds are named ``auto`` (the place's default), ``lib:<id>`` (one the panel
+has) or ``own:<id>`` (uploaded, kept here as WAV, each panel keeps a copy).
 
 A panel that (re)connects gets what is active at that moment.
 
@@ -26,6 +31,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import logging
 import math
+import os
 import time
 from typing import Any
 
@@ -37,7 +43,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, HOUSE_STORE, SIGNAL_PAGE, SIGNAL_SHOW, STATUS_CATS
+from .const import DOMAIN, HOUSE_STORE, SIGNAL_CONFIG_UPDATED, SIGNAL_PAGE, SIGNAL_SHOW, SOUND_DIR, SOUND_LIB, STATUS_CATS
 from .panel import panel_config
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,6 +67,19 @@ _ID = vol.All(str, vol.Match(r"^[a-z0-9_]{1,40}$"))
 _COLOUR = vol.All(str, vol.Match(r"^#[0-9a-fA-F]{6}$"))
 _PICTO = vol.All(str, vol.Match(r"^(mdi:)?[a-z0-9-]{1,48}$"))
 _ENTRY_IDS = vol.All([vol.All(str, vol.Length(max=64))], vol.Length(max=64))
+_SOUND_ID = vol.All(str, vol.Match(r"^[a-z0-9_-]{1,64}$"))
+
+
+def _tone(value: Any) -> str:
+    """A sound value: auto, lib:<id> or own:<id>."""
+    value = vol.Coerce(str)(value)
+    if value == "auto" or (value.startswith("lib:") and value[4:] in SOUND_LIB):
+        return value
+    if value.startswith("own:"):
+        _SOUND_ID(value[4:])
+        return value
+    raise vol.Invalid(f"not a sound: {value}")
+
 
 CRITICAL_SCHEMA = vol.Schema(
     {
@@ -69,6 +88,40 @@ CRITICAL_SCHEMA = vol.Schema(
         vol.Optional("hold", default=True): bool,
         # entries (panels) this alert is not shown on
         vol.Optional("off", default=list): _ENTRY_IDS,
+        vol.Optional("sound", default=True): bool,
+        vol.Optional("tone", default="auto"): _tone,
+    }
+)
+
+OWN_TRIGGER_SCHEMA = vol.Schema(
+    {
+        vol.Required("kind"): vol.In(("entity", "service")),
+        vol.Optional("entity", default=""): vol.Any("", cv.entity_id),
+        vol.Optional("op", default="on"): vol.In(("on", "off", "above", "below")),
+        vol.Optional("value", default=""): vol.All(vol.Coerce(str), vol.Length(max=60)),
+    }
+)
+
+OWN_CRITICAL_SCHEMA = vol.Schema(
+    {
+        vol.Required("id"): _ID,
+        vol.Required("trigger"): OWN_TRIGGER_SCHEMA,
+        vol.Optional("headline", default=""): vol.All(str, vol.Length(max=30)),
+        vol.Optional("line", default=""): vol.All(str, vol.Length(max=60)),
+        vol.Optional("on", default=True): bool,
+        vol.Optional("hold", default=True): bool,
+        vol.Optional("off", default=list): _ENTRY_IDS,
+        vol.Optional("sound", default=True): bool,
+        vol.Optional("tone", default="auto"): _tone,
+    }
+)
+
+SOUND_SCHEMA = vol.Schema(
+    {
+        vol.Required("id"): _SOUND_ID,
+        vol.Required("name"): vol.All(str, vol.Length(min=1, max=40)),
+        vol.Optional("bytes", default=0): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Optional("secs", default=0): vol.All(vol.Coerce(float), vol.Range(min=0)),
     }
 )
 
@@ -115,14 +168,16 @@ def _unique_ids(items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
 HOUSE_SCHEMA = vol.Schema(
     {
         vol.Optional("critical", default=list): vol.All([CRITICAL_SCHEMA], vol.Length(max=64), lambda v: _unique_ids(v, "entity_id")),
+        vol.Optional("own_critical", default=list): vol.All([OWN_CRITICAL_SCHEMA], vol.Length(max=32), lambda v: _unique_ids(v, "id")),
         vol.Optional("dismissed", default=list): vol.All([cv.entity_id], vol.Length(max=200)),
         vol.Optional("status", default=list): vol.All([STATUS_SCHEMA], vol.Length(max=32), lambda v: _unique_ids(v, "id")),
+        vol.Optional("sounds", default=list): vol.All([SOUND_SCHEMA], vol.Length(max=50), lambda v: _unique_ids(v, "id")),
     }
 )
 
 
 def empty_house() -> dict[str, Any]:
-    return {"critical": [], "dismissed": [], "status": []}
+    return {"critical": [], "own_critical": [], "dismissed": [], "status": [], "sounds": []}
 
 
 def trigger_on(trigger: dict[str, Any], state: State | None) -> bool:
@@ -130,10 +185,12 @@ def trigger_on(trigger: dict[str, Any], state: State | None) -> bool:
     if state is None or state.state in ("unavailable", "unknown"):
         return False
     op = trigger.get("op", "on")
+    # a lock is "on" when unlocked
+    on, off = ("unlocked", "locked") if state.domain == "lock" else ("on", "off")
     if op == "on":
-        return state.state == "on"
+        return state.state == on
     if op == "off":
-        return state.state == "off"
+        return state.state == off
     if op == "equals":
         return state.state == str(trigger.get("value", ""))
     try:
@@ -161,6 +218,8 @@ class House:
         self._after: dict[str, float] = {}
         # status screens switched on by the action: id -> since
         self._manual: dict[str, float] = {}
+        # own critical alerts started by the action (panelos.critical_alert)
+        self._crit_manual: set[str] = set()
         # what is shown where: key ("critical:<entity>" / "status:<id>") -> (request, panel ids)
         self._shown: dict[str, tuple[dict[str, Any], set[str]]] = {}
         # tests running on a panel: (key, panel id) -> cancel
@@ -181,8 +240,13 @@ class House:
 
     async def async_save(self, data: dict[str, Any]) -> None:
         """Store new settings (already validated) and act on them at once."""
+        gone = {s["id"] for s in self.data.get("sounds", [])} - {s["id"] for s in data.get("sounds", [])}
         self.data = data
         await self._store.async_save(data)
+        # uploaded sounds taken off the list: their files go too
+        if gone:
+            await self.hass.async_add_executor_job(self._delete_files, gone)
+        self._crit_manual &= {c["id"] for c in data.get("own_critical", [])}
         known = {s["id"] for s in data["status"]}
         for table in (self._since, self._after, self._manual):
             for status_id in [i for i in table if i not in known]:
@@ -190,6 +254,36 @@ class House:
         self._track()
         self.evaluate()
         async_dispatcher_send(self.hass, SIGNAL_PAGE)
+        # every panel's settings carry the critical alerts' sounds it keeps a copy of
+        async_dispatcher_send(self.hass, SIGNAL_CONFIG_UPDATED, "")
+
+    # -- uploaded sounds ---------------------------------------------------------
+
+    def sound_path(self, sound_id: str) -> str:
+        return self.hass.config.path(SOUND_DIR, f"{sound_id}.wav")
+
+    def _delete_files(self, ids: set[str]) -> None:
+        for sound_id in ids:
+            try:
+                os.remove(self.sound_path(sound_id))
+            except OSError:
+                pass
+
+    async def async_add_sound(self, item: dict[str, Any]) -> None:
+        """An uploaded sound (its WAV is already in place) joins the list."""
+        self.data = HOUSE_SCHEMA({**self.data, "sounds": [*self.data.get("sounds", []), SOUND_SCHEMA(item)]})
+        await self._store.async_save(self.data)
+        async_dispatcher_send(self.hass, SIGNAL_PAGE)
+
+    def keep_sounds(self, entry_id: str) -> list[str]:
+        """The uploaded sounds of the critical alerts shown on a panel (it keeps copies, so they ring offline)."""
+        known = {s["id"] for s in self.data.get("sounds", [])}
+        tones = {
+            c["tone"]
+            for c in [*self.data.get("critical", []), *self.data.get("own_critical", [])]
+            if c.get("on") and c.get("sound") and entry_id not in c.get("off", [])
+        }
+        return sorted(t for t in tones if t.startswith("own:") and t[4:] in known)
 
     @callback
     def async_unload(self) -> None:
@@ -203,6 +297,7 @@ class House:
 
     def _entities(self) -> set[str]:
         ids = {c["entity_id"] for c in self.data["critical"]}
+        ids |= {c["trigger"]["entity"] for c in self.data.get("own_critical", []) if c["trigger"]["kind"] == "entity" and c["trigger"]["entity"]}
         ids |= {s["trigger"]["entity"] for s in self.data["status"] if s["trigger"]["kind"] == "entity" and s["trigger"]["entity"]}
         return ids
 
@@ -297,12 +392,20 @@ class House:
             state = self.hass.states.get(c["entity_id"])
             if c["on"] and state is not None and state.state == "on":
                 wanted[f"critical:{c['entity_id']}"] = self.critical_request(c)
+        for c in self.data.get("own_critical", []):
+            trigger = c["trigger"]
+            if trigger["kind"] == "entity":
+                holds = bool(trigger["entity"]) and trigger_on(trigger, self.hass.states.get(trigger["entity"]))
+            else:
+                holds = c["id"] in self._crit_manual
+            if c["on"] and holds:
+                wanted[f"critical:own:{c['id']}"] = self.own_critical_request(c)
         return wanted, wake
 
     def _targets(self, key: str, entries: dict[str, str]) -> set[str]:
         kind, item_id = key.split(":", 1)
         if kind == "critical":
-            item = next((c for c in self.data["critical"] if c["entity_id"] == item_id), None)
+            item = self._critical_item(item_id)
             return {pid for eid, pid in entries.items() if item and eid not in item["off"]}
         item = next((s for s in self.data["status"] if s["id"] == item_id), None)
         return {pid for eid, pid in entries.items() if item and eid in item["panels"]}
@@ -342,6 +445,12 @@ class House:
         if self.active() != before:
             async_dispatcher_send(self.hass, SIGNAL_PAGE)
 
+    def _critical_item(self, item_id: str) -> dict[str, Any] | None:
+        """A critical alert by its request id (an entity id, or own:<id>)."""
+        if item_id.startswith("own:"):
+            return next((c for c in self.data.get("own_critical", []) if c["id"] == item_id[4:]), None)
+        return next((c for c in self.data["critical"] if c["entity_id"] == item_id), None)
+
     def active(self) -> dict[str, list[str]]:
         """What is active now, for the sidebar page."""
         return {
@@ -371,6 +480,23 @@ class House:
             "icon": attrs.get("icon") or icon,
             "source": self._area_name(entity_id),
             "hold": item["hold"],
+            "sound": item.get("sound", True),
+            "tone": item.get("tone", "auto"),
+        }
+
+    def own_critical_request(self, item: dict[str, Any]) -> dict[str, Any]:
+        trigger = item["trigger"]
+        source = self._area_name(trigger["entity"]) if trigger["kind"] == "entity" and trigger["entity"] else ""
+        return {
+            "type": "critical",
+            "id": f"own:{item['id']}",
+            "title": item["headline"] or "Critical alert",
+            "message": item["line"],
+            "icon": "mdi:alert-octagon-outline",
+            "source": source,
+            "hold": item["hold"],
+            "sound": item["sound"],
+            "tone": item["tone"],
         }
 
     def _area_name(self, entity_id: str) -> str:
@@ -399,6 +525,22 @@ class House:
         self.evaluate()
 
     @callback
+    def show_critical(self, alert_id: str) -> None:
+        """panelos.critical_alert: an own critical alert started by an automation."""
+        item = next((c for c in self.data.get("own_critical", []) if c["id"] == alert_id), None)
+        if item is None:
+            raise vol.Invalid(f"No own critical alert {alert_id}")
+        if item["trigger"]["kind"] != "service":
+            raise vol.Invalid(f"The critical alert {alert_id} is not started by an action")
+        self._crit_manual.add(alert_id)
+        self.evaluate()
+
+    @callback
+    def clear_critical(self, alert_id: str) -> None:
+        self._crit_manual.discard(alert_id)
+        self.evaluate()
+
+    @callback
     def clear_status(self, status_id: str) -> None:
         self._manual.pop(status_id, None)
         self._after.pop(status_id, None)
@@ -408,8 +550,13 @@ class House:
     def test(self, panel_id: str, kind: str, item_id: str, seconds: int) -> None:
         """Shows a critical alert or a status screen on one panel for a while (the sidebar page's tests)."""
         if kind == "critical":
-            item = next((c for c in self.data["critical"] if c["entity_id"] == item_id), None)
-            request = self.critical_request(item) if item else None
+            item = self._critical_item(item_id)
+            if item is None:
+                request = None
+            elif item_id.startswith("own:"):
+                request = self.own_critical_request(item)
+            else:
+                request = self.critical_request(item)
         else:
             item = next((s for s in self.data["status"] if s["id"] == item_id), None)
             request = status_request(item, 0) if item else None

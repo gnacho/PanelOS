@@ -70,6 +70,7 @@ _TEXT_MAX = 255
 _OPTIONS_MAX = 200
 _CAP_MAX = 24
 _CAPS_MAX = 32
+_ALARMS_MAX = 20
 _MISSING = object()
 
 type Send = Callable[[dict[str, Any]], None]
@@ -110,8 +111,30 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "screensaver": screensaver_config(options.get(CONF_SCREENSAVER)),
         "dnd": dnd_config(options.get(CONF_DND)),
         "popups": popups_config(options.get(CONF_POPUPS)),
+        "keep_sounds": _keep_sounds(entry),
+        "media_player": _media_player(entry),
         **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
+
+
+def _media_player(entry: ConfigEntry) -> str:
+    """The panel's media player entity (on its voice device, connected via the panel's device)."""
+    panel = getattr(entry, "runtime_data", None)
+    if panel is None or not panel.device_id:
+        return ""
+    devices = dr.async_get(panel.hass).devices
+    voice = {d.id for d in devices.values() if d.via_device_id == panel.device_id} | {panel.device_id}
+    for e in er.async_get(panel.hass).entities.values():
+        if e.domain == "media_player" and e.device_id in voice and not e.disabled:
+            return e.entity_id
+    return ""
+
+
+def _keep_sounds(entry: ConfigEntry) -> list[str]:
+    """The uploaded sounds of the shared critical alerts this panel shows (it keeps a copy of each)."""
+    panel = getattr(entry, "runtime_data", None)
+    house = panel.hass.data.get(DOMAIN, {}).get("house") if panel else None
+    return house.keep_sounds(entry.entry_id) if house else []
 
 
 def shown_pages(pages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -169,6 +192,30 @@ def panel_caps(entry: ConfigEntry) -> list[str]:
     return list(caps) if isinstance(caps, list) else list(DEFAULT_CAPS)
 
 
+def _number(value: Any, low: int, high: int) -> int:
+    return max(low, min(high, int(value))) if isinstance(value, (int, float)) and not isinstance(value, bool) else low
+
+
+def _text(value: Any, most: int) -> str:
+    return value[:most] if isinstance(value, str) else ""
+
+
+def _alarm(value: dict[str, Any]) -> dict[str, Any]:
+    """One alarm as the panel reports it, with only the fields the page uses."""
+    days = value.get("days") if isinstance(value.get("days"), list) else []
+    days = [bool(d) for d in days[:7]]
+    return {
+        "h": _number(value.get("h"), 0, 23),
+        "m": _number(value.get("m"), 0, 59),
+        "days": days + [False] * (7 - len(days)),
+        "label": _text(value.get("label"), 32),
+        "sound": _number(value.get("sound"), 0, 5),
+        "on": bool(value.get("on", True)),
+        "tone": _text(value.get("tone"), 120),
+        "tone_name": _text(value.get("tone_name"), 60),
+    }
+
+
 def _scalar(value: Any) -> bool:
     return value is None or isinstance(value, (bool, int, float)) or (isinstance(value, str) and len(value) <= _TEXT_MAX)
 
@@ -219,6 +266,8 @@ class Panel:
         # The dashboard the web view shows (the panel reports it) and the
         # card resources it leaves out there (worked out by refresh_skip).
         self.web_dashboard = ""
+        # The panel's alarms as it reports them (they live on the panel), None until it does.
+        self.alarms: list[dict[str, Any]] | None = None
         self.skip: list[str] = []
         self.resources: list[dict[str, Any]] = []
         self._skip_task: asyncio.Task | None = None
@@ -471,6 +520,11 @@ class Panel:
                     changed.add(key)
         if isinstance(device := msg.get("device"), dict):
             self._device_reported(device)
+        if isinstance(alarms := msg.get("alarms"), list):
+            clean = [_alarm(a) for a in alarms[:_ALARMS_MAX] if isinstance(a, dict)]
+            if clean != self.alarms:
+                self.alarms = clean
+                changed.add("alarms")
         if isinstance(dashboard := msg.get("dashboard"), str) and dashboard != self.web_dashboard:
             self.web_dashboard = dashboard[:_TEXT_MAX]
             self.refresh_skip()

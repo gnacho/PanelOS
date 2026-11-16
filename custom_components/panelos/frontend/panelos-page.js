@@ -66,14 +66,17 @@ const LOOKS = {
 // Looks beyond the first that need pictures on the panel's screen.
 const LOOK_NEEDS_IMAGES = new Set(["weather", "music", "thermostat", "quick", "info"]);
 
-// Weather page backgrounds: options.theme 0..8, synthwave (8) with options.scene 0..3.
+// Custom page backgrounds: options.theme 0..9, synthwave (8) with options.scene 0..3; plain (9) is one
+// colour, the panel's own ground by its theme (Night #000000 dark, Paper #F5F3EE light), and needs no pictures.
 const BACKGROUNDS = [
   { name: "Photo · nature", theme: 0 }, { name: "Photo · countryside", theme: 1 }, { name: "Photo · city", theme: 2 },
   { name: "Drawn · countryside", theme: 3 }, { name: "Drawn · city", theme: 4 }, { name: "Drawn · neutral", theme: 5 },
   { name: "Drawn · big city", theme: 6 }, { name: "Line drawing", theme: 7 },
   { name: "Synthwave · mountains", theme: 8, scene: 0 }, { name: "Synthwave · city", theme: 8, scene: 1 },
   { name: "Synthwave · beach", theme: 8, scene: 2 }, { name: "Synthwave · space", theme: 8, scene: 3 },
+  { name: "Plain", theme: 9 },
 ];
+const PLAIN_THEME = 9;
 const SW_SCENES = ["Mountains", "City", "Beach", "Space"];
 // Turntable wood (music options.wood): the panel's deck pictures.
 const WOODS = [
@@ -88,6 +91,23 @@ const PAGER_FINISH = [
 ];
 const TIMER_FUNCTIONS = [["timer", "Timers"], ["alarm", "Alarms"], ["stopwatch", "Stopwatch"]];
 const VOICE_LOOKS = ["Plain", "Terminal", "Comic", "Oscilloscope"];
+
+// Sounds. Stored values: "auto" (the place's default), "lib:<id>" (a PanelOS sound, {STATIC}/sounds/<id>.mp3
+// here), "own:<id>" (uploaded once for every panel, house.sounds). The last two PanelOS sounds are for
+// critical alerts only.
+const SOUND_LIB = [
+  { id: "chimes", name: "Glass chimes" }, { id: "marimba", name: "Marimba" }, { id: "birds", name: "Birds" },
+  { id: "bell", name: "Mechanical bell" }, { id: "digital", name: "Digital" }, { id: "synth", name: "Synth" },
+  { id: "sos", name: "SOS", crit: true }, { id: "warning", name: "Warning tone", crit: true },
+];
+// The default sound of each timers look (index = the page's variant).
+const TIMER_LOOK_SOUND = ["marimba", "bell", "chimes", "synth", "digital"];
+const SOUND_UPLOAD_MAX = 10 * 1024 * 1024;
+const SOUND_TYPES = /\.(mp3|wav|ogg|oga|flac)$/i;
+const ALARMS_MAX = 20;
+const DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// What can start an own critical alert.
+const OWN_CRIT_DOMAINS = ["binary_sensor", "sensor", "lock", "input_boolean", "switch"];
 
 // Widgets of a weather page (options.items, a 4 x 4 grid), as the panel
 // draws them (app/ui/home.slint, HomeItem): {kind, col, row, w, h, style,
@@ -280,10 +300,15 @@ function synthBase(scene) {
   return s;
 }
 
-// A weather page background, by its BACKGROUNDS index.
-function bgArt(i) {
+// A Custom page background, by its BACKGROUNDS index. plain: "dark" / "light" = the panel's theme;
+// otherwise (automatic or not known) both grounds, split.
+function bgArt(i, plain = null) {
   const b = BACKGROUNDS[i] || BACKGROUNDS[1];
   if (b.theme === 8) return svgWrap(synthBase(b.scene));
+  if (b.theme === PLAIN_THEME) {
+    if (plain) return svgWrap("", plain === "dark" ? "#000000" : "#F5F3EE");
+    return svgWrap(`<path d="M0 0 H120 L0 120 Z" fill="#000000"/><path d="M120 0 V120 H0 Z" fill="#F5F3EE"/>`);
+  }
   switch (b.theme) {
     case 0: {
       const [g, d] = grad([[0, "#6fa8dc"], [1, "#d7e8f3"]]);
@@ -381,45 +406,22 @@ const ART = {
   ],
 };
 
-// The picture of a page's look (a weather page: its background).
-function lookArt(kind, variant, page) {
-  if (kind === "home") return svgNode(bgArt(bgIndex(page)));
+// The picture of a page's look (a Custom page: its background; plain = the panel's theme, see bgArt).
+function lookArt(kind, variant, page, plain = null) {
+  if (kind === "home") return svgNode(bgArt(bgIndex(page), plain));
   const list = ART[kind] || ART.info;
   return svgNode((list[variant] || list[0])());
 }
 
-// The BACKGROUNDS index of a weather page (options.theme / options.scene).
+// The BACKGROUNDS index of a Custom page (options.theme / options.scene).
 function bgIndex(page) {
   const o = (page && page.options) || {};
   const theme = Number.isInteger(o.theme) ? o.theme : 1;
   if (theme === 8) return 8 + Math.max(0, Math.min(3, Number.isInteger(o.scene) ? o.scene : 0));
+  if (theme === PLAIN_THEME) return BACKGROUNDS.findIndex((b) => b.theme === PLAIN_THEME);
   return Math.max(0, Math.min(7, theme));
 }
 
-// The panel's pattern (brand guide), drawn fine enough next to the logo: its
-// unit (the dot) is at most a quarter of the logo's mark unit. Logo 140 px
-// wide: mark unit 4.9 px, pattern unit 1.2 px. One tile repeats seamlessly:
-// a row is 576 units long and shifts by 112 per row, 36 rows.
-function patternUrl(dark) {
-  const dot = dark ? "#4A1A12" : "#F6C7B8";
-  const dash = dark ? "#1E1F23" : "#E4E1D9";
-  const sig = [["c", 0], ["r", 32], ["r", 96], ["c", 160], ["r", 224], ["r", 288], ["r", 352], ["c", 448], ["c", 480], ["c", 512]];
-  let body = "";
-  for (let row = 0; row < 36; row++) {
-    const y = row * 41.6;
-    for (let k = -1; k <= 1; k++) {
-      const x0 = ((-112 * row) % 576 + 576) % 576 + k * 576;
-      for (const [t, x] of sig) {
-        const xx = x0 + x;
-        if (xx > 600 || xx < -60) continue;
-        body += t === "c" ? `<circle cx="${xx + 8}" cy="${y + 8}" r="8" fill="${dot}"/>` : `<rect x="${xx}" y="${y}" width="48" height="16" rx="8" fill="${dash}"/>`;
-      }
-    }
-  }
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 1497.6" width="576" height="1497.6"><rect width="576" height="1497.6" fill="${dark ? "#121314" : "#F5F3EE"}"/>${body}</svg>`;
-  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
-}
-const PATTERN_SCALE = 1.2 / 16;
 
 // ---------------------------------------------------------------- style
 
@@ -478,11 +480,11 @@ button { cursor: pointer; }
 :host([size=narrow]) .app, :host([size=narrow]) .app.no-preview { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; grid-template-areas: "top" "main" "bnav"; }
 :host([size=narrow]) .preview-col { display: none; }
 
-.brand { height: 112px; flex: none; display: flex; align-items: flex-end; padding: 0 12px 10px; border-bottom: 1px solid var(--line); background-color: var(--ground); background-repeat: repeat; }
+.brand { height: 112px; flex: none; display: flex; align-items: flex-end; padding: 0 10px 8px; border-bottom: 1px solid var(--line); background-color: var(--ground); background-position: center; background-size: cover; }
 /* Brand guide: the logo sits in a calm panel of the pattern's ground, 2u clear on every side
-   (u = 4.9 px with a 140 px logo), corner 0.16 x the logo height, no border. */
-.brand-box { display: block; background: var(--ground); padding: 10px; border-radius: 3.25px; }
-.brand-box i { display: block; width: 140px; height: 20.3px; background: var(--logo) left center / contain no-repeat; }
+   (u = 5.9 px with a 168 px logo), corner 0.16 x the logo height, no border. */
+.brand-box { display: block; background: var(--ground); padding: 12px; border-radius: 4px; }
+.brand-box i { display: block; width: 168px; height: 24.4px; background: var(--logo) left center / contain no-repeat; }
 .nav-scroll { overflow-y: auto; flex: 1; display: flex; flex-direction: column; padding: 14px 12px; gap: 14px; min-height: 0; }
 .switcher { display: flex; align-items: center; gap: 12px; width: 100%; border: 1px solid var(--line); background: var(--surface); border-radius: 16px; padding: 8px 10px 8px 8px; text-align: left; min-width: 0; }
 .switcher:hover { border-color: var(--signal-line); }
@@ -551,7 +553,7 @@ button { cursor: pointer; }
 .card-head h2 { font-size: 19px; flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 .card-head .sub { color: var(--muted); font-size: 13.5px; font-family: "PanelOS Text", sans-serif; letter-spacing: 0; font-weight: 400; }
 .card-head .acts { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; max-width: 100%; }
-.pop { position: absolute; right: 0; top: 50px; z-index: 30; width: min(360px, calc(100vw - 32px)); background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font-size: 14px; line-height: 1.5; box-shadow: var(--shadow-lg); font-family: "PanelOS Text", sans-serif; letter-spacing: 0; font-weight: 400; text-align: left; }
+.pop { position: fixed; left: 0; top: 0; right: auto; z-index: 60; box-sizing: border-box; overflow-wrap: anywhere; width: min(360px, calc(100vw - 24px)); background: var(--raised); color: var(--text); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; font-size: 14px; line-height: 1.5; box-shadow: var(--shadow-lg); font-family: "PanelOS Text", sans-serif; letter-spacing: 0; font-weight: 400; text-align: left; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 60px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; }
 .row.first, .card-head + .row { border-top: 0; }
 .row > .lw { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 2px; }
@@ -561,7 +563,7 @@ button { cursor: pointer; }
 .row.click:hover > .lw > .label > span { text-decoration: underline; text-underline-offset: 3px; }
 .row.dim > .lw > .label, .row.dim > .lead, .row.dim > .stlead { opacity: .55; }
 .rinfo { position: relative; flex: none; }
-.rinfo .pop { left: 0; right: auto; top: 36px; width: min(320px, calc(100vw - 48px)); }
+/* bubbles are placed by _placePops() next to their button, in window coordinates, never sized by a parent */
 .row > .control { flex: 0 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; justify-content: flex-end; flex-wrap: wrap; }
 .row.stack { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 0 16px; }
 .row.stack > .control { justify-content: flex-start; width: 100%; }
@@ -737,6 +739,8 @@ button.chip:hover { border-color: var(--signal-line); }
 .hcanvas { position: relative; border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); touch-action: none; user-select: none; -webkit-user-select: none; flex: none; }
 .hcanvas > .art { position: absolute; inset: 0; }
 .hcanvas .gridline { position: absolute; pointer-events: none; border-color: rgba(255,255,255,.45); border-style: dashed; border-width: 0; }
+.hcanvas.light .gridline { border-color: rgba(16,17,20,.3); }
+.hcanvas.light .wbox { background: rgba(16,17,20,.74); }
 .wbox { position: absolute; z-index: 3; border-radius: 12px; background: rgba(16,17,20,.42); backdrop-filter: blur(3px); color: #F5F3EE; outline: 1.5px solid rgba(255,255,255,.55); outline-offset: -1px; cursor: grab; touch-action: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 4px; text-align: center; font-size: 12px; line-height: 1.2; overflow: hidden; }
 .wbox .mdi { --mdc-icon-size: 20px; }
 .wbox span { overflow-wrap: anywhere; }
@@ -872,6 +876,49 @@ button.chip:hover { border-color: var(--signal-line); }
 .res .name { flex: 1 1 160px; min-width: 0; font-size: 14px; overflow-wrap: anywhere; }
 .res .name small { color: var(--muted); margin-left: 8px; }
 .res .size { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
+/* sounds */
+.spin { animation: spin 1s linear infinite; }
+.sndctl { display: flex; align-items: center; gap: 8px; min-width: 0; justify-content: flex-end; }
+.sndpick { border: 1px solid transparent; background: var(--raised); border-radius: 12px; padding: 7px 8px 7px 14px; font-size: 14px; color: var(--text); display: inline-flex; align-items: center; gap: 8px; text-align: left; min-width: 0; max-width: 100%; }
+.sndpick:hover { border-color: var(--signal-line); }
+.sndpick span { overflow-wrap: anywhere; min-width: 0; }
+.sndpick small { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+.sndpick .mdi { color: var(--muted); --mdc-icon-size: 18px; }
+.playbtn { width: 36px; height: 36px; border-radius: 18px; border: 1px solid var(--line); background: var(--surface); color: var(--text); display: grid; place-items: center; flex: none; padding: 0; }
+.playbtn .mdi { --mdc-icon-size: 20px; }
+.playbtn:hover { border-color: var(--text); }
+.playbtn.on { background: var(--text); color: var(--ground); border-color: var(--text); }
+.sndlist { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.snd { display: flex; align-items: center; gap: 12px; padding: 7px 8px; border-radius: 12px; cursor: pointer; min-width: 0; }
+.snd:hover { background: var(--raised); }
+.playbtn.ma { display: inline-flex; align-items: center; justify-content: center; color: var(--muted); background: none; border: 0; pointer-events: none; }
+.snd.on { background: var(--signal-soft); }
+.snd .t { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; border: 0; background: none; padding: 0; text-align: left; color: var(--text); overflow-wrap: anywhere; }
+.snd .t span { font-size: 14.5px; max-width: 100%; }
+.snd .t small { color: var(--muted); font-size: 12.5px; max-width: 100%; }
+.snd .chk { color: var(--signal); display: grid; place-items: center; flex: none; }
+.snd.busy { cursor: default; }
+.snd.busy:hover { background: none; }
+.snd.busy .lead { width: 36px; height: 36px; border-radius: 18px; }
+.snd.busy .lead .mdi { color: var(--signal); }
+.snddel { border: 0; background: none; color: var(--muted); width: 36px; height: 36px; border-radius: 18px; display: grid; place-items: center; flex: none; padding: 0; }
+.snddel:hover { background: var(--sunken); color: var(--text); }
+.upl { align-self: flex-start; }
+/* alarms */
+.alarms { display: flex; flex-direction: column; padding-bottom: 6px; }
+.alarm { display: flex; align-items: center; gap: 14px; padding: 10px 0; border-top: 1px solid var(--line); min-width: 0; }
+.alarm:first-child { border-top: 0; }
+.alarm .open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; border: 0; background: none; padding: 0; text-align: left; color: var(--text); }
+.alarm .tm { font-family: "PanelOS Heading", "Space Grotesk", sans-serif; font-size: 26px; line-height: 1.1; font-variant-numeric: tabular-nums; flex: none; }
+.alarm .d { flex: 1; min-width: 0; display: flex; flex-direction: column; color: var(--muted); font-size: 13.5px; overflow-wrap: anywhere; }
+.alarm .d b { color: var(--text); font-weight: 500; font-size: 15px; }
+.alarm .open:hover .d b { text-decoration: underline; text-underline-offset: 3px; }
+.alarm.off .tm, .alarm.off .d { opacity: .5; }
+:host([size=narrow]) .alarm, :host([size=narrow]) .alarm .open { gap: 12px; }
+:host([size=narrow]) .alarm .tm { font-size: 22px; }
+.chips.days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+.chips.days .chip { justify-content: center; text-align: center; padding: 6px 2px; }
+.inp.alarm-time { width: 210px; max-width: 100%; font-size: 34px; text-align: center; font-family: "PanelOS Heading", "Space Grotesk", sans-serif; font-variant-numeric: tabular-nums; padding: 8px 12px; }
 .only-narrow { display: none; }
 :host([size=narrow]) .only-narrow { display: flex; }
 :host([size=narrow]) .only-wide { display: none !important; }
@@ -886,13 +933,20 @@ class PanelOSPage extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    // an open info bubble follows its button when something scrolls or the window changes size
+    const follow = () => { if (this._ui && (this._ui.info || this._ui.allInfo)) requestAnimationFrame(() => this._placePops()); };
+    this.shadowRoot.addEventListener("scroll", follow, true);
+    window.addEventListener("resize", follow);
     this._data = null;
     this._reg = null; // registries from the websocket API when hass has none
     this._path = "";
     this._routed = false;
     this._prefix = "/panelos";
     this._static = "/panelos_static";
-    this._ui = { info: null, more: {}, sheet: null, armed: null, sel: null, allMore: false };
+    this._ui = { info: null, more: {}, sheet: null, armed: null, sel: null, allMore: false, playing: null, uploading: null, delSounds: new Set() };
+    // sound previews: the one playing, and the uploaded sounds fetched so far (id -> object URL)
+    this._audio = null;
+    this._soundUrls = {};
     this._sync = {};
     this._pics = {};
     this._pic = { timer: null, busy: false, due: 0, allAt: 0 };
@@ -917,6 +971,18 @@ class PanelOSPage extends HTMLElement {
       else if (this._ui.sheet) this._closeSheet();
     };
     this._onFocusOut = () => setTimeout(() => this._flush(), 0);
+    // While a press lasts the page is not drawn again: a text field that saves when it loses focus to a
+    // button or another field would otherwise swap that button or field away under the pointer.
+    this._press = 0;
+    this._onPointerDown = () => {
+      this._press = Date.now();
+      setTimeout(() => this._flush(), 2100);
+    };
+    this._onPointerUp = () => {
+      if (!this._press) return;
+      this._press = 0;
+      setTimeout(() => this._flush(), 0);
+    };
   }
 
   // -- Home Assistant's properties -------------------------------------------
@@ -958,6 +1024,9 @@ class PanelOSPage extends HTMLElement {
     document.addEventListener("visibilitychange", this._onVisibility);
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("focusout", this._onFocusOut);
+    this.shadowRoot.addEventListener("pointerdown", this._onPointerDown, true);
+    window.addEventListener("pointerup", this._onPointerUp, true);
+    window.addEventListener("pointercancel", this._onPointerUp, true);
     window.addEventListener("keydown", this._onKey);
     this._resize.observe(this);
     if (this._hass && !this._unsub) this._start();
@@ -968,7 +1037,10 @@ class PanelOSPage extends HTMLElement {
   disconnectedCallback() {
     document.removeEventListener("visibilitychange", this._onVisibility);
     window.removeEventListener("keydown", this._onKey);
+    window.removeEventListener("pointerup", this._onPointerUp, true);
+    window.removeEventListener("pointercancel", this._onPointerUp, true);
     this._resize.disconnect();
+    this._stopSound();
     clearTimeout(this._pic.timer);
     this._pic.timer = null;
     if (this._unsub) {
@@ -1161,6 +1233,7 @@ class PanelOSPage extends HTMLElement {
     const now = this._route();
     this._ui.info = null;
     this._ui.sel = null;
+    if (before.view !== now.view || before.panel !== now.panel || before.page !== now.page) this._stopSound();
     if (this._ui.sheet && !this._ui.sheet.keep) this._ui.sheet = null;
     this._render();
     if (before.view !== now.view || before.panel !== now.panel || before.page !== now.page) {
@@ -1299,7 +1372,10 @@ class PanelOSPage extends HTMLElement {
 
   _house() {
     const hs = this._data?.house || {};
-    return { critical: clone(hs.critical || []), dismissed: clone(hs.dismissed || []), status: clone(hs.status || []) };
+    return {
+      critical: clone(hs.critical || []), own_critical: clone(hs.own_critical || []), dismissed: clone(hs.dismissed || []),
+      status: clone(hs.status || []), sounds: clone(hs.sounds || []),
+    };
   }
 
   async _saveHouse(mutate, { toast = null, undo = null } = {}) {
@@ -1307,7 +1383,8 @@ class PanelOSPage extends HTMLElement {
     mutate(house);
     const before = this._data.house;
     this._data.house = { ...house, active: before?.active || { critical: [], status: [] } };
-    this._render();
+    // a text field that saved on losing focus: drawn again once the next field or button has it
+    this._requestRender();
     const ids = this._panels.map((p) => p.entry_id);
     this._busy(ids);
     try {
@@ -1318,6 +1395,30 @@ class PanelOSPage extends HTMLElement {
     } catch (err) {
       this._data.house = before;
       this._settle(ids, false);
+      this._toast(err.message || String(err), null, true);
+      this._render();
+      return false;
+    }
+  }
+
+  // The panel's alarms live on the panel: the whole list goes to it, it reports them back.
+  async _saveAlarms(p, list, { toast = null, undo = null } = {}) {
+    const clean = list.slice(0, ALARMS_MAX).map((a) => ({
+      h: a.h, m: a.m, days: [...a.days], label: a.label || "", on: Boolean(a.on), tone: a.tone || "auto", tone_name: a.tone_name || "",
+    }));
+    const before = p.alarms;
+    p.alarms = clean;
+    this._render();
+    this._busy([p.entry_id]);
+    try {
+      await this._hass.callWS({ type: "panelos/page/alarms", entry_id: p.entry_id, alarms: clean });
+      this._settle([p.entry_id], true);
+      if (toast) this._toast(toast, undo);
+      this._schedulePicture(PICTURE_AFTER_CHANGE_MS);
+      return true;
+    } catch (err) {
+      p.alarms = before;
+      this._settle([p.entry_id], false);
       this._toast(err.message || String(err), null, true);
       this._render();
       return false;
@@ -1461,7 +1562,8 @@ class PanelOSPage extends HTMLElement {
 
   _interacting() {
     const a = this.shadowRoot.activeElement;
-    return this._dragging || Boolean(this._menu) || Boolean(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== "checkbox" && a.type !== "radio");
+    const pressing = Boolean(this._press) && Date.now() - this._press < 2000;
+    return this._dragging || pressing || Boolean(this._menu) || Boolean(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== "checkbox" && a.type !== "radio");
   }
 
   _requestRender() {
@@ -1479,11 +1581,16 @@ class PanelOSPage extends HTMLElement {
     }
   }
 
-  _toast(text, undo = null, error = false) {
+  // onExpire: runs when the toast goes away without Undo (a change that waits for its Undo first).
+  _toast(text, undo = null, error = false, { onExpire = null } = {}) {
+    let done = false;
     const t = h("div", { class: `toast${error ? " err" : ""}` }, icon(error ? "alert-circle-outline" : "check"), h("span", null, text),
-      undo ? h("button", { onclick: () => { undo(); t.remove(); } }, "Undo") : null);
+      undo ? h("button", { onclick: () => { if (done) return; done = true; undo(); t.remove(); } }, "Undo") : null);
     this._toastBox.append(t);
-    setTimeout(() => t.remove(), undo ? 6000 : error ? 6000 : 3200);
+    setTimeout(() => {
+      t.remove();
+      if (!done) { done = true; if (onExpire) onExpire(); }
+    }, undo ? 6000 : error ? 6000 : 3200);
   }
 
   _render() {
@@ -1567,6 +1674,8 @@ class PanelOSPage extends HTMLElement {
     if (main && scroll) main.scrollTop = scroll;
     const nsb = root.querySelector(".sheet-body");
     if (nsb && sheetScroll) nsb.scrollTop = sheetScroll;
+    // once the sheet is drawn and the scroll is back: the bubble is placed by its button in the same frame
+    if (this._ui.info || this._ui.allInfo) { this._placePops(); requestAnimationFrame(() => this._placePops()); }
     const sameView = this._looksPath === this._path;
     this._looksPath = this._path;
     root.querySelectorAll(".looks").forEach((e, i) => {
@@ -1579,13 +1688,45 @@ class PanelOSPage extends HTMLElement {
     this._afterRender();
   }
 
+  // the header's pattern texture (the brand kit's picture, filling the header)
   _brandBg() {
-    const dark = this.hasAttribute("dark");
-    if (this._patternDark !== dark) {
-      this._patternDark = dark;
-      this._patternCss = patternUrl(dark);
-    }
-    return { backgroundImage: this._patternCss, backgroundSize: `${(576 * PATTERN_SCALE).toFixed(2)}px ${(1497.6 * PATTERN_SCALE).toFixed(2)}px` };
+    return { backgroundImage: `url("${this._static}/pattern-${this.hasAttribute("dark") ? "dark" : "light"}.svg")` };
+  }
+
+  // Info bubbles: next to their button in window coordinates, whole inside the window (below the button,
+  // or above when there is no room; scrolling inside only when taller than the window).
+  _placePops() {
+    const root = this.shadowRoot;
+    if (!root) return;
+    root.querySelectorAll(".pop").forEach((p) => {
+      const b = p.previousElementSibling && p.previousElementSibling.classList.contains("info") ? p.previousElementSibling : null;
+      if (!b) return;
+      const br = b.getBoundingClientRect();
+      const vw = Math.min(window.innerWidth, document.documentElement.clientWidth || window.innerWidth);
+      const vh = window.innerHeight;
+      const m = 12;
+      const w = Math.min(360, vw - 2 * m);
+      Object.assign(p.style, { position: "fixed", width: `${w}px`, right: "auto", transform: "none", maxHeight: "none", overflowY: "visible" });
+      const left = Math.min(Math.max(m, br.left - 14), vw - m - w);
+      p.style.left = `${left}px`;
+      p.style.top = "0px";
+      const ph = p.getBoundingClientRect().height;
+      let top = br.bottom + 8;
+      if (top + ph > vh - m) {
+        if (br.top - 8 - ph >= m) top = br.top - 8 - ph;
+        else {
+          top = Math.max(m, Math.min(top, vh - m - ph));
+          if (ph > vh - 2 * m) { top = m; p.style.maxHeight = `${vh - 2 * m}px`; p.style.overflowY = "auto"; }
+        }
+      }
+      p.style.top = `${top}px`;
+      // a transformed ancestor (a sheet sliding in) makes "fixed" relative to it: correct by what was measured
+      const r = p.getBoundingClientRect();
+      if (Math.abs(r.left - left) > 0.5 || Math.abs(r.top - top) > 0.5) {
+        p.style.left = `${2 * left - r.left}px`;
+        p.style.top = `${2 * top - r.top}px`;
+      }
+    });
   }
 
   _toggleHaMenu() {
@@ -1791,6 +1932,187 @@ class PanelOSPage extends HTMLElement {
     return h("button", { class: `chip${on ? " on" : ""}`, onclick, "aria-pressed": on ? "true" : "false" }, on ? icon("check") : extra, h("span", null, label));
   }
 
+  // -- sounds ------------------------------------------------------------------------
+
+  // The uploaded sounds (house.sounds), without the ones waiting for their Undo after a delete.
+  _ownSounds() {
+    return (this._data?.house?.sounds || []).filter((s) => !this._ui.delSounds.has(s.id));
+  }
+
+  // A stored sound value as "lib:<id>" / "own:<id>"; "auto", unknown or deleted ones = the place's default.
+  _soundKey(value, def) {
+    const v = typeof value === "string" ? value : "";
+    if (v.startsWith("ma:") && v.length > 3) return v;
+    if (v.startsWith("lib:") && SOUND_LIB.some((s) => `lib:${s.id}` === v)) return v;
+    if (v.startsWith("own:") && this._ownSounds().some((s) => `own:${s.id}` === v)) return v;
+    return `lib:${def}`;
+  }
+
+  // the name of a Music Assistant item: from a search, else from an alarm that has it
+  _maName(k) {
+    const known = (this._ui.maNames || {})[k];
+    if (known) return known;
+    for (const p of this._panels || []) for (const a of p.alarms || []) if (a.tone === k && a.tone_name) return a.tone_name;
+    return "Music";
+  }
+
+  _soundInfo(value, def) {
+    const k = this._soundKey(value, def);
+    if (k.startsWith("ma:")) return { k, own: false, ma: true, id: k.slice(3), name: this._maName(k), sub: "Music Assistant" };
+    const id = k.slice(4);
+    if (k.startsWith("own:")) {
+      const s = this._ownSounds().find((x) => x.id === id);
+      return { k, own: true, id, name: s.name, sub: this._soundSize(s) };
+    }
+    const s = SOUND_LIB.find((x) => x.id === id) || SOUND_LIB[2];
+    return { k, own: false, id: s.id, name: s.name, sub: null };
+  }
+
+  _soundSize(s) {
+    const size = `${Math.max(0.1, (s.bytes || 0) / 1048576).toFixed(1)} MB`;
+    const secs = Number(s.secs) || 0;
+    return secs ? `${size} · ${secs < 10 ? secs.toFixed(1) : Math.round(secs)} s` : size;
+  }
+
+  // Home Assistant's authenticated fetch (the sound files and the upload).
+  _authFetch(url, init = {}) {
+    if (typeof this._hass.fetchWithAuth === "function") return this._hass.fetchWithAuth(url, init);
+    const token = this._hass.auth?.data?.access_token;
+    return fetch(url, { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
+  }
+
+  async _ownSoundUrl(id) {
+    if (this._soundUrls[id]) return this._soundUrls[id];
+    const res = await this._authFetch(`/api/panelos/sound/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(`The sound could not be loaded (HTTP ${res.status}).`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob.type ? blob : new Blob([blob], { type: "audio/wav" }));
+    this._soundUrls[id] = url;
+    return url;
+  }
+
+  // ▶ on a button with this key plays the sound k ("lib:<id>" / "own:<id>"), ■ (the same key again) stops it;
+  // another one playing stops first.
+  async _play(key, k) {
+    const again = this._ui.playing === key;
+    this._stopSound();
+    if (again) return;
+    this._ui.playing = key;
+    this._refreshPlay();
+    let src;
+    try {
+      src = k.startsWith("own:") ? await this._ownSoundUrl(k.slice(4)) : `${this._static}/sounds/${k.slice(4)}.mp3`;
+    } catch (err) {
+      if (this._ui.playing === key) this._stopSound();
+      this._toast(err.message || String(err), null, true);
+      return;
+    }
+    if (this._ui.playing !== key) return; // stopped while it loaded
+    const audio = new Audio(src);
+    this._audio = audio;
+    const end = () => { if (this._audio === audio) this._stopSound(); };
+    audio.addEventListener("ended", end);
+    audio.addEventListener("error", () => { if (this._audio === audio) { this._stopSound(); this._toast("The sound could not be played.", null, true); } });
+    audio.play().catch((err) => {
+      if (this._audio !== audio || err?.name === "AbortError") return;
+      this._stopSound();
+      this._toast("The sound could not be played.", null, true);
+    });
+  }
+
+  _stopSound() {
+    if (this._audio) {
+      const a = this._audio;
+      this._audio = null;
+      a.pause();
+    }
+    if (this._ui.playing != null) {
+      this._ui.playing = null;
+      this._refreshPlay();
+    }
+  }
+
+  // The play buttons follow what plays without drawing the page again.
+  _refreshPlay() {
+    this.shadowRoot?.querySelectorAll("[data-play]").forEach((b) => {
+      const on = this._ui.playing === b.dataset.play;
+      if (b.classList.contains("on") === on) return;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-label", `${on ? "Stop" : "Listen to"} ${b.dataset.name}`);
+      b.title = on ? "Stop" : "Listen";
+      b.replaceChildren(icon(on ? "stop" : "play"));
+    });
+  }
+
+  _playBtn(key, k, name) {
+    if (k.startsWith("ma:")) return h("span", { class: "playbtn ma", "aria-hidden": "true" }, icon("music-note"));
+    const on = this._ui.playing === key;
+    return h("button", { class: `playbtn${on ? " on" : ""}`, "data-play": key, "data-name": name, "aria-label": `${on ? "Stop" : "Listen to"} ${name}`, title: on ? "Stop" : "Listen",
+      onclick: (e) => { e.stopPropagation(); this._play(key, k); } }, icon(on ? "stop" : "play"));
+  }
+
+  // A sound setting: ▶ and the chosen sound (marked when it is the place's default); a tap opens the
+  // picker. ctx: {def, defNote, title, crit, p, parent (the sheet to go back to)}.
+  _soundRow(label, value, ctx, onpick, opts = {}) {
+    const s = this._soundInfo(value, ctx.def);
+    const isDef = s.k === `lib:${ctx.def}`;
+    const open = () => this._openSheet({ kind: "sound", title: ctx.title, value: value || "auto", def: ctx.def, defNote: ctx.defNote, crit: Boolean(ctx.crit), ma: Boolean(ctx.ma), panel: ctx.p.entry_id, parent: ctx.parent || null, onpick });
+    return this._row(label, h("div", { class: "sndctl" },
+      this._playBtn(`row:${ctx.title}:${s.k}`, s.k, s.name),
+      h("button", { class: "sndpick", onclick: open, "aria-label": `${label}: ${s.name}${isDef ? ", the default" : ""}. Change` },
+        h("span", null, s.name), isDef ? h("small", null, "Default") : null, icon("chevron-right"))), { info: opts.info, infoKey: opts.infoKey, cls: opts.cls });
+  }
+
+  // Upload a sound for every panel: POST /api/panelos/sounds (file, name); the reply is the new
+  // house.sounds entry. done(value) gets "own:<id>".
+  async _uploadSound(file, done) {
+    if (!file) return;
+    if (!SOUND_TYPES.test(file.name) && !/^audio\/(mpeg|mp3|wav|x-wav|wave|vnd\.wave|ogg|flac|x-flac)$/i.test(file.type)) { this._toast("MP3, WAV, OGG or FLAC files only.", null, true); return; }
+    if (file.size > SOUND_UPLOAD_MAX) { this._toast("Sounds up to 10 MB only.", null, true); return; }
+    const name = file.name.replace(/\.[^.]+$/, "").trim().slice(0, 40) || "Sound";
+    const form = new FormData();
+    form.append("name", name);
+    form.append("file", file);
+    this._ui.uploading = { name };
+    this._renderLayer();
+    try {
+      const res = await this._authFetch("/api/panelos/sounds", { method: "POST", body: form });
+      let body = null;
+      try { body = await res.json(); } catch (_err) { body = null; }
+      if (!res.ok || !body?.id) throw new Error(body?.message || `Not uploaded (HTTP ${res.status}).`);
+      const hs = this._data.house || (this._data.house = {});
+      if (!(hs.sounds || []).some((s) => s.id === body.id)) hs.sounds = [...(hs.sounds || []), { id: body.id, name: body.name || name, bytes: body.bytes || file.size, secs: body.secs || 0 }];
+      this._ui.uploading = null;
+      done(`own:${body.id}`);
+      this._toast(`${body.name || name} uploaded`);
+    } catch (err) {
+      this._ui.uploading = null;
+      this._toast(err.message || String(err), null, true);
+    }
+    this._renderLayer();
+  }
+
+  // Delete an uploaded sound: it disappears at once, and is deleted (the house saved without it, which
+  // deletes the file) when the Undo is gone.
+  _deleteSound(s, sh) {
+    this._stopSound();
+    this._ui.delSounds.add(s.id);
+    const was = sh && sh.value === `own:${s.id}` ? sh.value : null;
+    if (was) { sh.value = "auto"; sh.onpick("auto"); }
+    this._renderLayer();
+    this._toast(`${s.name} deleted`, () => {
+      this._ui.delSounds.delete(s.id);
+      if (was) { sh.value = was; sh.onpick(was); }
+      this._renderLayer();
+    }, false, { onExpire: () => {
+      this._saveHouse((hs) => { hs.sounds = hs.sounds.filter((x) => x.id !== s.id); }).then(() => {
+        this._ui.delSounds.delete(s.id);
+        if (this._soundUrls[s.id]) { URL.revokeObjectURL(this._soundUrls[s.id]); delete this._soundUrls[s.id]; }
+        this._renderLayer();
+      });
+    } });
+  }
+
   // -- menus ---------------------------------------------------------------------------
 
   _openMenu(anchor, items) {
@@ -1823,6 +2145,7 @@ class PanelOSPage extends HTMLElement {
   // -- sheets ---------------------------------------------------------------------------
 
   _openSheet(sheet) {
+    this._stopSound();
     this._ui.sheet = sheet;
     this._ui.sheetFresh = true;
     this._ui.info = null;
@@ -1830,6 +2153,7 @@ class PanelOSPage extends HTMLElement {
   }
 
   _closeSheet() {
+    this._stopSound();
     this._ui.sheet = null;
     this._renderLayer();
     this._flush();
@@ -1849,7 +2173,18 @@ class PanelOSPage extends HTMLElement {
     }
     if (node && !this._ui.sheetFresh) node.classList.add("noanim");
     this._ui.sheetFresh = false;
+    // a field being typed in keeps the focus and the caret when the sheet is drawn again (a search's results)
+    const a = this.shadowRoot && this.shadowRoot.activeElement;
+    const keep = a && a.tagName === "INPUT" && this._layer.contains(a) && a.getAttribute("aria-label")
+      ? { label: a.getAttribute("aria-label"), start: a.selectionStart, end: a.selectionEnd } : null;
     this._layer.replaceChildren(node || "");
+    if (keep) {
+      const n = [...this._layer.querySelectorAll("input")].find((x) => x.getAttribute("aria-label") === keep.label);
+      if (n) {
+        n.focus();
+        try { n.setSelectionRange(keep.start, keep.end); } catch (_e) { /* not a text field */ }
+      }
+    }
   }
 
   _sheetFrame(title, body, foot, opts = {}) {
@@ -1942,7 +2277,8 @@ class PanelOSPage extends HTMLElement {
     ];
     const house = this._data.house || {};
     const active = house.active || { critical: [], status: [] };
-    const crit = (house.critical || []).filter((c) => active.critical.includes(c.entity_id) && !c.off.includes(p.entry_id));
+    const crit = (house.critical || []).filter((c) => active.critical.includes(c.entity_id) && !(c.off || []).includes(p.entry_id));
+    const ownCrit = (house.own_critical || []).filter((c) => active.critical.includes(`own:${c.id}`) && !(c.off || []).includes(p.entry_id));
     const stat = (house.status || []).filter((x) => active.status.includes(x.id) && x.panels.includes(p.entry_id));
     const hero = this._hero(this._pname(p), [this._state(p), h("span", null, this._pmodel(p)), this._parea(p) ? h("span", null, this._parea(p)) : null,
       version ? h("span", null, `Version ${version}`) : null, this._syncLine(p)]);
@@ -1954,9 +2290,10 @@ class PanelOSPage extends HTMLElement {
       this._card("Right now", { info: "Live values from the panel. In Home Assistant they are entities of the panel's device, so automations can use them." },
         h("div", { class: "glance" }, tiles)),
       this._card("Alerts and status now", { info: "Critical alerts and status screens that are on at this moment on this panel. They are set in Alerts." },
-        crit.length || stat.length
+        crit.length || ownCrit.length || stat.length
           ? h("div", { class: "below" }, [
             ...crit.map((c) => this._row(this._ename(c.entity_id), null, { lead: h("span", { class: "lead on" }, icon(this._eicon(c.entity_id))), sub: "Critical alert", keep: true })),
+            ...ownCrit.map((c) => this._row(this._ownCritName(c), null, { lead: h("span", { class: "lead on" }, icon("alert-octagon-outline")), sub: "Critical alert", keep: true })),
             ...stat.map((x) => this._row(this._statusName(x), null, { lead: this._stLead(x), sub: this._trigText(x), keep: true })),
           ])
           : h("div", { class: "empty" }, "Nothing is on right now.")),
@@ -2005,7 +2342,7 @@ class PanelOSPage extends HTMLElement {
         const open = () => this._go(`${this._panelPath(p, "pages")}/${i}`);
         return h("div", { class: `prow${page.hidden && i > 0 ? " hidden-page" : ""}`, "data-i": i },
           h("button", { class: `handle${i === 0 ? " fixed" : ""}`, "aria-label": i === 0 ? "The start page stays first" : `Drag to reorder ${t.name}`, onpointerdown: i === 0 ? null : (e) => this._startPageDrag(e, p) }, icon("drag-vertical")),
-          h("div", { class: "pthumb", onclick: open }, lookArt(page.kind, page.variant || 0, page)),
+          h("div", { class: "pthumb", onclick: open }, lookArt(page.kind, page.variant || 0, page, this._plainMode(p))),
           h("div", { class: "ptxt", onclick: open }, h("b", null, t.name), h("small", null, this._pageSub(p, page, i))),
           i === 0 ? null : this._toggle(!page.hidden, (v) => this._setPage(p, i, { hidden: !v }), { label: `Show ${t.name}` }),
           h("button", { class: "ib", "aria-label": "Page options", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); this._pageMenu(e.currentTarget, p, i); } }, icon("dots-vertical")),
@@ -2176,9 +2513,14 @@ class PanelOSPage extends HTMLElement {
     const o = page.options || {};
     if (page.kind === "home") {
       const cur = bgIndex(page);
-      const sw = cur >= 8;
-      const items = BACKGROUNDS.map((b, k) => ({ id: k, name: b.name, pic: svgNode(bgArt(k)), disabled: !this._has(p, "images"), why: this._has(p, "images") ? null : this._reason(p, "images") }));
-      return this._card("Background", { info: "The backgrounds follow the real weather and the time of day." },
+      const sw = BACKGROUNDS[cur].theme === 8;
+      const plain = BACKGROUNDS[cur].theme === PLAIN_THEME;
+      const pics = this._has(p, "images");
+      const items = BACKGROUNDS.map((b, k) => {
+        const ok = pics || b.theme === PLAIN_THEME;
+        return { id: k, name: b.name, pic: svgNode(bgArt(k, this._plainMode(p))), disabled: !ok, why: ok ? null : this._reason(p, "images") };
+      });
+      return this._card("Background", { info: "The backgrounds follow the real weather and the time of day. Plain is one colour, the panel's own dark or light ground, as its theme is." },
         this._lookPicker(items, cur, (k) => {
           const b = BACKGROUNDS[k];
           const next = { ...o, theme: b.theme };
@@ -2188,7 +2530,7 @@ class PanelOSPage extends HTMLElement {
         }),
         sw ? this._row("Cars", this._toggle(o.cars !== false, (v) => this._setPageOption(p, i, "cars", v), { label: "Cars" })) : null,
         sw ? this._row("Neon letters", this._toggle(o.neon !== false, (v) => this._setPageOption(p, i, "neon", v), { label: "Neon letters" })) : null,
-        sw ? null : this._more(`bg:${p.entry_id}:${i}`, this._row("Real sun and moon", this._toggle(o.real_sun !== false, (v) => this._setPageOption(p, i, "real_sun", v), { label: "Real sun and moon" }),
+        sw || plain ? null : this._more(`bg:${p.entry_id}:${i}`, this._row("Real sun and moon", this._toggle(o.real_sun !== false, (v) => this._setPageOption(p, i, "real_sun", v), { label: "Real sun and moon" }),
           { info: "On: the sun and the moon stand where they really are in the sky. Off: they keep a fixed place." })));
     }
     const looks = LOOKS[page.kind] || [];
@@ -2198,6 +2540,12 @@ class PanelOSPage extends HTMLElement {
       return { id: v, name, pic: lookArt(page.kind, v, page), disabled: !sup.ok, why: sup.ok ? null : sup.why };
     });
     return this._card("Look", {}, this._lookPicker(items, page.variant || 0, (v) => this._setPage(p, i, { variant: v })));
+  }
+
+  // The plain background's colour on this panel: "dark" / "light" by its theme, null when automatic.
+  _plainMode(p) {
+    const t = String(p?.states?.theme || "").toLowerCase();
+    return t === "dark" ? "dark" : t === "light" ? "light" : null;
   }
 
   // One entity of a page (or none = the panel's default).
@@ -2252,7 +2600,50 @@ class PanelOSPage extends HTMLElement {
         this._setPageOption(p, i, "functions", TIMER_FUNCTIONS.map(([x]) => x).filter((x) => next.includes(x)));
       }))),
       (page.variant || 0) === 3 ? this._row("Scene", this._seg(SW_SCENES.map((n, k) => [k, n]), Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", v), { label: "Scene" })) : null,
-      this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null }))];
+      this._soundRow("Timer sound", o.sound, { def: TIMER_LOOK_SOUND[page.variant || 0] || TIMER_LOOK_SOUND[0], defNote: "This look's own sound", title: "Timer sound", p },
+        (v) => this._setPageOption(p, i, "sound", v), { info: "Each look has its own sound; another one, or your own, can be chosen." }),
+      this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null })),
+    fns.includes("alarm") ? this._alarmsCard(p, i) : null];
+  }
+
+  // -- alarms (they live on the panel; the page shows what it reports) ----------------------
+
+  _hhmm(a) {
+    return `${String(a.h).padStart(2, "0")}:${String(a.m).padStart(2, "0")}`;
+  }
+
+  _repeatText(days) {
+    const d = Array.from({ length: 7 }, (_, k) => Boolean((days || [])[k]));
+    const n = d.filter(Boolean).length;
+    if (n === 7) return "Every day";
+    if (n === 0) return "Once";
+    if (d.every((x, k) => x === k < 5)) return "Weekdays";
+    if (d.every((x, k) => x === k >= 5)) return "Weekends";
+    return DAY_NAMES.filter((_, k) => d[k]).join(", ");
+  }
+
+  _alarmsCard(p, i) {
+    const alarms = Array.isArray(p.alarms) ? p.alarms : null;
+    const full = alarms && alarms.length >= ALARMS_MAX;
+    return this._card("Alarms", {
+      info: "Alarms live on the panel, so they ring even when Home Assistant is away. They can be set by voice too.",
+      acts: alarms ? this._btn("Add an alarm", () => this._openSheet({ kind: "alarm", panel: p.entry_id, page: i, idx: -1, t: "07:00", days: [true, true, true, true, true, false, false], label: "", sound: "auto" }),
+        { cls: "small", icon: "plus", disabled: full, title: full ? `At most ${ALARMS_MAX} alarms` : null }) : null,
+    },
+    alarms == null ? h("div", { class: "empty" }, "The panel shows its alarms here once it is connected.")
+      : alarms.length ? h("div", { class: "alarms" }, alarms.map((a, k) => {
+        const open = () => this._openSheet({ kind: "alarm", panel: p.entry_id, page: i, idx: k, t: this._hhmm(a), days: Array.from({ length: 7 }, (_, d) => Boolean((a.days || [])[d])), label: a.label || "", sound: a.tone || "auto" });
+        return h("div", { class: `alarm${a.on ? "" : " off"}` },
+          h("button", { class: "open", onclick: open, "aria-label": `${a.label || "Alarm"}, ${this._hhmm(a)}, ${this._repeatText(a.days)}. Edit` },
+            h("span", { class: "tm" }, this._hhmm(a)),
+            h("span", { class: "d" }, h("b", null, a.label || "Alarm"), `${this._repeatText(a.days)} · ${this._soundInfo(a.tone, "birds").name}`)),
+          this._toggle(a.on, (v) => {
+            const list = clone(p.alarms || []);
+            list[k].on = v;
+            this._saveAlarms(p, list, { toast: v ? `Alarm on for ${this._hhmm(a)}` : "Alarm off" });
+          }, { label: `${a.label || "Alarm"} ${this._hhmm(a)}` }));
+      }))
+        : h("div", { class: "empty" }, "No alarms yet."));
   }
 
   _editThermostat(p, page, i) {
@@ -2373,7 +2764,8 @@ class PanelOSPage extends HTMLElement {
     const size = Math.max(220, Math.min(400, this._contentWidth() - 46));
     const cell = size / 4;
     const sel = this._ui.sel;
-    const canvas = h("div", { class: "hcanvas", style: { width: `${size}px`, height: `${size}px` } }, svgNode(bgArt(bgIndex(page))));
+    const lightGround = BACKGROUNDS[bgIndex(page)].theme === PLAIN_THEME && this._plainMode(p) === "light";
+    const canvas = h("div", { class: `hcanvas${lightGround ? " light" : ""}`, style: { width: `${size}px`, height: `${size}px` } }, svgNode(bgArt(bgIndex(page), this._plainMode(p))));
     for (let k = 1; k < 4; k++) {
       canvas.append(h("i", { class: "gridline", style: { left: `${k * cell}px`, top: 0, bottom: 0, borderLeftWidth: "1px" } }));
       canvas.append(h("i", { class: "gridline", style: { top: `${k * cell}px`, left: 0, right: 0, borderTopWidth: "1px" } }));
@@ -2520,11 +2912,18 @@ class PanelOSPage extends HTMLElement {
     const sugg = this._suggestions();
     const crit = (house.critical || []).map((c) => {
       const cls = SAFETY[this._safetyClass(c.entity_id)];
-      const hidden = c.off.includes(p.entry_id);
+      const hidden = (c.off || []).includes(p.entry_id);
       const on = active.critical.includes(c.entity_id);
-      const sub = [cls ? cls.name : "Sensor", this._areaName(this._earea(c.entity_id)), hidden ? `not on ${this._pname(p)}` : null, on ? "on now" : null].filter(Boolean).join(" · ");
+      const sub = [cls ? cls.name : "Sensor", this._areaName(this._earea(c.entity_id)), c.sound === false ? "silent" : null, hidden ? `not on ${this._pname(p)}` : null, on ? "on now" : null].filter(Boolean).join(" · ");
       return this._row(this._ename(c.entity_id), this._toggle(c.on, (v) => this._saveHouse((hs) => { hs.critical.find((x) => x.entity_id === c.entity_id).on = v; }), { label: "Counts as critical" }),
         { lead: h("span", { class: `lead${on ? " on" : ""}` }, icon(this._eicon(c.entity_id))), sub, click: () => this._openSheet({ kind: "crit", id: c.entity_id, panel: p.entry_id }), keep: true });
+    });
+    const own = (house.own_critical || []).map((c) => {
+      const hidden = (c.off || []).includes(p.entry_id);
+      const on = active.critical.includes(`own:${c.id}`);
+      const sub = [`Own · ${this._ownCritWhen(c)}`, c.sound === false ? "silent" : null, hidden ? `not on ${this._pname(p)}` : null, on ? "on now" : null].filter(Boolean).join(" · ");
+      return this._row(this._ownCritName(c), this._toggle(c.on, (v) => this._saveHouse((hs) => { hs.own_critical.find((x) => x.id === c.id).on = v; }), { label: "Counts as critical" }),
+        { lead: h("span", { class: `lead${on ? " on" : ""}` }, icon("alert-octagon-outline")), sub, click: () => this._openSheet({ kind: "ownCrit", id: c.id, panel: p.entry_id }), keep: true });
     });
     const rules = (house.status || []).map((x) => {
       const here = x.panels.includes(p.entry_id);
@@ -2544,18 +2943,19 @@ class PanelOSPage extends HTMLElement {
     const setDnd = (patch) => this._options(p, { dnd: patch }, { optimistic: (s) => { s.dnd = { ...dnd, ...patch, allow: { ...dnd.allow, ...(patch.allow || {}) } }; } });
     const pops = { ...DEFAULT_POPUPS, ...(this._settings(p).popups || {}) };
     const setPops = (patch) => this._options(p, { popups: patch }, { optimistic: (s) => { s.popups = { ...pops, ...patch }; } });
-    const first = (house.critical || []).find((c) => c.on && !c.off.includes(p.entry_id));
+    const firstSensor = (house.critical || []).find((c) => c.on && !(c.off || []).includes(p.entry_id));
+    const firstOwn = (house.own_critical || []).find((c) => c.on && !(c.off || []).includes(p.entry_id));
+    const first = firstSensor ? firstSensor.entity_id : firstOwn ? `own:${firstOwn.id}` : null;
     return [
       this._hero("Alerts and status", [h("span", null, this._pname(p)), this._syncLine(p)]),
       this._card("Critical alerts", {
         sub: "Shared by every panel",
-        info: "Sensors that count as critical take over the screen of every panel they are shown on, with sound, even in do not disturb, until they clear. Suggested by the sensors' device class (smoke, gas, water leak…); only the ones in this list count.",
+        info: "Critical alerts take over the screen of every panel they are shown on, with sound, even in do not disturb, until they end. Sensors are suggested by their device class (smoke, gas, water leak…); with Add, any device or an automation can start one. Only the ones in this list count.",
         acts: [sugg.length ? this._btn(`${sugg.length} suggested`, () => this._openSheet({ kind: "critSuggest", panel: p.entry_id }), { cls: "small", icon: "shield-alert-outline" }) : null,
-          this._btn("Add", () => this._openSheet({ kind: "pick", title: "Add a critical sensor", domains: ["binary_sensor"], exclude: (house.critical || []).map((c) => c.entity_id), panel: p.entry_id,
-            onPick: (id) => this._saveHouse((hs) => { hs.critical.push({ entity_id: id, on: true, hold: true, off: [] }); }, { toast: `${this._ename(id)} is critical now` }) }), { cls: "small", icon: "plus" })],
-      }, crit.length ? crit : h("div", { class: "empty" }, "No critical sensors yet."),
+          this._btn("Add", () => this._newOwnCrit(p), { cls: "small", icon: "plus" })],
+      }, crit.length || own.length ? [...crit, ...own] : h("div", { class: "empty" }, "No critical alerts yet."),
       h("div", { class: "below", style: { display: "flex", gap: "8px", flexWrap: "wrap", paddingTop: "6px" } },
-        this._btn("Test on this panel", () => this._test(p, "critical", first.entity_id), { cls: "small", icon: "alert-octagon-outline", disabled: !first || !p.connected }))),
+        this._btn("Test on this panel", () => this._test(p, "critical", first), { cls: "small", icon: "alert-octagon-outline", disabled: !first || !p.connected }))),
       this._card("Status screens", {
         sub: "Shared · on or off for this panel",
         info: `A status screen covers the panel while something is going on (toilet occupied, someone sleeping, robot vacuum at work). Each one lists the panels it appears on.${this._has(p, "images") ? "" : ` ${this._pname(p)} shows the text and the colour, without the picture.`}`,
@@ -2755,7 +3155,7 @@ class PanelOSPage extends HTMLElement {
             h("span", null, plural(this._pages(x).filter((pg, k) => k === 0 || !pg.hidden).length, "page", "pages"))));
       }), h("button", { class: "pcard add", onclick: () => this._startAdd() }, h("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", gap: "8px" } }, icon("plus"), "Add a panel"))),
       this._card("Shared by every panel", {},
-        this._row("Critical alerts", this._btn("Edit", () => this._go(firstAlerts), { cls: "small" }), { sub: plural((house.critical || []).filter((c) => c.on).length, "sensor", "sensors"), lead: h("span", { class: "lead" }, icon("alert-octagon-outline")), keep: true, cls: "first" }),
+        this._row("Critical alerts", this._btn("Edit", () => this._go(firstAlerts), { cls: "small" }), { sub: plural([...(house.critical || []), ...(house.own_critical || [])].filter((c) => c.on).length, "alert", "alerts"), lead: h("span", { class: "lead" }, icon("alert-octagon-outline")), keep: true, cls: "first" }),
         this._row("Status screens", this._btn("Edit", () => this._go(firstAlerts), { cls: "small" }), { sub: `${plural((house.status || []).length, "screen", "screens")}, each on the panels you choose`, lead: h("span", { class: "lead" }, icon("card-text-outline")), keep: true }),
         panels.length > 1 ? this._row("Copy settings between panels", this._btn("Copy…", () => this._openCopy(panels[0]), { cls: "small", icon: "content-copy" }), { sub: "Pages, display, voice, do not disturb", lead: h("span", { class: "lead" }, icon("content-copy")), keep: true }) : null),
       this._card("What each panel can do", { info: "As each panel reports it. Settings a panel cannot use are left out of its pages; when copying, they are skipped with the reason." },
@@ -2986,6 +3386,22 @@ class PanelOSPage extends HTMLElement {
       h("span", { class: "grow" }), this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
   }
 
+  // The sound part of a critical alert's sheet (sensor-based and own ones alike).
+  _critSound(c, set, sh, p, holdInfo) {
+    const soundOn = c.sound !== false;
+    return h("div", { class: "sec" }, h("h3", null, "Sound"), h("div", { class: "group" },
+      this._row("Play a sound", this._toggle(soundOn, (v) => set((x) => { x.sound = v; }), { label: "Play a sound" }), { cls: "first", info: "Off: the alert only shows on the screen. Panels without a speaker always show it silently." }),
+      soundOn ? this._soundRow("Alert sound", c.tone, { def: "sos", defNote: "The default for critical alerts", title: "Alert sound", crit: true, p, parent: { ...sh, fresh: false } }, (v) => set((x) => { x.tone = v; })) : null,
+      soundOn ? this._row("Hold to silence", this._toggle(c.hold, (v) => set((x) => { x.hold = v; }), { label: "Hold to silence" }), { info: holdInfo }) : null));
+  }
+
+  _critShownOn(c, set) {
+    return h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
+      const on = !(c.off || []).includes(q.entry_id);
+      return this._chipToggle(on, this._pname(q), () => set((x) => { x.off = on ? [...(x.off || []), q.entry_id] : (x.off || []).filter((e) => e !== q.entry_id); }));
+    })));
+  }
+
   _sheet_crit(sh, p) {
     const c = (this._data.house.critical || []).find((x) => x.entity_id === sh.id);
     if (!c) return null;
@@ -2993,22 +3409,195 @@ class PanelOSPage extends HTMLElement {
     const set = (fn) => this._saveHouse((hs) => fn(hs.critical.find((x) => x.entity_id === c.entity_id)));
     return this._sheetFrame(this._ename(c.entity_id), [
       h("div", { class: "group" },
-        this._row("Counts as critical", this._toggle(c.on, (v) => set((x) => { x.on = v; }), { label: "Counts as critical" }), { cls: "first", sub: [cls ? cls.name : "Sensor", this._areaName(this._earea(c.entity_id))].filter(Boolean).join(" · ") }),
-        this._row("Hold to silence", this._toggle(c.hold, (v) => set((x) => { x.hold = v; }), { label: "Hold to silence" }), { info: "On: the sound stops after holding the button on the panel; the alert stays until the sensor clears. Off: it sounds until the sensor clears." })),
-      h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
-        const on = !c.off.includes(q.entry_id);
-        return this._chipToggle(on, this._pname(q), () => set((x) => { x.off = on ? [...x.off, q.entry_id] : x.off.filter((e) => e !== q.entry_id); }));
-      }))),
+        this._row("Counts as critical", this._toggle(c.on, (v) => set((x) => { x.on = v; }), { label: "Counts as critical" }), { cls: "first", sub: [cls ? cls.name : "Sensor", this._areaName(this._earea(c.entity_id))].filter(Boolean).join(" · ") })),
+      this._critSound(c, set, sh, p, "On: the sound stops after holding the button on the panel; the alert stays until the sensor clears. Off: it sounds until the sensor clears."),
+      this._critShownOn(c, set),
     ], [
       this._btn("Remove from the list", () => {
         const gone = clone(c);
-        this._ui.sheet = null;
+        this._closeSheet();
         this._saveHouse((hs) => { hs.critical = hs.critical.filter((x) => x.entity_id !== c.entity_id); }, { toast: `${this._ename(c.entity_id)} removed`, undo: () => this._saveHouse((hs) => { hs.critical.push(gone); }) });
-        this._renderLayer();
       }, { cls: "ghost danger", icon: "delete-outline" }),
       h("span", { class: "grow" }),
-      this._btn(`Test on ${this._pname(p)}`, () => { this._ui.sheet = null; this._renderLayer(); this._test(p, "critical", c.entity_id); }, { icon: "alert-octagon-outline", disabled: !p.connected }),
+      this._btn(`Test on ${this._pname(p)}`, () => { this._closeSheet(); this._test(p, "critical", c.entity_id); }, { icon: "alert-octagon-outline", disabled: !p.connected }),
       this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  // An own critical alert: started by a device's state or by an automation (panelos.critical_alert).
+  _ownCritName(c) {
+    const t = c.trigger || {};
+    return c.headline || (t.kind === "entity" && t.entity ? this._ename(t.entity) : "Critical alert");
+  }
+
+  _ownCritWhen(c) {
+    const t = c.trigger || {};
+    if (t.kind === "service") return "from an automation";
+    if (!t.entity) return "no device chosen yet";
+    const d = t.entity.split(".")[0];
+    const name = this._ename(t.entity);
+    if (d === "sensor") return t.value !== "" && t.value != null ? `${name} ${t.op === "below" ? "below" : "above"} ${t.value}` : `${name}, no value yet`;
+    if (d === "lock") return `${name} ${t.op === "off" ? "locked" : "unlocked"}`;
+    return `${name} ${t.op === "off" ? "off" : "on"}`;
+  }
+
+  _newOwnCrit(p) {
+    const ids = new Set((this._data.house?.own_critical || []).map((c) => c.id));
+    let n = 1;
+    while (ids.has(`alert_${n}`)) n++;
+    const id = `alert_${n}`;
+    this._saveHouse((hs) => {
+      hs.own_critical.push({ id, on: true, hold: true, off: [], sound: true, tone: "auto", trigger: { kind: "entity", entity: "", op: "on", value: "" }, headline: "", line: "" });
+    });
+    this._openSheet({ kind: "ownCrit", id, panel: p.entry_id, fresh: true });
+  }
+
+  _sheet_ownCrit(sh, p) {
+    const c = (this._data.house.own_critical || []).find((x) => x.id === sh.id);
+    if (!c) return null;
+    const t = c.trigger || { kind: "entity", entity: "", op: "on", value: "" };
+    const set = (fn) => this._saveHouse((hs) => fn(hs.own_critical.find((x) => x.id === c.id)));
+    const setT = (patch) => set((x) => { x.trigger = { ...t, ...patch }; });
+    const domain = t.entity ? t.entity.split(".")[0] : "";
+    const ops = domain === "sensor" ? [["above", "Above"], ["below", "Below"]] : domain === "lock" ? [["on", "Unlocked"], ["off", "Locked"]] : [["on", "On"], ["off", "Off"]];
+    const back = { ...sh, fresh: false };
+    const numeric = (st) => st.entity_id.split(".")[0] !== "sensor" || !Number.isNaN(Number(st.state)) || Boolean(st.attributes?.unit_of_measurement);
+    return this._sheetFrame(sh.fresh ? "New critical alert" : this._ownCritName(c), [
+      h("div", { class: "group" },
+        this._row("Counts as critical", this._toggle(c.on, (v) => set((x) => { x.on = v; }), { label: "Counts as critical" }), { cls: "first", sub: `Own · ${this._ownCritWhen(c)}` })),
+      h("div", { class: "sec" }, h("h3", null, "Starts when"),
+        this._seg([["entity", "A device"], ["service", "Automation"]], t.kind, (v) => setT({ kind: v }), { label: "Starts when" }),
+        t.kind === "service"
+          ? h("div", { class: "yaml" }, `action: panelos.critical_alert\ndata:\n  alert: ${c.id}\n\n# ends it\naction: panelos.clear_critical_alert\ndata:\n  alert: ${c.id}`)
+          : h("div", { class: "group" },
+            this._row("Device", this._entityButton(t.entity, { title: "Device", domains: OWN_CRIT_DOMAINS, filter: numeric, none: null, p, back,
+              onPick: (id) => { const d = id.split(".")[0]; setT({ entity: id, op: d === "sensor" ? "above" : "on", value: "" }); } }), { cls: "first" }),
+            t.entity ? this._row("Alarm when", h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" } },
+              this._seg(ops, ops.some(([v]) => v === t.op) ? t.op : ops[0][0], (v) => setT({ op: v }), { label: "Alarm when" }),
+              domain === "sensor" ? this._text(t.value, (v) => setT({ value: v.trim() }), { max: 60, label: "Value", cls: "short", placeholder: String(this._hass.states[t.entity]?.state ?? "") }) : null),
+            { sub: `Now: ${this._liveValue(`ha:${t.entity}`)}` }) : null)),
+      h("div", { class: "sec" }, h("h3", null, "Text"), h("div", { class: "group" },
+        this._row("Headline", this._text(c.headline, (v) => set((x) => { x.headline = v.trim(); }), { max: 30, label: "Headline", placeholder: "What happened" }), { cls: "first", stack: true }),
+        this._row("Line", this._text(c.line, (v) => set((x) => { x.line = v.trim(); }), { max: 60, label: "Line", placeholder: "What to do" }), { stack: true }))),
+      this._critSound(c, set, sh, p, "On: the sound stops after holding the button on the panel; the alert stays until it ends. Off: it sounds until it ends."),
+      this._critShownOn(c, set),
+    ], [
+      this._btn("Remove", () => {
+        const gone = clone(c);
+        const at = (this._data.house.own_critical || []).findIndex((x) => x.id === c.id);
+        this._closeSheet();
+        this._saveHouse((hs) => { hs.own_critical = hs.own_critical.filter((x) => x.id !== c.id); }, { toast: `${this._ownCritName(c)} removed`,
+          undo: () => this._saveHouse((hs) => { if (!hs.own_critical.some((x) => x.id === gone.id)) hs.own_critical.splice(Math.max(0, Math.min(at, hs.own_critical.length)), 0, gone); }) });
+      }, { cls: "ghost danger", icon: "delete-outline" }),
+      h("span", { class: "grow" }),
+      this._btn(`Test on ${this._pname(p)}`, () => { this._closeSheet(); this._test(p, "critical", `own:${c.id}`); }, { icon: "alert-octagon-outline", disabled: !p.connected }),
+      this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  // Pick a sound: the PanelOS sounds (the place's default marked), the uploaded ones (upload, delete).
+  _sheet_sound(sh, p) {
+    const cur = this._soundKey(sh.value, sh.def);
+    const pick = (k) => {
+      sh.value = k === `lib:${sh.def}` ? "auto" : k;
+      sh.onpick(sh.value);
+      this._renderLayer();
+    };
+    const item = (k, name, sub, extra = null) => h("div", { class: `snd${k === cur ? " on" : ""}`, onclick: () => pick(k) },
+      this._playBtn(`sheet:${k}`, k, name),
+      h("button", { class: "t", role: "radio", "aria-checked": k === cur ? "true" : "false", onclick: (e) => { e.stopPropagation(); pick(k); } }, h("span", null, name), sub ? h("small", null, sub) : null),
+      extra,
+      k === cur ? h("span", { class: "chk" }, icon("check")) : null);
+    const lib = SOUND_LIB.filter((s) => sh.crit || !s.crit);
+    const own = this._ownSounds();
+    const up = this._ui.uploading;
+    const file = h("input", { type: "file", hidden: true, accept: "audio/mpeg,audio/wav,audio/x-wav,audio/ogg,audio/flac,audio/x-flac,.mp3,.wav,.ogg,.flac",
+      onchange: (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ""; this._uploadSound(f, (v) => pick(v)); } });
+    const leave = () => {
+      this._stopSound();
+      if (sh.parent) this._openSheet(sh.parent);
+      else this._closeSheet();
+    };
+    return this._sheetFrame(sh.title, [
+      h("div", { class: "sec" }, h("h3", null, "PanelOS sounds"),
+        h("div", { class: "sndlist", role: "radiogroup", "aria-label": "PanelOS sounds" }, lib.map((s) => item(`lib:${s.id}`, s.name, s.id === sh.def ? sh.defNote : null, s.id === sh.def ? h("span", { class: "tag" }, "Default") : null)))),
+      h("div", { class: "sec" }, h("h3", null, "Your sounds", h("span", { class: "rinfo" }, this._infoBtn("snd:own", "Uploaded once, usable on every panel. Each panel that uses a sound keeps a copy, so it rings even when Home Assistant is away. MP3, WAV, OGG or FLAC, up to 10 MB."))),
+        own.length || up ? h("div", { class: "sndlist", role: "radiogroup", "aria-label": "Your sounds" },
+          own.map((s) => item(`own:${s.id}`, s.name, this._soundSize(s),
+            h("button", { class: "snddel", "aria-label": `Delete ${s.name}`, title: "Delete", onclick: (e) => { e.stopPropagation(); this._deleteSound(s, sh); } }, icon("delete-outline")))),
+          up ? h("div", { class: "snd busy", "aria-busy": "true" }, h("span", { class: "lead" }, icon("loading", "spin")), h("span", { class: "t" }, h("span", null, up.name), h("small", null, "Uploading…"))) : null) : null,
+        file,
+        this._btn("Upload a sound", () => file.click(), { cls: "small upl", icon: "upload", disabled: Boolean(up) })),
+      sh.ma ? this._musicSection(sh, item) : null,
+    ], [h("span", { class: "grow" }), this._btn("Done", leave, { cls: "primary" })], { back: sh.parent ? leave : null });
+  }
+
+  // Alarms only: music from Music Assistant, played on the panel's speaker and getting louder.
+  _musicSection(sh, item) {
+    const m = (this._ui.ma = this._ui.ma || { query: null, items: [], loading: false, available: true, error: "" });
+    const load = (query) => {
+      m.query = query;
+      m.loading = true;
+      const asked = query;
+      this._hass.callWS({ type: "panelos/page/ma", query }).then((r) => {
+        if (m.query !== asked) return;
+        m.items = r.items || [];
+        m.available = r.available !== false;
+        m.error = "";
+        this._ui.maNames = this._ui.maNames || {};
+        for (const x of m.items) this._ui.maNames[`ma:${x.uri}`] = x.name;
+      }).catch((e) => { if (m.query === asked) { m.items = []; m.error = (e && e.message) || "Music Assistant did not answer."; } })
+        .finally(() => { if (m.query === asked) { m.loading = false; this._renderLayer(); } });
+    };
+    if (m.query === null) load("");
+    const defName = (SOUND_LIB.find((s) => s.id === sh.def) || {}).name || "The default sound";
+    const search = h("input", { class: "inp masearch", type: "search", value: m.query || "", placeholder: "Search Music Assistant", "aria-label": "Search Music Assistant",
+      oninput: (e) => { const q = e.target.value; clearTimeout(this._maTimer); this._maTimer = setTimeout(() => load(q.trim()), 400); } });
+    return h("div", { class: "sec" }, h("h3", null, "Music", h("span", { class: "rinfo" }, this._infoBtn("snd:ma", `From Music Assistant, played on this panel's speaker and getting louder. If the music cannot start, ${defName} rings instead. Music Assistant plays on the panel once the panel's media player is among its players.`))),
+      !m.available ? h("div", { class: "empty" }, "Music Assistant is not set up in Home Assistant.") : [
+        search,
+        m.error ? h("div", { class: "empty" }, m.error) : null,
+        m.loading && !m.items.length ? h("div", { class: "empty" }, "Looking…") : null,
+        !m.loading && !m.error && !m.items.length ? h("div", { class: "empty" }, m.query ? "Nothing found." : "No playlists or radio stations in Music Assistant.") : null,
+        m.items.length ? h("div", { class: "sndlist", role: "radiogroup", "aria-label": "Music" }, m.items.map((x) => item(`ma:${x.uri}`, x.name, x.kind))) : null,
+      ]);
+  }
+
+  _sheet_alarm(sh, p) {
+    const alarms = Array.isArray(p.alarms) ? p.alarms : [];
+    const isNew = sh.idx < 0 || !alarms[sh.idx];
+    const save = () => {
+      const m = /^(\d{1,2}):(\d{2})/.exec(sh.t || "");
+      if (!m) { this._toast("Choose a time first.", null, true); return; }
+      // the whole list goes to the panel: never without the alarms it has
+      if (!Array.isArray(p.alarms)) { this._toast("The panel shows its alarms here once it is connected.", null, true); return; }
+      const k = this._soundKey(sh.sound, "birds");
+      const tone = k === "lib:birds" ? "auto" : k;
+      const a = { h: Number(m[1]), m: Number(m[2]), days: [...sh.days], label: (sh.label || "").trim().slice(0, 20), on: true, tone, tone_name: this._soundInfo(tone, "birds").name };
+      const list = clone(alarms);
+      if (isNew) list.push(a);
+      else list[sh.idx] = { ...list[sh.idx], ...a };
+      this._closeSheet();
+      this._saveAlarms(p, list, { toast: `Alarm set for ${this._hhmm(a)}` });
+    };
+    const remove = () => {
+      if (!Array.isArray(p.alarms)) { this._toast("The panel shows its alarms here once it is connected.", null, true); return; }
+      const list = clone(alarms);
+      const [gone] = list.splice(sh.idx, 1);
+      this._closeSheet();
+      this._saveAlarms(p, list, { toast: "Alarm deleted", undo: () => { const back = clone(p.alarms || []); back.splice(Math.min(sh.idx, back.length), 0, gone); this._saveAlarms(p, back); } });
+    };
+    return this._sheetFrame(isNew ? "New alarm" : "Alarm", [
+      h("div", { style: { display: "flex", justifyContent: "center" } },
+        h("input", { class: "inp alarm-time", type: "time", value: sh.t, "aria-label": "Time", oninput: (e) => { sh.t = e.target.value; } })),
+      h("div", { class: "sec" }, h("h3", null, "Repeat"), h("div", { class: "chips days" }, DAY_NAMES.map((n, k) => h("button", { class: `chip${sh.days[k] ? " on" : ""}`, "aria-pressed": sh.days[k] ? "true" : "false",
+        onclick: () => { sh.days[k] = !sh.days[k]; this._renderLayer(); } }, n)))),
+      h("div", { class: "group" },
+        this._row("Name", h("input", { class: "inp short", value: sh.label, maxlength: 20, placeholder: "Alarm", "aria-label": "Name", oninput: (e) => { sh.label = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } }), { cls: "first" }),
+        this._soundRow("Sound", sh.sound, { def: "birds", defNote: "The default for alarms", title: "Alarm sound", ma: true, p, parent: sh }, (v) => { sh.sound = v; })),
+    ], [
+      isNew ? null : this._btn("Delete", remove, { cls: "ghost danger", icon: "delete-outline" }),
+      h("span", { class: "grow" }),
+      this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }),
+      this._btn("Save", save, { cls: "primary" })], { center: true });
   }
 
   _sheet_critSuggest(sh, p) {
@@ -3082,7 +3671,7 @@ class PanelOSPage extends HTMLElement {
       h("div", { class: "group" },
         this._row("Button", this._toggle(r.button, (v) => set({ button: v }), { label: "Button" }), { cls: "first", sub: r.button ? "Closes the screen on that panel" : "No button: it ends by itself" }),
         r.button ? this._row("Button text", this._text(r.button_label, (v) => set({ button_label: v.trim() }), { max: 24, label: "Button text", placeholder: "From the panel" }), { stack: true }) : null,
-        this._row("Closes by itself", this._select([["0", t.kind === "after" ? "After 10 min" : "No"], ["5", "After 5 min"], ["10", "After 10 min"], ["15", "After 15 min"], ["30", "After 30 min"], ["60", "After 1 hour"]], String(r.countdown || 0), (v) => set({ countdown: Number(v) }), { label: "Closes by itself" }), { info: "The screen shows the time left and closes when it runs out." }),
+        this._row("Closes by itself", this._select([...(t.kind === "after" ? [] : [["0", "Never"]]), ["5", "After 5 min"], ["10", "After 10 min"], ["15", "After 15 min"], ["30", "After 30 min"]], String(r.countdown || (t.kind === "after" ? 10 : 0)), (v) => set({ countdown: Number(v) }), { label: "Closes by itself" }), { info: t.kind === "after" ? "The screen shows the time left and closes when it runs out." : "Never: the screen stays while the trigger lasts, or until it is closed on the panel. With a time: the screen shows the time left and closes when it runs out." }),
         this._row("In use", this._toggle(r.on, (v) => set({ on: v }), { label: "In use" }), { sub: r.on ? null : "Switched off: never shown" })),
       h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
         const on = r.panels.includes(q.entry_id);

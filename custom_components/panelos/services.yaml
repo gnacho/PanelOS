@@ -75,3 +75,19 @@ clear_status:
       example: status_1
       selector:
         text:
+
+critical_alert:
+  fields:
+    alert:
+      required: true
+      example: alert_1
+      selector:
+        text:
+
+clear_critical_alert:
+  fields:
+    alert:
+      required: true
+      example: alert_1
+      selector:
+        text:
