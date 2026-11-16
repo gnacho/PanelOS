@@ -28,6 +28,7 @@ mod icons;
 mod info;
 mod loading_text;
 mod mdns;
+mod media;
 mod mus;
 mod pages;
 mod quick;
@@ -37,6 +38,7 @@ mod platform;
 mod roam;
 mod settings;
 mod shade;
+mod sounds;
 mod synth;
 mod texts;
 mod thermo;
@@ -150,6 +152,12 @@ pub struct UiState {
     laps: Vec<f32>,
     lap_at: f32,
     ringing: Option<Instant>,
+    /// The ringing timer's or alarm's sound (`<value>|<default>`, as the integration names sounds).
+    ring_tone: String,
+    /// The sound looping now (`ring:…` or `crit:…`), to start and stop it once.
+    looping: Option<String>,
+    /// An alarm's music from Music Assistant: when it was asked for (its default rings if no audio comes).
+    music_asked: Option<Instant>,
     /// Same as `ringing.is_some()`, for the voice thread.
     ringing_flag: Arc<std::sync::atomic::AtomicBool>,
     mic_muted: Arc<std::sync::atomic::AtomicBool>,
@@ -421,7 +429,7 @@ fn weather_key(w: &WeatherData) -> String {
 }
 
 fn update_clock(ui: &AppWindow) {
-    let beep = STATE.with(|st| {
+    let ring = STATE.with(|st| {
         let mut guard = st.borrow_mut();
         let s = guard.as_mut()?;
         let weather = ui.get_weather();
@@ -478,7 +486,8 @@ fn update_clock(ui: &AppWindow) {
             let first = s.alarm_minute == 0;
             s.alarm_minute = minute;
             if !first {
-                if let Some((time, label)) = alarms::due(s) {
+                if let Some((time, label, tone)) = alarms::due(s) {
+                    s.ring_tone = format!("{tone}|birds");
                     s.ringing = Some(Instant::now());
                     s.ringing_flag.store(true, Ordering::SeqCst);
                     ui.set_timers_ring_alarm(true);
@@ -495,7 +504,7 @@ fn update_clock(ui: &AppWindow) {
             s.voice_hide_at = None;
             ui.set_voice_on(false);
         }
-        // Ringing timer: beep until stopped, at most a minute.
+        // Ringing timer or alarm: its sound loops until stopped, at most a minute.
         match s.ringing {
             Some(started) if started.elapsed() > Duration::from_secs(60) => {
                 s.ringing = None;
@@ -507,16 +516,14 @@ fn update_clock(ui: &AppWindow) {
                 ui.set_timers_ring_over(started.elapsed().as_secs_f32());
                 // do not disturb may keep alarms or timers silent (they still show)
                 let what = if ui.get_timers_ring_alarm() { "alarms" } else { "timers" };
-                dnd_allows(s, what).then(|| s.player.clone())
+                dnd_allows(s, what).then(|| format!("ring:{}", s.ring_tone))
             }
             None => None,
         }
     });
-    // status screens and the critical alert: their times, the strip; the alert sounds until held
-    let beep = if alerts::refresh(ui) { beep.or_else(|| Some(with_state(|s| s.player.clone()))) } else { beep };
-    if let Some(player) = beep {
-        player.play(voice::Sound::Beep);
-    }
+    // status screens and the critical alert: their times, the strip; the alert's sound loops until held
+    let crit = alerts::refresh(ui).map(|tone| format!("crit:{tone}|sos"));
+    with_state(|s| loop_sound(s, crit.or(ring)));
     if RANG.with(|r| r.replace(false)) {
         wake(ui);
         // the ringing screen is the timers page's: a temporary one when the list has none
@@ -537,8 +544,9 @@ fn refresh_pages(ui: &AppWindow) {
         let theme = page_option(s, "home", "theme")
             .and_then(|v| v.as_i64())
             .or_else(|| s.panel_config.as_ref().and_then(|c| c.get("home_theme")).and_then(Value::as_i64))
-            .unwrap_or(0)
-            .clamp(0, 8) as i32;
+            .unwrap_or(0);
+        // the plain background (9) has no sky: the weather details page keeps the nature photo
+        let theme = if theme == 9 { 0 } else { theme.clamp(0, 8) as i32 };
         let entity = weather_entity(s);
         let weather = pages::weather_data(&pages::WeatherInput {
             states: &s.states,
@@ -767,6 +775,8 @@ fn rewarm(ui: &AppWindow) {
 
 /// The page list and what the integration's configuration changes.
 fn apply_panel_config(ui: &AppWindow) {
+    // copies of the uploaded sounds the settings use: fetched when missing, dropped when unused
+    with_state(|s| sounds::keep(&used_sounds(s)));
     let reload = with_state(|s| {
         let slots = pages::page_slots(s.panel_config.as_ref());
         let current = ui.get_page();
@@ -929,7 +939,80 @@ fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, 
 }
 
 /// A timer reached zero: the ringing screen and the beeps.
+/// The timers page's sound: chosen in the integration, else its look's own.
+fn timer_tone(ui: &AppWindow, s: &UiState) -> String {
+    let look = page_looks(ui, "timers").first().copied().unwrap_or(0);
+    let value = page_option(s, "timers", "sound").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "auto".into());
+    format!("{value}|{}", sounds::timer_default(look))
+}
+
+/// The uploaded sounds the panel's settings use (a copy of each is kept on the panel).
+pub fn used_sounds(s: &UiState) -> Vec<String> {
+    let mut out: Vec<String> = s.settings.alarms.iter().map(|a| a.tone.clone()).collect();
+    if let Some(pages) = s.panel_config.as_ref().and_then(|c| c.get("pages")).and_then(Value::as_array) {
+        out.extend(pages.iter().filter_map(|p| p.get("options")?.get("sound")?.as_str().map(str::to_string)));
+    }
+    // the shared critical alerts' own sounds, so they ring without Home Assistant too
+    if let Some(list) = s.panel_config.as_ref().and_then(|c| c.get("keep_sounds")).and_then(Value::as_array) {
+        out.extend(list.iter().filter_map(Value::as_str).map(str::to_string));
+    }
+    out
+}
+
+/// The panel's own media player entity in Home Assistant (the integration tells it).
+fn media_player_entity(s: &UiState) -> String {
+    s.panel_config.as_ref().and_then(|c| c.get("media_player")).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+/// Starts or stops the looping sound: a sounding critical alert first, else a ringing timer or alarm.
+/// An alarm with music asks Music Assistant to play it on the panel (quiet at first, louder over
+/// 30 s); if no audio comes within 12 s, the alarm's default sound rings instead.
+fn loop_sound(s: &mut UiState, want: Option<String>) {
+    // the music of an alarm that rang: its default sound when it did not start
+    if let Some(asked) = s.music_asked {
+        if s.looping == want && asked.elapsed() > Duration::from_secs(12) && !media::flowing() {
+            s.music_asked = None;
+            eprintln!("nspanel-app: alarm music did not start, its default sound rings");
+            let default = want.as_deref().and_then(|k| k.rsplit_once('|')).map(|(_, d)| d.to_string()).unwrap_or_else(|| "birds".into());
+            let samples = sounds::resolve("auto", &default).unwrap_or_else(|| Arc::new(voice::beep()));
+            s.player.play(voice::Sound::Loop(samples));
+            return;
+        }
+    }
+    if s.looping == want {
+        return;
+    }
+    // the music of the alarm before ends with it
+    if s.music_asked.take().is_some() || s.looping.as_deref().is_some_and(|k| k.contains(":ma:")) {
+        media::halt(media::IDLE);
+        let entity = media_player_entity(s);
+        if !entity.is_empty() {
+            call("media_player", "media_stop", &entity, json!({}));
+        }
+    }
+    s.player.stop();
+    if let Some(key) = &want {
+        let tone = key.split_once(':').map(|(_, t)| t).unwrap_or(key);
+        let (value, default) = tone.rsplit_once('|').unwrap_or((tone, "marimba"));
+        let entity = media_player_entity(s);
+        match value.strip_prefix("ma:") {
+            Some(item) if !entity.is_empty() => {
+                eprintln!("nspanel-app: alarm music {item} on {entity}");
+                media::prepare_ramp(0.15, 30.0);
+                call("music_assistant", "play_media", &entity, json!({ "media_id": item, "enqueue": "replace" }));
+                s.music_asked = Some(Instant::now());
+            }
+            _ => {
+                let samples = sounds::resolve(value, default).unwrap_or_else(|| Arc::new(voice::beep()));
+                s.player.play(voice::Sound::Loop(samples));
+            }
+        }
+    }
+    s.looping = want;
+}
+
 fn ring_timer(ui: &AppWindow, s: &mut UiState, name: String) {
+    s.ring_tone = timer_tone(ui, s);
     s.ringing = Some(Instant::now());
     s.ringing_flag.store(true, Ordering::SeqCst);
     ui.set_timers_ring_alarm(false);
@@ -1057,6 +1140,10 @@ fn stop_ringing(ui: &AppWindow) {
     with_state(|s| {
         s.ringing = None;
         s.ringing_flag.store(false, Ordering::SeqCst);
+        // its sound stops at once (a sounding critical alert keeps its own)
+        if s.looping.as_deref().is_some_and(|k| k.starts_with("ring:")) {
+            loop_sound(s, None);
+        }
     });
     ui.set_timers_ringing(false);
 }
@@ -1422,6 +1509,12 @@ fn wake_phrase(ids: &[String]) -> String {
 fn handle_show(ui: &AppWindow, v: &Value) {
     if v["type"].as_str() == Some("touch_test") {
         start_touch_test(ui);
+        return;
+    }
+    // the alarms as edited in the integration (the panel keeps and rings them)
+    if v["type"].as_str() == Some("alarms") {
+        eprintln!("nspanel-app: alarms from Home Assistant ({})", v["list"].as_array().map_or(0, Vec::len));
+        alarms::set_all(ui, &v["list"]);
         return;
     }
     // status screens and critical alerts (the integration's house-wide rules)
@@ -1812,6 +1905,7 @@ fn report_device(s: &mut UiState) {
     d.mic_muted = s.settings.mic_muted;
     d.display_mode = s.settings.display_mode.clone();
     d.volume = s.settings.volume;
+    d.alarms = serde_json::to_value(&s.settings.alarms).unwrap_or_default();
     d.ready = true;
     let after = (
         d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone(),
@@ -2538,6 +2632,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             lap_at: 0.0,
             ringing: None,
             ringing_flag: ringing_flag.clone(),
+            ring_tone: String::new(),
+            looping: None,
+            music_asked: None,
             mic_muted: mic_muted.clone(),
             wake_words: wake_words.clone(),
             player: player.clone(),
@@ -2807,6 +2904,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let weak = ui.as_weak();
+    // uploaded sounds are fetched from Home Assistant with the panel's login
+    sounds::init(config.ha_url.clone(), auth.clone());
+    // the panel as a media player in Home Assistant (alarms with music, Music Assistant)
+    with_state(|s| media::init(s.device.clone(), s.device_notify.clone(), s.player.clone(), config.ha_url.clone()));
     let art_tx = artwork::spawn(config.ha_url.clone(), auth.clone(), move |img| {
         // RGBA in this thread: the renderer takes it without converting.
         let img = img.map(|b| cam::rgba(&b));

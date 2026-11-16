@@ -428,6 +428,10 @@ pub enum Sound {
     Pcm { rate: u32, channels: u16, data: Vec<u8> },
     Chime,
     Beep,
+    /// 48 kHz mono samples, played over and over until `stop()` (ringing timers, alarms, critical alerts).
+    Loop(Arc<Vec<i16>>),
+    /// 48 kHz mono pieces as they arrive (the media player's stream); it ends with the stream or a stop.
+    Stream(Receiver<Vec<i16>>),
 }
 
 /// Longest sound the panel plays from a file (an answer or announcement).
@@ -496,7 +500,7 @@ fn decode_mp3(bytes: &[u8]) -> Option<(u32, u16, Vec<u8>)> {
     (rate > 0 && channels > 0 && !out.is_empty()).then_some((rate, channels, out))
 }
 
-fn resample_to_48k(rate: u32, channels: u16, data: &[u8]) -> Vec<i16> {
+pub fn resample_to_48k(rate: u32, channels: u16, data: &[u8]) -> Vec<i16> {
     let frames: Vec<i16> = data
         .chunks_exact(2 * channels as usize)
         .map(|f| {
@@ -545,7 +549,7 @@ fn chime() -> Vec<i16> {
     out
 }
 
-fn beep() -> Vec<i16> {
+pub fn beep() -> Vec<i16> {
     let mut out = Vec::new();
     for i in 0..48 * 400 {
         let on = (i / (48 * 100)) % 2 == 0;
@@ -598,12 +602,17 @@ impl Player {
                 if gen < stop2.load(Ordering::SeqCst) {
                     continue; // queued before a stop
                 }
-                let mono = match sound {
-                    Sound::Pcm16k(b) => upsample(&b),
-                    Sound::Pcm { rate, channels, data } => resample_to_48k(rate, channels, &data),
-                    Sound::Chime => chime(),
-                    Sound::Beep => beep(),
+                let (mut mono, looped, stream): (Arc<Vec<i16>>, bool, Option<Receiver<Vec<i16>>>) = match sound {
+                    Sound::Pcm16k(b) => (Arc::new(upsample(&b)), false, None),
+                    Sound::Pcm { rate, channels, data } => (Arc::new(resample_to_48k(rate, channels, &data)), false, None),
+                    Sound::Chime => (Arc::new(chime()), false, None),
+                    Sound::Beep => (Arc::new(beep()), false, None),
+                    Sound::Loop(samples) => (samples, true, None),
+                    Sound::Stream(rx) => (Arc::new(Vec::new()), false, Some(rx)),
                 };
+                if mono.is_empty() && stream.is_none() {
+                    continue;
+                }
                 if pcm.is_none() {
                     pcm = (|| -> alsa::Result<PCM> {
                         let p = PCM::new(PLAYBACK_DEVICE, Direction::Playback, false)?;
@@ -623,19 +632,47 @@ impl Player {
                     .ok();
                 }
                 let Some(p) = pcm.as_ref() else { continue };
-                let stereo: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
                 let io = match p.io_i16() {
                     Ok(io) => io,
                     Err(_) => continue,
                 };
+                let mut first_piece = true;
+                'pieces: loop {
+                // a stream: the next piece; the first waits for half a second of audio, so short
+                // stalls of the network do not empty the speaker
+                if let Some(rx) = &stream {
+                    let mut got: Vec<i16> = Vec::new();
+                    let want = if first_piece { 24000 } else { 1 };
+                    first_piece = false;
+                    while got.len() < want {
+                        match rx.recv_timeout(Duration::from_secs(30)) {
+                            Ok(piece) => got.extend(piece),
+                            Err(_) => break,
+                        }
+                    }
+                    if got.is_empty() || gen < stop2.load(Ordering::SeqCst) {
+                        break 'pieces;
+                    }
+                    mono = Arc::new(got);
+                }
+                let stereo: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
+                let mut stopped = false;
                 // 10 ms at a time; each written piece also goes to the echo
-                // reference (48 kHz → 16 kHz, mean of three samples).
+                // reference (48 kHz → 16 kHz, mean of three samples). A looped
+                // sound starts over until a stop.
                 let mut offset = 0;
-                while offset < stereo.len() {
+                loop {
+                    if offset >= stereo.len() {
+                        if !looped {
+                            break;
+                        }
+                        offset = 0;
+                    }
                     if gen < stop2.load(Ordering::SeqCst) {
                         let _ = p.drop();
                         let _ = p.prepare();
                         echo2.lock().unwrap().clear();
+                        stopped = true;
                         break;
                     }
                     let end = (offset + 960).min(stereo.len());
@@ -657,6 +694,10 @@ impl Player {
                             let _ = p.prepare();
                         }
                     }
+                }
+                if stopped || stream.is_none() {
+                    break 'pieces;
+                }
                 }
             }
         });

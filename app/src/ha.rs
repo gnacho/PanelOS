@@ -306,9 +306,15 @@ fn session(
                 match msg["type"].as_str() {
                     Some("result") if report_answer => {
                         if msg["success"] == false {
-                            // An older integration without panelos/report.
-                            eprintln!("nspanel-app: device report not accepted: {}", msg["error"]["message"]);
-                            report.linked = false;
+                            let why = msg["error"]["message"].as_str().unwrap_or("").to_string();
+                            eprintln!("nspanel-app: device report not accepted: {why}");
+                            if why.contains("alarms") && !report.no_alarms {
+                                // An integration from before the alarms: everything again, without them.
+                                report = Report { linked: true, no_alarms: true, ..Default::default() };
+                            } else {
+                                // An older integration without panelos/report.
+                                report.linked = false;
+                            }
                         }
                     }
                     Some("event") if msg["id"] == sub_id => {
@@ -418,6 +424,10 @@ struct Report {
     dashboard: Option<String>,
     states: Map<String, Value>,
     options: Map<String, Value>,
+    /// The alarms last sent.
+    alarms: Option<Value>,
+    /// The integration does not take alarms (older than the alarms on its page).
+    no_alarms: bool,
     pending: HashSet<u64>,
     checked: Option<Instant>,
 }
@@ -440,7 +450,8 @@ impl Report {
         let states = changed(crate::panel_device::states(&snapshot), &mut self.states);
         let options = changed(crate::panel_device::options(&snapshot), &mut self.options);
         let dashboard = (self.dashboard.as_deref() != Some(snapshot.web_dashboard.as_str())).then(|| snapshot.web_dashboard.clone());
-        if states.is_empty() && options.is_empty() && dashboard.is_none() && self.device_sent {
+        let alarms = (!self.no_alarms && !snapshot.alarms.is_null() && self.alarms.as_ref() != Some(&snapshot.alarms)).then(|| snapshot.alarms.clone());
+        if states.is_empty() && options.is_empty() && dashboard.is_none() && alarms.is_none() && self.device_sent {
             return None;
         }
         let mut msg = json!({"type": "panelos/report", "panel_id": PANEL_ID});
@@ -454,6 +465,10 @@ impl Report {
         }
         if !options.is_empty() {
             msg["options"] = options.into();
+        }
+        if let Some(a) = alarms {
+            msg["alarms"] = a.clone();
+            self.alarms = Some(a);
         }
         if !states.is_empty() {
             msg["states"] = states.into();

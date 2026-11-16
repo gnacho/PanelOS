@@ -748,6 +748,7 @@ export component TimersPage inherits Rectangle {
             background: root.edit-sound == root.sounds.length ? root.edit-tint : transparent; border-width: root.edit-sound == root.sounds.length ? 0px : 1px; border-color: TFg.c.with-alpha(0.25);
             Icon { x: 12px; width: 18px; height: parent.height; text: "\u{F07D0}"; font-size: 16px; color: root.edit-sound == root.sounds.length ? #ffffff : TFg.c; }
             hs := Text { x: 34px; width: parent.width - 48px; height: parent.height; text: root.edit-ha-sound; font-size: 14px; font-weight: 500; color: root.edit-sound == root.sounds.length ? #ffffff : TFg.c; vertical-alignment: center; overflow: elide; }
+            TouchArea { clicked => { Act.act("alarm.sound", root.sounds.length); } }
         }
         // label: a tap opens the keyboard
         Rectangle {

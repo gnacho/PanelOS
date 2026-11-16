@@ -421,6 +421,7 @@ export component AppWindow inherits Window {
     in property <string> timers-edit-label;
     in property <int> timers-edit-sound;
     in property <string> timers-edit-ha-sound;
+    in property <bool> timers-ha-sounds;
     in property <bool> timers-edit-keyboard;
     in property <bool> timers-edit-info;
     in property <color> timers-edit-tint: #ffb21e;
@@ -581,7 +582,7 @@ export component AppWindow inherits Window {
     callback hidden-focus-field(int);
 
     pure function on-color(p: PageSlot) -> bool {
-        (p.kind == "weather" && p.variant == 1) || p.kind == "home" || (p.kind == "music" && !(p.variant == 1 && !Theme.dark)) || (p.kind == "timers" && (root.timers-ringing || (p.variant == 3 && root.timers-mode == 1))) || (p.kind == "thermostat" && p.variant == 3) || (p.kind == "todo" && p.variant == 2) || (p.kind == "calendar" && p.variant == 1) || (p.kind == "info" && (root.info-critical || p.variant == 3)) || root.status-on || (p.kind == "quick" && p.variant > 0) || (p.kind == "camera" && (root.cam-ring || (root.cam-view == 0 && root.cam-items.length > 0 && root.cam-items[root.cam-sel].state == 0 && (root.cam-fit == 0 || Theme.dark))))
+        (p.kind == "weather" && p.variant == 1) || (p.kind == "home" && !((p.theme >= 0 ? p.theme : root.weather.theme) == 9 && !Theme.dark)) || (p.kind == "music" && !(p.variant == 1 && !Theme.dark)) || (p.kind == "timers" && (root.timers-ringing || (p.variant == 3 && root.timers-mode == 1))) || (p.kind == "thermostat" && p.variant == 3) || (p.kind == "todo" && p.variant == 2) || (p.kind == "calendar" && p.variant == 1) || (p.kind == "info" && (root.info-critical || p.variant == 3)) || root.status-on || (p.kind == "quick" && p.variant > 0) || (p.kind == "camera" && (root.cam-ring || (root.cam-view == 0 && root.cam-items.length > 0 && root.cam-items[root.cam-sel].state == 0 && (root.cam-fit == 0 || Theme.dark))))
     }
 
     // ---- the pages, side by side ----
@@ -645,7 +646,43 @@ export component AppWindow inherits Window {
                 // several weather pages may each have their own background and widgets
                 property <int> home-theme: slot.theme >= 0 ? slot.theme : root.weather.theme;
                 property <[HomeItem]> home-items: slot.layout >= 0 && slot.layout < root.home-layouts.length ? root.home-layouts[slot.layout].items : root.home-items;
-                if slot.kind == "home" && home-slot.home-theme != 8: sky := PhotoSky {
+                // the plain background: one colour, the panel's own ground (Night or Paper), the widgets in Ink on Paper
+                if slot.kind == "home" && home-slot.home-theme == 9: Rectangle {
+                    background: Theme.background;
+                    HomeGrid {
+                        items: home-slot.home-items;
+                        data: root.weather;
+                        clock: root.clock;
+                        event: root.home-event;
+                        music: root.home-music;
+                        seconds: root.clock-sec;
+                        music-pos: root.home-music-pos;
+                        weekday-long: root.home-weekday;
+                        day-month: root.home-day-month;
+                        accent: root.clock-accent;
+                        halo: 0;
+                        ink: Theme.dark ? #ffffff : #101114;
+                        year: root.home-year;
+                        week: root.home-week;
+                        editing: root.home-editing;
+                        ha-mode: root.home-ha;
+                        selected: root.home-selected;
+                        picker-scroll: root.home-picker-scroll;
+                        lock: root.home-lock;
+                        lock-p: root.home-lock-p;
+                        lock-title: root.home-lock-title;
+                        lock-sub: root.home-lock-sub;
+                        settings: root.home-settings;
+                        info: root.home-info;
+                        lifted: root.home-lifted;
+                        lift-dx: root.home-lift-dx;
+                        lift-dy: root.home-lift-dy;
+                        drop-col: root.home-drop-col;
+                        drop-row: root.home-drop-row;
+                        picker: root.home-picker;
+                    }
+                }
+                if slot.kind == "home" && home-slot.home-theme != 8 && home-slot.home-theme != 9: sky := PhotoSky {
                     mood: root.weather.mood;
                     theme: home-slot.home-theme;
                     rain: root.weather.rain;
@@ -782,7 +819,7 @@ export component AppWindow inherits Window {
                     sw-scene: root.timers-sw-scene; sw-choice: root.timers-sw-choice; sw-back: root.timers-sw-back; sw-floor: root.timers-sw-floor; sw-t: root.timers-sw-t;
                     sw-cars: root.timers-sw-cars; sw-palm-l: root.timers-sw-palm-l; sw-palm-r: root.timers-sw-palm-r;
                     edit: root.timers-edit; edit-new: root.timers-edit-new; edit-timer: root.timers-edit-timer; edit-h <=> root.timers-edit-h; edit-m <=> root.timers-edit-m; edit-days: root.timers-edit-days;
-                    edit-label: root.timers-edit-label; edit-sound: root.timers-edit-sound; edit-ha-sound: root.timers-edit-ha-sound; edit-keyboard: root.timers-edit-keyboard; kb-layer: root.timers-kb-layer;
+                    edit-label: root.timers-edit-label; edit-sound: root.timers-edit-sound; edit-ha-sound: root.timers-edit-ha-sound; ha-sounds: root.timers-ha-sounds; edit-keyboard: root.timers-edit-keyboard; kb-layer: root.timers-kb-layer;
                     edit-info: root.timers-edit-info; edit-tint: root.timers-edit-tint;
                 }
                 if slot.kind == "thermostat" && slot.variant == 3: FastLane {

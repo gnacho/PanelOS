@@ -96,7 +96,7 @@ pub fn page_slots(config: Option<&Value>) -> Vec<PageSlot> {
                         kind: kind.into(),
                         variant: p.get("variant").and_then(Value::as_i64).unwrap_or(0) as i32,
                         theme: if kind == "home" {
-                            opts.and_then(|o| o.get("theme")).and_then(Value::as_i64).map(|t| t.clamp(0, 8) as i32).unwrap_or(-1)
+                            opts.and_then(|o| o.get("theme")).and_then(Value::as_i64).map(|t| t.clamp(0, 9) as i32).unwrap_or(-1)
                         } else {
                             -1
                         },

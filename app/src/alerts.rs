@@ -41,6 +41,9 @@ pub struct Critical {
     hold: bool,
     silenced: bool,
     since: i64,
+    /// Whether it sounds at all, and its sound (as the integration names sounds; default SOS).
+    sound: bool,
+    tone: String,
 }
 
 /// The panel's own text pack per category (the integration's ids).
@@ -165,6 +168,8 @@ pub fn show(ui: &AppWindow, v: &Value) {
                 hold: v["hold"].as_bool().unwrap_or(true),
                 silenced: false,
                 since: now(),
+                sound: v["sound"].as_bool().unwrap_or(true),
+                tone: v["tone"].as_str().unwrap_or("auto").chars().take(120).collect(),
             };
             critical_now = with_state(|s| {
                 // the same alert sent again keeps its silence
@@ -220,9 +225,9 @@ pub fn act(ui: &AppWindow, what: &str) {
     refresh(ui);
 }
 
-/// The screens and the strip from the active ones (on every change and once a second); whether the
-/// critical alert's sound goes on.
-pub fn refresh(ui: &AppWindow) -> bool {
+/// The screens and the strip from the active ones (on every change and once a second); the critical
+/// alert's sound while it sounds (not held, not silent).
+pub fn refresh(ui: &AppWindow) -> Option<String> {
     let (top, crit, strip_was) = with_state(|s| {
         s.statuses.retain(|x| x.countdown.map_or(true, |c| x.started.elapsed().as_secs() < c));
         (s.statuses.last().cloned(), s.critical.clone(), s.alert_strip)
@@ -303,5 +308,5 @@ pub fn refresh(ui: &AppWindow) -> bool {
         }
         None => {}
     }
-    crit_on
+    crit.filter(|c| crit_on && c.sound).map(|c| c.tone)
 }

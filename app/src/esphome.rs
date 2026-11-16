@@ -63,6 +63,12 @@ pub struct DeviceState {
     /// url_path of the dashboard the web view shows (for the integration's
     /// choice of card resources).
     pub web_dashboard: String,
+    /// The panel's alarms (they live on the panel; the integration shows and edits them).
+    pub alarms: serde_json::Value,
+    /// The media player (media.rs): state (api.proto MediaPlayerState), gain, muted.
+    pub media_state: i32,
+    pub media_volume: f32,
+    pub media_muted: bool,
 }
 
 /// Requests from Home Assistant, carried out on the UI thread.
@@ -95,6 +101,7 @@ enum Id {
     WakeLevel,
     WakeScore,
     WakeSnr,
+    Media,
 }
 
 // Keys and names as since the first version: Home Assistant knows the
@@ -106,7 +113,13 @@ const ENTITIES: &[(Id, u32, &str, &str, &str)] = &[
     (Id::WakeLevel, 20, "wake_level", "Wake level", "mdi:microphone"),
     (Id::WakeScore, 21, "wake_score", "Wake score", "mdi:target"),
     (Id::WakeSnr, 22, "wake_snr", "Wake SNR", "mdi:waveform"),
+    // Home Assistant and Music Assistant play on the panel's speaker (alarms with music).
+    (Id::Media, 23, "media_player", "Media player", "mdi:speaker"),
 ];
+
+/// What the media player can do (ESPHome media player feature flags, the same bits as Home
+/// Assistant's): pause, volume set, mute, play media, stop, play, announce.
+const MEDIA_FEATURES: u32 = 1 | 4 | 8 | 512 | 4096 | 16384 | 1_048_576;
 
 /// Last wake word level and score, for a (re)connecting Home Assistant.
 static LAST_WAKE: Mutex<Option<(f32, f32, Option<f32>)>> = Mutex::new(None);
@@ -119,12 +132,14 @@ const DIAGNOSTIC: i32 = EntityCategory::Diagnostic as i32;
 enum Value {
     Float(Option<f32>),
     Bool(bool),
+    Media(i32, u32, bool),
 }
 
 fn value_of(id: Id, s: &DeviceState) -> Option<Value> {
     Some(match id {
         Id::Volume => Value::Float(Some(s.volume as f32)),
         Id::MicMute => Value::Bool(s.mic_muted),
+        Id::Media => Value::Media(if s.media_state == 0 { crate::media::IDLE } else { s.media_state }, (s.media_volume * 100.0).round() as u32, s.media_muted),
         // Pushed by the voice thread (forward_voice), not diffed here.
         Id::WakeLevel | Id::WakeScore | Id::WakeSnr => return None,
     })
@@ -175,6 +190,23 @@ fn list_entities(stream: &mut Conn) -> io::Result<()> {
                 unit_of_measurement: "%".into(), mode: NumberMode::Slider as i32, ..Default::default()
             })?,
             Id::MicMute => send(stream, 17, &ListEntitiesSwitchResponse { object_id, key, name, icon, ..Default::default() })?,
+            Id::Media => {
+                // Home Assistant's media proxy turns any source into this: 48 kHz 16-bit stereo WAV
+                let format = |purpose: MediaPlayerFormatPurpose| MediaPlayerSupportedFormat {
+                    format: "wav".into(),
+                    sample_rate: 48000,
+                    num_channels: 2,
+                    purpose: purpose as i32,
+                    sample_bytes: 2,
+                    ..Default::default()
+                };
+                #[allow(deprecated)]
+                send(stream, 63, &ListEntitiesMediaPlayerResponse {
+                    object_id, key, name, icon, supports_pause: true, feature_flags: MEDIA_FEATURES,
+                    supported_formats: vec![format(MediaPlayerFormatPurpose::Default), format(MediaPlayerFormatPurpose::Announcement)],
+                    ..Default::default()
+                })?
+            }
             Id::WakeLevel | Id::WakeScore | Id::WakeSnr => {
                 let (unit, decimals) = match id {
                     Id::WakeLevel => ("dBFS", 1),
@@ -198,6 +230,9 @@ fn send_state(stream: &mut Conn, id: Id, key: u32, value: &Value) -> io::Result<
             key, state: v.unwrap_or(0.0), missing_state: v.is_none(), ..Default::default()
         }),
         (Id::MicMute, Value::Bool(v)) => send(stream, 26, &SwitchStateResponse { key, state: *v, ..Default::default() }),
+        (Id::Media, Value::Media(state, volume, muted)) => send(stream, 64, &MediaPlayerStateResponse {
+            key, state: *state, volume: *volume as f32 / 100.0, muted: *muted, ..Default::default()
+        }),
         (Id::WakeLevel | Id::WakeScore | Id::WakeSnr, Value::Float(v)) => send(stream, 25, &SensorStateResponse {
             key, state: v.unwrap_or(0.0), missing_state: v.is_none(), ..Default::default()
         }),
@@ -222,6 +257,18 @@ fn handle_command(kind: u32, payload: &[u8], control: &dyn Fn(Control)) {
             let Ok(m) = SwitchCommandRequest::decode(payload) else { return };
             if entity_by_key(m.key) == Some(Id::MicMute) {
                 setting("mic_muted", m.state.to_string());
+            }
+        }
+        65 => {
+            let Ok(m) = MediaPlayerCommandRequest::decode(payload) else { return };
+            if entity_by_key(m.key) == Some(Id::Media) {
+                eprintln!("nspanel-app: media command {:?} volume {:?} url {}", m.has_command.then_some(m.command), m.has_volume.then_some(m.volume), m.has_media_url);
+                crate::media::command(
+                    m.has_command.then_some(m.command),
+                    m.has_volume.then_some(m.volume),
+                    m.has_media_url.then(|| m.media_url.clone()),
+                    m.has_announcement && m.announcement,
+                );
             }
         }
         _ => {}
@@ -498,7 +545,7 @@ fn serve(
                         send_wake_info(&mut stream, level_dbfs, score, snr_db)?;
                     }
                 }
-                33 | 51 => handle_command(kind, &payload, control),
+                33 | 51 | 65 => handle_command(kind, &payload, control),
                 89 | 91 | 92 | 106 | 115 | 119 | 121 | 123 => {
                     handle_voice(kind, &payload, voice, &mut stream, control, &mut voice_subscribed)?
                 }
