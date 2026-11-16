@@ -122,8 +122,8 @@ def _media_player(entry: ConfigEntry) -> str:
     panel = getattr(entry, "runtime_data", None)
     if panel is None or not panel.device_id:
         return ""
-    devices = dr.async_get(panel.hass).devices
-    voice = {d.id for d in devices.values() if d.via_device_id == panel.device_id} | {panel.device_id}
+    # iterating the registry's devices (not using it as a mapping) is the supported way
+    voice = {d.id for d in dr.async_get(panel.hass).devices if d.via_device_id == panel.device_id} | {panel.device_id}
     for e in er.async_get(panel.hass).entities.values():
         if e.domain == "media_player" and e.device_id in voice and not e.disabled:
             return e.entity_id

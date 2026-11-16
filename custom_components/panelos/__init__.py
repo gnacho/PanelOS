@@ -59,6 +59,7 @@ from .const import (
     VIEWS,
 )
 from .house import House
+from .players import async_register_players_view
 from .sounds import async_register_views
 from .page import async_hide_page, async_setup_page, async_show_page
 from .panel import Panel, find_entry, links, panel_config
@@ -231,6 +232,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     async_register_admin_service(hass, DOMAIN, SERVICE_CLEAR_CRITICAL_ALERT, handle_critical, schema=CRITICAL_ACTION_SCHEMA)
     # Sounds uploaded on the page, fetched by the panels.
     async_register_views(hass)
+    async_register_players_view(hass)
     return True
 
 

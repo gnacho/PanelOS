@@ -2531,6 +2531,10 @@ class PanelOSPage extends HTMLElement {
         }),
         sw ? this._row("Cars", this._toggle(o.cars !== false, (v) => this._setPageOption(p, i, "cars", v), { label: "Cars" })) : null,
         sw ? this._row("Neon letters", this._toggle(o.neon !== false, (v) => this._setPageOption(p, i, "neon", v), { label: "Neon letters" })) : null,
+        // drawn, line and plain backgrounds: light or dark by the panel's theme, or always one of them
+        (Number(o.theme) >= 3 && Number(o.theme) !== 8) ? this._row("Light or dark", this._seg([["panel", "Panel setting"], ["light", "Light"], ["dark", "Dark"]], ["light", "dark"].includes(o.light) ? o.light : "panel",
+          (v) => this._setPageOption(p, i, "light", v === "panel" ? undefined : v), { label: "Light or dark" }),
+          { info: "Panel setting: the light scene with the panel's light theme, the dark one with its dark theme, and Auto follows the panel. Light or Dark keeps this background so." }) : null,
         sw || plain ? null : this._more(`bg:${p.entry_id}:${i}`, this._row("Real sun and moon", this._toggle(o.real_sun !== false, (v) => this._setPageOption(p, i, "real_sun", v), { label: "Real sun and moon" }),
           { info: "On: the sun and the moon stand where they really are in the sky. Off: they keep a fixed place." })));
     }
@@ -2587,7 +2591,12 @@ class PanelOSPage extends HTMLElement {
     return [this._card("Options", {},
       this._pageEntityRow(p, i, "Player", "media_player", "The panel's player"),
       (page.variant || 0) === 2 ? this._row("Wood", null, { stack: true }) : null,
-      (page.variant || 0) === 2 ? h("div", { class: "below" }, this._swatches(WOODS, o.wood || "walnut", (v) => this._setPageOption(p, i, "wood", v), { wood: true })) : null)];
+      (page.variant || 0) === 2 ? h("div", { class: "below" }, this._swatches(WOODS, o.wood || "walnut", (v) => this._setPageOption(p, i, "wood", v), { wood: true })) : null,
+      [3, 4].includes(page.variant || 0) ? this._row("Cover behind the cassette", this._toggle(o.cover_bg === true, (v) => this._setPageOption(p, i, "cover_bg", v), { label: "Cover behind the cassette" }),
+        { info: "On: the playing track's cover fills the screen behind the cassette. Off: the cassette's own backdrop." }) : null,
+      ((page.variant || 0) === 0 || ([3, 4].includes(page.variant || 0) && o.cover_bg === true))
+        ? this._row("Blurred cover", this._toggle(o.cover_blur !== false, (v) => this._setPageOption(p, i, "cover_blur", v), { label: "Blurred cover" }),
+          { info: "On: the cover behind the player is blurred into soft colour. Off: the cover stays recognisable, darkened." }) : null)];
   }
 
   _editTimers(p, page, i) {
