@@ -1583,11 +1583,11 @@ fn handle_event(ui: &AppWindow, event: Event) {
                         }
                     }
                 }
-                let weather = weather_entity(s);
-                let media = media_entity(s);
-                let touches = changes.iter().any(|(id, _)| {
-                    *id == weather || *id == media || id == "sun.sun" || id == "zone.home" || id.starts_with("person.")
-                });
+                // any entity a page shows or follows (weather, player, people, tiles, thermostats, cameras,
+                // the doorbell): the pages at once, not at the next minute's refresh (a short ring
+                // would be missed in between)
+                let used = extra_entities(s);
+                let touches = changes.iter().any(|(id, _)| id.starts_with("person.") || used.iter().any(|u| u == id));
                 (touches, new_person)
             });
             let (touches, new_person) = watched;

@@ -846,7 +846,7 @@ button.chip:hover { border-color: var(--signal-line); }
 .stpv .mdi { --mdc-icon-size: 64px; }
 .stpv b { font-family: "PanelOS Heading", sans-serif; font-weight: 500; font-size: 19px; line-height: 1.2; overflow-wrap: anywhere; }
 .stpv small { font-size: 13px; opacity: .85; overflow-wrap: anywhere; }
-.stpv .bt { margin-top: 4px; border: 1.5px solid rgba(255,255,255,.7); border-radius: 999px; padding: 4px 14px; font-size: 12.5px; }
+.stpv .bt { margin-top: 4px; background: #F5F3EE; color: #101114; font-weight: 600; border-radius: 999px; padding: 4px 14px; font-size: 12.5px; }
 .note { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 .yaml { font-family: ui-monospace, "DejaVu Sans Mono", monospace; font-size: 12.5px; background: var(--sunken); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .tilegrid { display: grid; gap: 8px; padding: 4px 0 12px; }
@@ -3294,5 +3294,6 @@ class PanelOSPage extends HTMLElement {
   }
 }
 
-customElements.define("panelos-page", PanelOSPage);
-             
+// a tab left open over an update loads the new script beside the old one: the element stays the one
+// already defined until the page is reloaded
+if (!customElements.get("panelos-page")) customElements.define("panelos-page", PanelOSPage);
