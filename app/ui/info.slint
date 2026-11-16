@@ -51,9 +51,10 @@ component NoteRow inherits Rectangle {
     if root.n.unread: Rectangle { x: parent.width - 18px; y: 19px; width: 8px; height: 8px; border-radius: 4px; background: Theme.accent; }
 }
 
-// the pop-up card
-component NoteCard inherits Rectangle {
+// the pop-up card (also above any page for a new notification, with the prefix "pop")
+export component NoteCard inherits Rectangle {
     in property <InfoNote> n;
+    in property <string> prefix: "info";
     in property <int> index;
     in property <int> count;
     property <color> c: root.n.level == 1 ? Theme.warning : #4a8fe7;
@@ -72,7 +73,7 @@ component NoteCard inherits Rectangle {
         if root.n.has-image: Image { height: 196px; source: root.n.image; }
         HorizontalLayout { spacing: 8px; alignment: end; padding-top: 4px;
             for a[i] in root.n.actions: Rectangle { height: 44px; width: at.preferred-width + 36px; border-radius: 22px;
-                TouchArea { clicked => { Act.act("info.action", i); } }
+                TouchArea { clicked => { Act.act(root.prefix + ".action", i); } }
                 background: i == root.n.actions.length - 1 ? root.c : Theme.surface-raised;
                 at := Text { x: 18px; y: 0; width: self.preferred-width; height: parent.height; text: a; font-size: 15px; font-weight: 600;
                     color: i == root.n.actions.length - 1 ? (root.n.level == 1 ? #1d1d1f : #ffffff) : Theme.text; vertical-alignment: center; } } }

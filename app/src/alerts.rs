@@ -144,7 +144,8 @@ pub fn show(ui: &AppWindow, v: &Value) {
                     icon: if text("picto").starts_with("mdi:") { text("picto") } else { cat_icon(&cat).into() },
                     picto: if text("picto").starts_with("mdi:") { String::new() } else { text("picto") },
                     tint,
-                    button: if button { pick(text("button_label"), "buttons") } else { String::new() },
+                    // a kind without its own button words still gets its button
+                    button: if button { Some(pick(text("button_label"), "buttons")).filter(|b| !b.is_empty()).unwrap_or_else(|| "OK".into()) } else { String::new() },
                     countdown,
                     since: now(),
                     started: Instant::now(),

@@ -49,9 +49,10 @@ export component StatusPage inherits Rectangle {
                 st := Text { x: 12px; y: 0; width: self.preferred-width; height: parent.height; font-size: 13px; color: #ffffffd9; vertical-alignment: center;
                     text: root.s.left >= 0 ? root.s.left-text : root.s.since; } } }
     }
-    if root.btn: Rectangle { x: 90px; y: root.height - 86px; width: 300px; height: 56px; border-radius: 28px; background: #ffffff;
+    if root.btn: Rectangle { x: 90px; y: root.height - 86px; width: 300px; height: 56px; border-radius: 28px; background: #F5F3EE;
         TouchArea { clicked => { Act.act("status.fold", ""); } }
-        Text { x: 16px; y: 0; width: parent.width - 32px; height: parent.height; text: root.s.button; font-size: 17px; font-weight: 700; color: root.s.tint;
+        // a button's text stays Ink or Paper (brand guide)
+        Text { x: 16px; y: 0; width: parent.width - 32px; height: parent.height; text: root.s.button; font-size: 17px; font-weight: 700; color: #101114;
             horizontal-alignment: center; vertical-alignment: center; overflow: elide; } }
 }
 

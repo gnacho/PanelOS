@@ -285,7 +285,7 @@ pub fn dnd_allows(s: &UiState, what: &str) -> bool {
 
 /// A new notification from Home Assistant: a strip on top for a few seconds (the integration's
 /// "New notifications": strip / card / off, sound, seconds); silent and none in do not disturb.
-fn popup(ui: &AppWindow, title: &str, message: &str) {
+fn popup(ui: &AppWindow, id: &str, title: &str, message: &str) {
     let (kind, sound, seconds, quiet) = with_state(|s| {
         let p = s.panel_config.as_ref().and_then(|c| c.get("popups"));
         let kind = p.and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("strip").to_string();
@@ -294,6 +294,16 @@ fn popup(ui: &AppWindow, title: &str, message: &str) {
         (kind, sound, seconds, dnd_active(s) || s.screensaver || s.alert_strip)
     });
     if kind == "off" || quiet {
+        return;
+    }
+    if kind == "card" {
+        info::pop(ui, Some(id));
+        with_state(|s| {
+            s.show_until = Some(Instant::now() + Duration::from_secs(seconds));
+            if sound {
+                s.player.play(voice::Sound::Chime);
+            }
+        });
         return;
     }
     ui.set_strip_title(if title.is_empty() { "Home Assistant".into() } else { title.into() });
@@ -309,6 +319,23 @@ fn popup(ui: &AppWindow, title: &str, message: &str) {
             s.player.play(voice::Sound::Chime);
         }
     });
+}
+
+/// Home Assistant's notifications changed (`current`, `added`, `removed`); a new one may pop up.
+fn notes_changed(ui: &AppWindow, kind: &str, notes: &Value) {
+    let fresh = if kind == "added" {
+        notes.as_object().and_then(|m| m.iter().last()).map(|(id, v)| {
+            let t = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+            (id.clone(), t("title"), t("message"))
+        })
+    } else {
+        None
+    };
+    info::update(kind, notes);
+    with_state(|s| info::refresh(ui, s));
+    if let Some((id, title, message)) = fresh {
+        popup(ui, &id, &title, &message);
+    }
 }
 
 fn page_option(s: &UiState, kind: &str, key: &str) -> Option<Value> {
@@ -1619,21 +1646,7 @@ fn handle_event(ui: &AppWindow, event: Event) {
                 None => eprintln!("nspanel-app: unknown command from Home Assistant: {key} = {value}"),
             }
         }
-        Event::Notes { kind, notes } => {
-            let fresh = if kind == "added" {
-                notes.as_object().and_then(|m| m.values().last()).map(|v| {
-                    let t = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-                    (t("title"), t("message"))
-                })
-            } else {
-                None
-            };
-            info::update(&kind, &notes);
-            with_state(|s| info::refresh(ui, s));
-            if let Some((title, message)) = fresh {
-                popup(ui, &title, &message);
-            }
-        }
+        Event::Notes { kind, notes } => notes_changed(ui, &kind, &notes),
         Event::Forecast { hourly, items } => {
             with_state(|s| if hourly { s.forecast_hourly = items } else { s.forecast_daily = items });
             refresh_pages(ui);
@@ -1748,6 +1761,7 @@ fn start_screensaver(ui: &AppWindow, s: &mut UiState) {
     s.show_until = None;
     ui.set_set_view(0);
     ui.set_strip_on(false);
+    info::pop(ui, None);
     let style = s.panel_config.as_ref().and_then(|c| c.get("saver_style")).and_then(Value::as_i64).unwrap_or(1) as i32;
     ui.set_saver_style(style);
     ui.set_screensaver_on(true);
@@ -1959,6 +1973,7 @@ fn tick(ui: &AppWindow) {
         if s.show_until.is_some_and(|t| Instant::now() >= t) {
             s.show_until = None;
             ui.set_strip_on(false);
+            info::pop(ui, None);
             ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
         }
         let idle = platform::idle_time();
@@ -2244,6 +2259,7 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
         w if w.starts_with("cal.") => cal::act(ui, w, value),
         w if w.starts_with("todo.") => todo::act(ui, w, value),
         w if w.starts_with("info.") => info::act(ui, w, value),
+        w if w.starts_with("pop.") => info::pop_act(ui, w, value),
         "shade.close" => ui.set_set_view(0),
         "music.picker" | "music.picker-close" | "music.show" | "music.transfer" | "music.group" => mus::act(ui, what, value),
         "music.play" | "music.next" | "music.prev" | "music.shuffle" | "music.repeat" | "music.volume" | "music.seek" => {
@@ -2669,6 +2685,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(p) = v.get("page").and_then(Value::as_i64) {
                 ui.set_page(p as i32);
             }
+            // Development: a notification change as if Home Assistant sent it
+            // ({"notes": {"kind": "added", "notes": {"id": {"title": …, "message": …}}}}).
+            if let Some(n) = v.get("notes") {
+                notes_changed(&ui, n["kind"].as_str().unwrap_or("added"), &n["notes"]);
+            }
             // Development: the system screens on demand, frame statistics.
             if let Some(b) = v.get("connecting").and_then(Value::as_bool) {
                 with_state(|s| s.dev_screens = true);
@@ -2867,6 +2888,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         || ui.get_set_view() > 0
                         || ui.get_screensaver_on()
                         || ui.get_strip_on()
+                        || ui.get_pop_on()
                         || ui.get_voice_on()
                         || ui.get_timers_ringing()
                         || ui.get_setup()

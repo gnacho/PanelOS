@@ -24,7 +24,7 @@ import { ClimateDev, ClimateRoom, ThermostatPage } from "thermostat.slint";
 import { CamItem, CamAction, CameraPage } from "camera.slint";
 import { TodoItem, TodoList, TodoPage } from "todo.slint";
 import { CalEvent, CalDay, CalCell, CalBoard, WallCell, CalendarPage } from "calendar.slint";
-import { InfoNote, InfoPage } from "info.slint";
+import { InfoNote, InfoPage, NoteCard } from "info.slint";
 import { StatusScreen, StatusPage, TopStrip } from "status.slint";
 import { VoicePage } from "voice.slint";
 import { QuickTile, QuickGroup, QuickPage } from "quick.slint";
@@ -128,6 +128,9 @@ export component AppWindow inherits Window {
     in property <string> info-empty-title;
     in property <string> info-empty-sub;
     in property <bool> info-card;
+    // a new notification as a card above any page (the panel's "card" setting for new notifications)
+    in property <bool> pop-on;
+    in property <InfoNote> pop-note;
     in property <InfoNote> info-card-note;
     in property <int> info-card-index;
     in property <int> info-card-count;
@@ -973,6 +976,8 @@ export component AppWindow inherits Window {
 
     // ---- layers ----
 
+    if root.pop-on: Rectangle { background: Theme.scrim; TouchArea { clicked => { root.act("pop.close", ""); } } }
+    if root.pop-on: NoteCard { x: 16px; y: root.height - self.height - 24px; width: root.width - 32px; n: root.pop-note; index: 1; count: 1; prefix: "pop"; }
     if root.voice-on: VoicePage {
         x: 0; y: 0; width: root.width; height: root.height;
         look: root.voice-look; state: root.voice-state; assistant: root.voice-assistant; heard: root.voice-heard; answer: root.voice-answer;

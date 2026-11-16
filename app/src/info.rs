@@ -25,6 +25,8 @@ thread_local! {
     static OPEN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static FIRST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FRIDGE_EMPTY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    /// The new notification shown as a card above any page (its id).
+    static POP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
 
 /// The buttons of an open note: dismiss it in Home Assistant, or just close it.
@@ -101,8 +103,46 @@ fn note_row(n: &Note, look: i32, big: bool) -> InfoNote {
     }
 }
 
+/// A new notification as a card above any page (the panel's "card" setting), or none.
+pub fn pop(ui: &AppWindow, id: Option<&str>) {
+    let list = ordered();
+    match id.and_then(|id| list.iter().find(|(k, _)| k == id)) {
+        Some((k, n)) => {
+            POP.with(|p| *p.borrow_mut() = Some(k.clone()));
+            ui.set_pop_note(note_row(n, 0, true));
+            ui.set_pop_on(true);
+        }
+        None => {
+            POP.with(|p| *p.borrow_mut() = None);
+            ui.set_pop_on(false);
+        }
+    }
+}
+
+/// The card's taps (`pop.*`): Dismiss dismisses the notification in Home Assistant, OK or a tap beside it closes the card.
+pub fn pop_act(ui: &AppWindow, what: &str, value: &str) {
+    if what == "pop.action" && value == "0" {
+        if let Some(id) = POP.with(|p| p.borrow().clone()) {
+            crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id }));
+        }
+    }
+    pop(ui, None);
+    // its time on screen is over (unless a strip from Home Assistant still counts it)
+    with_state(|s| {
+        if !ui.get_strip_on() {
+            s.show_until = None;
+        }
+    });
+}
+
 /// The notifications page (only when the panel has one).
 pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
+    // the card goes when its notification is gone (dismissed elsewhere)
+    if let Some(id) = POP.with(|p| p.borrow().clone()) {
+        if !NOTES.with(|n| n.borrow().contains_key(&id)) {
+            pop(ui, None);
+        }
+    }
     let pages = ui.get_pages();
     let Some(slot) = (0..slint::Model::row_count(&pages)).filter_map(|i| slint::Model::row_data(&pages, i)).find(|p| p.kind == "info")
     else {
