@@ -36,7 +36,7 @@ const NEEDS_REASON = {
 
 // The page types (PAGE_KINDS in const.py). "home" is shown as Weather.
 const PAGE_TYPES = {
-  home: { name: "Weather", icon: "weather-partly-cloudy", desc: "Clock, weather and your widgets on a living background.", needs: [] },
+  home: { name: "Custom", icon: "weather-partly-cloudy", desc: "Clock, weather and your widgets on a living background.", needs: [] },
   quick: { name: "Quick controls", icon: "toggle-switch-outline", desc: "Lights, shutters and devices at a tap.", needs: [] },
   music: { name: "Music", icon: "music", desc: "What plays, with the controls.", needs: [] },
   timers: { name: "Timers and alarms", icon: "timer-outline", desc: "Timers, alarms and a stopwatch.", needs: ["speaker"] },
@@ -1997,7 +1997,7 @@ class PanelOSPage extends HTMLElement {
     return [
       this._hero("Pages", [h("span", null, this._pname(p)), h("span", null, `${shown} of ${pages.length} shown`), this._syncLine(p)]),
       this._card("Swipe order", {
-        info: "The panel shows these pages in this order; swipe left and right between them. After the last page the first comes again, in both directions. The first page is the start page: it stays first and the panel returns to it. A page type can be added more than once, for example two Weather pages with different backgrounds. A hidden page keeps its settings.",
+        info: "The panel shows these pages in this order; swipe left and right between them. After the last page the first comes again, in both directions. The first page is the start page: it stays first and the panel returns to it. A page type can be added more than once, for example two Custom pages with different backgrounds. A hidden page keeps its settings.",
         acts: this._btn("Add a page", () => this._openSheet({ kind: "catalogue", panel: p.entry_id }), { cls: "small", icon: "plus", disabled: pages.length >= max, title: pages.length >= max ? `At most ${max} pages` : null }),
       },
       h("div", { class: "plist" }, pages.map((page, i) => {
@@ -3105,7 +3105,7 @@ class PanelOSPage extends HTMLElement {
   _openCopy(from, pageIndex = null) {
     const others = this._panels.filter((x) => x.entry_id !== from.entry_id).map((x) => x.entry_id);
     this._openSheet({ kind: "copy", from: from.entry_id, to: others.slice(0, 1), page: pageIndex,
-      what: pageIndex != null ? { pages: true } : { pages: true, display: false, voice: false, dnd: false, popups: false, dashboard: false } });
+      what: pageIndex != null ? { pages: true } : { pages: true, display: true, voice: true, dnd: true, popups: true, dashboard: true } });
   }
 
   // What copying does on one panel: [y copied / a adapted / n skipped, text, why].
@@ -3132,8 +3132,8 @@ class PanelOSPage extends HTMLElement {
           const ha = this._ents(["sensor"], { p: to, filter: (st) => st.attributes?.device_class === "illuminance" }).find((e) => e.area && e.area === this._pareaId(to));
           out.push(["a", ha ? `Screensaver in the dark: light from ${ha.name}` : "Screensaver: sunset to sunrise instead of in the dark", this._reason(to, "light")]);
         } else out.push(["y", "When the screensaver may start"]);
-        if (!to.connected) out.push(["n", "Theme, brightness and screensaver style", `${tn} is offline; they are the panel's own settings.`]);
-        else out.push(["y", "Theme, brightness and screensaver style"]);
+        if (!to.connected) out.push(["n", "Theme, brightness, screensaver timing and style, waking", `${tn} is offline; they are the panel's own settings.`]);
+        else out.push(["y", "Theme, brightness, screensaver timing and style, waking"]);
       }
       if (what.voice) out.push(this._has(to, "mic") ? ["y", "Voice look"] : ["n", "Voice look", this._reason(to, "mic")]);
       if (what.dnd) out.push(["y", "Do not disturb"]);

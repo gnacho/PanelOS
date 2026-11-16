@@ -175,7 +175,7 @@ def _page(value: Any) -> dict[str, Any]:
         raise vol.Invalid("the page's options are too large")
     if "items" in page["options"]:
         if page["kind"] != "home":
-            raise vol.Invalid("only weather pages have widgets")
+            raise vol.Invalid("only custom pages have widgets")
         page["options"]["items"] = _home_items(page["options"]["items"])
     return page
 
