@@ -64,7 +64,7 @@ export component QuickPage inherits Rectangle {
     in property <image> screw;
 
     // ------------------------------------------------------------------ 0 tiles
-    if root.look == 0: Rectangle {
+    if root.look == 0: tlook := Rectangle {
         Text { x: 20px; y: 46px; width: 300px; height: 30px; text: root.title; font-size: 20px; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; }
         Rectangle { x: parent.width - 108px; y: 46px; width: 88px; height: 30px; border-radius: 15px;
             background: alloff.pressed ? Theme.text.with-alpha(0.16) : Theme.text.with-alpha(0.08);
@@ -76,6 +76,7 @@ export component QuickPage inherits Rectangle {
             y: root.grid == 0 ? 86px + floor(i / 2) * 88px : 86px + t.row * 88px;
             width: self.wide ? 214px : 101px; height: 80px; border-radius: 16px;
             background: t.gone ? Theme.text.with-alpha(0.04) : t.on ? t.tint.with-alpha(Theme.dark ? 0.26 : 0.20) : Theme.text.with-alpha(0.07);
+            animate background { duration: 120ms; easing: ease-out; }
             opacity: tile-touch.pressed ? 0.8 : 1;
             property <bool> held;
             tile-touch := TouchArea {
@@ -86,6 +87,7 @@ export component QuickPage inherits Rectangle {
             Rectangle { x: tile.wide ? 12px : (parent.width - self.width) / 2; y: tile.wide ? (parent.height - 44px) / 2 : 7px;
                 width: tile.wide ? 44px : 36px; height: self.width; border-radius: self.width / 2;
                 background: t.gone ? Theme.text.with-alpha(0.08) : t.on ? t.tint : Theme.text.with-alpha(0.10);
+                animate background { duration: 120ms; easing: ease-out; }
                 Icon { text: t.icon; font-size: tile.wide ? 24px : 20px; color: t.on ? #ffffff : Theme.text.with-alpha(t.gone ? 0.35 : 0.75); } }
             if tile.wide: Text { x: 66px; y: 17px; width: parent.width - 76px; text: t.name; font-size: 15px; font-weight: 600; color: Theme.text.with-alpha(t.gone ? 0.45 : 1); overflow: elide; }
             if tile.wide: Text { x: 66px; y: 40px; width: parent.width - 76px; text: t.state; font-size: 13px; color: t.on ? Theme.text.with-alpha(0.85) : Theme.muted; overflow: elide; }
@@ -101,12 +103,17 @@ export component QuickPage inherits Rectangle {
         if root.mood != "": Text { x: 20px; y: 438px; width: parent.width - 40px; height: 18px; text: root.mood; font-size: 13px; color: Theme.muted;
             horizontal-alignment: center; overflow: elide; }
         // details on a long press: a sheet sized to what the entity can do
-        if root.sheet: sheet := Rectangle { background: #00000066;
+        // the sheet slides up (240 ms) and back down (200 ms) over a fading backdrop instead of popping
+        property <float> sheet-k: root.sheet ? 1 : 0;
+        animate sheet-k { duration: root.sheet ? 240ms : 200ms; easing: ease-out; }
+        if tlook.sheet-k > 0.001: sheet := Rectangle {
+            property <float> k: parent.sheet-k;
+            Rectangle { background: #00000066; opacity: sheet.k; }
             TouchArea { clicked => { Act.act("quick.close", ""); } }
             property <bool> cover: root.sheet-tile.kind == 2;
             property <length> h: 84px + 88px + (root.sheet-temp >= 0 ? 56px : 0px) + (root.sheet-colours.length > 0 ? 54px : 0px)
                 + (root.sheet-effects.length > 0 ? 50px : 0px) + (self.cover ? 56px : 0px) + 8px;
-            Rectangle { x: 0; y: parent.height - parent.h; width: parent.width; height: parent.h + 24px; border-radius: 24px; background: Theme.sheet;
+            Rectangle { x: 0; y: parent.height - parent.h * sheet.k; width: parent.width; height: parent.h + 24px; border-radius: 24px; background: Theme.sheet;
                 TouchArea { }
                 Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: Theme.text.with-alpha(0.2); }
                 Rectangle { x: 20px; y: 26px; width: 44px; height: 44px; border-radius: 22px; background: root.sheet-tile.on ? root.sheet-tile.tint : Theme.text.with-alpha(0.1);
@@ -118,14 +125,20 @@ export component QuickPage inherits Rectangle {
                     TouchArea { x: -10px; y: -10px; width: parent.width + 20px; height: parent.height + 20px; clicked => { Act.act("quick.toggle", root.sheet-index); } }
                     Rectangle { x: root.sheet-tile.on ? 28px : 2px; y: 2px; width: 26px; height: 26px; border-radius: 13px; background: #ffffff; } }
                 // the level slider: brightness / position / set temperature, always with its unit
-                Rectangle { x: 20px; y: 88px; width: parent.width - 40px; height: 72px; border-radius: 22px; background: Theme.text.with-alpha(0.08);
+                lv := Rectangle { x: 20px; y: 88px; width: parent.width - 40px; height: 72px; border-radius: 22px; background: Theme.text.with-alpha(0.08);
                     property <float> drag-v;
-                    property <float> shown: lvl.pressed ? self.drag-v : root.sheet-tile.value;
+                    // let go: the level stays where it was dropped until the device follows (or 3 s), then glides
+                    property <bool> hold;
+                    property <float> ha-v: root.sheet-tile.value;
+                    changed ha-v => { lv.hold = false; }
+                    Timer { interval: 3s; running: lv.hold; triggered => { lv.hold = false; } }
+                    property <float> shown: lvl.pressed || self.hold ? self.drag-v : root.sheet-tile.value;
+                    animate shown { duration: lvl.pressed ? 0ms : 200ms; easing: ease-out; }
                     Rectangle { x: 0; y: 0; width: max(44px, parent.width * parent.shown); height: parent.height; border-radius: 22px; background: root.sheet-tile.tint; }
                     lvl := TouchArea {
                         pointer-event(ev) => {
                             if ev.kind == PointerEventKind.down { parent.drag-v = max(0, min(1, self.mouse-x / self.width)); }
-                            else if ev.kind == PointerEventKind.up { Act.act("quick.level", root.sheet-index + ":" + parent.drag-v); }
+                            else if ev.kind == PointerEventKind.up { lv.hold = true; Act.act("quick.level", root.sheet-index + ":" + parent.drag-v); }
                         }
                         moved => { parent.drag-v = max(0, min(1, self.mouse-x / self.width)); }
                     }
@@ -182,6 +195,7 @@ export component QuickPage inherits Rectangle {
             property <bool> two: !t.dim && !t.gone;              // a plain switch: the fader has two places only
             Rectangle { x: 6px; y: 4px; width: 40px; height: 26px; border-radius: 4px; background: t.on ? ch.lit : #2b2f33; border-width: 1px; border-color: #0b0c0d;
                 drop-shadow-blur: t.on ? 10px : 0px; drop-shadow-color: ch.lit.with-alpha(0.8);
+                animate background, drop-shadow-blur { duration: 100ms; easing: ease-out; }
                 TouchArea { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; clicked => { Act.act("quick.toggle", i); } }
                 Text { text: t.gone ? "--" : t.on ? "ON" : "OFF"; font-size: 11px; font-weight: 800; color: t.on ? #111111 : #868e96; } }
             for k in 10: Rectangle { x: 20px; y: 40px + (9 - k) * 9px; width: 12px; height: 6px; border-radius: 1px;
@@ -190,13 +204,21 @@ export component QuickPage inherits Rectangle {
             for k in 11: Rectangle { visible: !ch.two || k == 0 || k == 10;
                 x: k == 0 || k == 10 || k == 5 ? 12px : 16px; y: 140px + k * 17px; width: k == 0 || k == 10 || k == 5 ? 6px : 4px; height: 1px; background: #6c757d; }
             property <float> drag-f;
-            property <float> level: fd.pressed ? self.drag-f : ch.two ? (t.on ? 1 : 0) : t.value;
+            property <float> ha-v: ch.two ? (t.on ? 1 : 0) : t.value;
+            property <bool> hold;
+            changed ha-v => { ch.hold = false; }
+            Timer { interval: 3s; running: ch.hold; triggered => { ch.hold = false; } }
+            property <float> level: fd.pressed || ch.hold ? self.drag-f : self.ha-v;
+            animate level { duration: fd.pressed ? 0ms : 150ms; easing: ease-out; }
             fd := TouchArea { x: 0; y: 126px; width: parent.width; height: 198px; enabled: !t.gone;
                 pointer-event(ev) => {
                     if ev.kind == PointerEventKind.down { ch.drag-f = max(0, min(1, 1 - (self.mouse-y - 14px) / 170px)); }
                     else if ev.kind == PointerEventKind.up {
-                        if ch.two { if (ch.drag-f > 0.5) != t.on { Act.act("quick.toggle", i); } }
-                        else { Act.act("quick.level", i + ":" + ch.drag-f); }
+                        if ch.two {
+                            // a switch: the fader settles at the end it is nearer to
+                            ch.drag-f = ch.drag-f > 0.5 ? 1 : 0;
+                            if (ch.drag-f > 0.5) != t.on { ch.hold = true; Act.act("quick.toggle", i); }
+                        } else { ch.hold = true; Act.act("quick.level", i + ":" + ch.drag-f); }
                     }
                 }
                 moved => { ch.drag-f = max(0, min(1, 1 - (self.mouse-y - 14px) / 170px)); }
@@ -226,15 +248,20 @@ export component QuickPage inherits Rectangle {
             Rectangle { x: 0; y: 0; width: 1.5px; height: 7px; background: #eceff1c0; }
             Rectangle { x: parent.width - 1.5px; y: 0; width: 1.5px; height: 7px; background: #eceff1c0; }
         }
-        for t[i] in root.tiles: Rectangle {
+        for t[i] in root.tiles: dk := Rectangle {
             x: 20px + mod(i, 4) * 112px; y: 104px + floor(i / 4) * 168px; width: 104px; height: 156px;
+            property <float> lit: t.on && !t.gone ? 1 : 0;
+            animate lit { duration: 100ms; easing: ease-out; }
+            property <float> up: t.on ? 1 : 0;
+            animate up { duration: 80ms; easing: ease-in-out; }
             // the lamp: lens + a glow in the light's own colour (green for everything else), amber when unavailable
             Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: t.gone ? root.lamp-amber : root.lamp-off; }
-            if t.on && !t.gone: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-glow; colorize: t.led; }
-            if t.on && !t.gone: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-spec; }
+            if dk.lit > 0.001: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-glow; colorize: t.led; opacity: dk.lit; }
+            if dk.lit > 0.001: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-spec; opacity: dk.lit; }
             // painted legends at both ends of the lever's travel
             Text { x: 0; y: 36px; width: parent.width; text: "ON"; font-size: 9px; font-weight: 800; color: #eceff1d0; horizontal-alignment: center; letter-spacing: 1px; }
-            Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: t.on ? root.toggle-up : root.toggle-down; opacity: t.gone ? 0.45 : 1;
+            if dk.up < 0.999: Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: root.toggle-down; opacity: (t.gone ? 0.45 : 1) * (1 - dk.up); }
+            Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: root.toggle-up; opacity: (t.gone ? 0.45 : 1) * dk.up;
                 TouchArea { x: -16px; y: -8px; width: parent.width + 32px; height: parent.height + 16px; enabled: !t.gone; clicked => { Act.act("quick.toggle", i); } } }
             Text { x: 0; y: 121px; width: parent.width; text: "OFF"; font-size: 9px; font-weight: 800; color: #eceff1d0; horizontal-alignment: center; letter-spacing: 1px; }
             Rectangle { x: 8px; y: 134px; width: parent.width - 16px; height: 20px; background: #16181a; border-radius: 2px; border-width: 1px; border-color: #00000080;

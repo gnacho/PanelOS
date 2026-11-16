@@ -752,8 +752,11 @@ export component ThermostatPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- options sheet
-    if root.sheet: Rectangle { background: #00000080; TouchArea { clicked => { Act.act("thermo.sheet-close", ""); } } }
-    if root.sheet: sh := Rectangle {
+    // the sheet fades in (240 ms) and out (200 ms) instead of popping
+    property <float> sheet-k: root.sheet ? 1 : 0;
+    animate sheet-k { duration: root.sheet ? 240ms : 200ms; easing: ease-out; }
+    if root.sheet-k > 0.001: Rectangle { opacity: root.sheet-k; background: #00000080; TouchArea { clicked => { Act.act("thermo.sheet-close", ""); } } }
+    if root.sheet-k > 0.001: sh := Rectangle { opacity: root.sheet-k;
         TouchArea { }
         property <length> r0: 72px;
         property <int> nrows: (root.d.fans.length > 0 ? 1 : 0) + (root.d.swings.length > 0 ? 1 : 0) + (root.d.presets.length > 0 ? 1 : 0);
@@ -786,8 +789,11 @@ export component ThermostatPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- settings: the look (+ scene and cars for the neon one)
-    if root.settings: Rectangle { background: #00000080; }
-    if root.settings: st := Rectangle {
+    // the settings fades in (240 ms) and out (200 ms) instead of popping
+    property <float> settings-k: root.settings ? 1 : 0;
+    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
+    if root.settings-k > 0.001: st := Rectangle { opacity: root.settings-k;
         property <bool> neon: root.look == 3;
         property <length> r0: 72px;
         property <length> need: (self.neon ? self.r0 + 40px + 54px + 40px + 54px + 32px : self.r0 + 40px + 32px) + 24px;
@@ -816,8 +822,11 @@ export component ThermostatPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- rooms (the device picker)
-    if root.picker: Rectangle { background: #00000099; TouchArea { clicked => { Act.act("thermo.picker-close", ""); } } }
-    if root.picker: pk := Rectangle {
+    // the picker fades in (240 ms) and out (200 ms) instead of popping
+    property <float> picker-k: root.picker ? 1 : 0;
+    animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
+    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k; background: #00000099; TouchArea { clicked => { Act.act("thermo.picker-close", ""); } } }
+    if root.picker-k > 0.001: pk := Rectangle { opacity: root.picker-k;
         TouchArea { }
         x: 0; y: 40px; width: root.width; height: root.height - 40px;
         border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1a1a1df7;

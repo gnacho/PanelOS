@@ -23,14 +23,12 @@ fn open(ui: &AppWindow) {
     let weak = ui.as_weak();
     std::thread::spawn(move || {
         let Ok(token) = auth.access_token() else { return };
-        // Only the media players, in Home Assistant's own words (a template):
-        // the whole state list is too big for the panel's Wi-Fi.
-        let template = r#"[{% for s in states.media_player if s.state != 'unavailable' %}{"entity_id":{{ s.entity_id|tojson }},"state":{{ s.state|tojson }},"attributes":{"friendly_name":{{ s.name|tojson }},"mass_player_type":{{ s.attributes.mass_player_type|default(none)|tojson }},"media_title":{{ s.attributes.media_title|default(none)|tojson }},"media_artist":{{ s.attributes.media_artist|default(none)|tojson }},"device_class":{{ s.attributes.device_class|default(none)|tojson }},"group_members":{{ s.attributes.group_members|default([])|list|tojson }}}}{% if not loop.last %},{% endif %}{% endfor %}]"#;
-        let resp = ureq::post(&format!("{url}/api/template"))
+        // Only the media players, from the PanelOS integration (the whole state list is too big for
+        // the panel's Wi-Fi; a template would need an administrator login, the panel has an ordinary one)
+        let resp = ureq::get(&format!("{url}/api/panelos/players"))
             .set("Authorization", &format!("Bearer {token}"))
-            .set("Content-Type", "application/json")
             .timeout(Duration::from_secs(10))
-            .send_string(&json!({ "template": template }).to_string());
+            .call();
         let resp = match resp {
             Ok(r) => r,
             Err(e) => {

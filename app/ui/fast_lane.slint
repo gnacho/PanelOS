@@ -14,17 +14,24 @@ export component FastLane inherits Rectangle {
     in property <image> back-b;           // … and the view faded to (mix 0 = only a, 1 = only b)
     in property <image> floor-b;
     in property <float> mix;
+    in property <image> back-c;           // the beach's dawn view: over the night view by mix-c (morning twilight)
+    in property <image> floor-c;
+    in property <float> mix-c;
     in property <color> grid;             // the view's colour, mixed by the app during a fade
     in property <float> star-k;           // shooting star: how much night it is
     in property <float> t;                // seconds, for the floor lines and the shooting star
     in property <[SwCar]> cars;           // empty when the cars are switched off
     in property <image> palm-l;
     in property <image> palm-r;
+    in property <image> palm-l2;
+    in property <image> palm-r2;
+    in property <float> palm-lk;
+    in property <float> palm-rk;
     background: #07020f;
 
     SynthScene {
-        back: root.back-a; floor: root.floor-a; back2: root.back-b; floor2: root.floor-b; mix: root.mix;
-        scene: root.scene; grid: root.grid; t: root.t; cars: root.cars; palm-l: root.palm-l; palm-r: root.palm-r;
+        back: root.back-a; floor: root.floor-a; back2: root.back-b; floor2: root.floor-b; mix: root.mix; back3: root.back-c; floor3: root.floor-c; mix3: root.mix-c;
+        scene: root.scene; grid: root.grid; t: root.t; cars: root.cars; palm-l: root.palm-l; palm-r: root.palm-r; palm-l2: root.palm-l2; palm-r2: root.palm-r2; palm-lk: root.palm-lk; palm-rk: root.palm-rk;
         star-k: root.star-k;
     }
     // legibility for the white widget text: the drawn themes' soft top / bottom scrims (half strength)

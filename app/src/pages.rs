@@ -30,6 +30,31 @@ pub fn local_format(epoch: i64, pattern: &str) -> String {
     }
 }
 
+/// The same with the fraction of the second ("…T14:00:00.250+01:00" → ….25).
+pub fn parse_iso_f(s: &str) -> Option<f64> {
+    let whole = parse_iso(s)? as f64;
+    let frac = s
+        .get(19..)
+        .filter(|r| r.starts_with('.'))
+        .map(|r| r[1..].chars().take_while(char::is_ascii_digit).collect::<String>())
+        .filter(|d| !d.is_empty())
+        .and_then(|d| format!("0.{d}").parse::<f64>().ok())
+        .unwrap_or(0.0);
+    Some(whole + frac)
+}
+
+/// Seconds since the epoch, to the microsecond.
+pub fn now_f() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0)
+}
+
+/// A player that has a track to show: playing, paused, buffering, or idle with its track still there
+/// (some players stop instead of pausing: their pause shows as idle with the title kept).
+pub fn shows_track(p: &EntityState) -> bool {
+    matches!(p.state.as_str(), "playing" | "paused" | "buffering")
+        || (p.state == "idle" && p.attrs.get("media_title").and_then(Value::as_str).is_some_and(|t| !t.is_empty()))
+}
+
 /// Seconds since the epoch of an ISO 8601 time ("2026-11-15T14:00:00+01:00").
 pub fn parse_iso(s: &str) -> Option<i64> {
     let b = s.as_bytes();
@@ -101,6 +126,12 @@ pub fn page_slots(config: Option<&Value>) -> Vec<PageSlot> {
                             -1
                         },
                         layout: -1,
+                        // drawn, line and plain backgrounds: the panel's setting, or always light / dark
+                        light: match opts.and_then(|o| o.get("light")).and_then(Value::as_str) {
+                            Some("light") => 1,
+                            Some("dark") => 2,
+                            _ => 0,
+                        },
                     })
                 })
                 .collect()
@@ -123,7 +154,7 @@ pub fn page_slots(config: Option<&Value>) -> Vec<PageSlot> {
         }
         return list;
     }
-    ["home", "weather", "music", "timers"].iter().map(|k| PageSlot { kind: (*k).into(), variant: 0, theme: -1, layout: -1 }).collect()
+    ["home", "weather", "music", "timers"].iter().map(|k| PageSlot { kind: (*k).into(), variant: 0, theme: -1, layout: -1, light: 0 }).collect()
 }
 
 /// The widget layouts of the weather pages after the first that have their own (in page order).
@@ -447,12 +478,13 @@ pub fn parse_color(s: &str) -> Option<Color> {
 /// The music widget's data (and the music page's) for a media player.
 pub fn home_music(states: &HashMap<String, EntityState>, player: &str, art: Option<&slint::Image>, accent: Color) -> HomeMusic {
     let Some(p) = states.get(player) else { return HomeMusic { accent, ..Default::default() } };
-    let active = matches!(p.state.as_str(), "playing" | "paused" | "buffering");
+    let active = shows_track(p);
     let mut pos = attr_f64(p, "media_position").unwrap_or(0.0);
     if p.state == "playing" {
-        // The position is reported at its update time; it moves on since.
-        if let Some(at) = attr_str(p, "media_position_updated_at").and_then(parse_iso) {
-            pos += (now() - at).max(0) as f64;
+        // The position is reported at its update time; it moves on since (to the millisecond: the views
+        // run it on smoothly between updates).
+        if let Some(at) = attr_str(p, "media_position_updated_at").and_then(parse_iso_f) {
+            pos += (now_f() - at).max(0.0);
         }
     }
     let dur = attr_f64(p, "media_duration").unwrap_or(0.0);

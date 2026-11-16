@@ -33,7 +33,8 @@ export component GlowText {
     in property <bool> live;
     cache-rendering-hint: !root.live;
     property <length> d: max(0.8px, min(2.2px, root.font-size / 46));
-    property <color> rim: #000000.with-alpha(0.18 * min(1, root.k));
+    in property <bool> paper;          // dark text on a light scene: a Paper rim instead of the dark one
+    property <color> rim: root.paper ? #F5F3EE.with-alpha(0.55 * min(1, root.k)) : #000000.with-alpha(0.18 * min(1, root.k));
     // the glow: one ring of copies just outside the thin dark rim, enough to show on every background
     // without turning into a halo (owner: two rings were too much neon); the rim keeps the letters
     // readable on bright skies
@@ -83,7 +84,7 @@ export component GlowText {
 // A text line for titles: when it does not fit, it is either cut off with … or, with `scroll`, it
 // runs to the left in a loop (holds 1.5 s at the start of each round). speed 1..5 = slow..fast.
 // Short texts never move. k = GlowText rim (0 = plain).
-export component Marquee {
+component MarqueeLine {
     in property <string> text;
     in property <length> font-size: 16px;
     in property <int> font-weight: 400;
@@ -94,12 +95,13 @@ export component Marquee {
     in property <TextHorizontalAlignment> horizontal-alignment: left;
     in property <bool> scroll;
     in property <float> speed: 3;
+    in property <duration> t0;             // when this text came: its scroll starts from the beginning there
     property <length> tw: probe.preferred-width;
     property <bool> moving: root.scroll && self.tw > root.width;
     property <length> gap: 48px;
     property <float> v: root.speed <= 1 ? 14 : root.speed <= 2 ? 22 : root.speed <= 3 ? 32 : root.speed <= 4 ? 46 : 64;   // px / s
     property <float> period: (self.tw + self.gap) / 1px / self.v + 1.5;                                                  // s
-    property <float> t: Math.mod((animation-tick() - Clock.base) / 1ms / 1000, self.period);
+    property <float> t: Math.mod(max(0, (animation-tick() - root.t0) / 1ms / 1000), self.period);
     property <length> off: max(0, self.t - 1.5) * self.v * 1px;
     probe := Text { visible: false; text: root.text; font-size: root.font-size; font-weight: root.font-weight; }
     Rectangle {
@@ -116,6 +118,41 @@ export component Marquee {
         x: -root.off + root.tw + root.gap; width: root.tw; height: root.height; text: root.text; font-size: root.font-size; font-weight: root.font-weight;
         color: root.color; k: root.k; neon: root.neon; glow: root.glow;
     }
+    }
+}
+
+export component Marquee {
+    in property <string> text;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <float> k;
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    in property <TextHorizontalAlignment> horizontal-alignment: left;
+    in property <bool> scroll;
+    in property <float> speed: 3;
+    // a new text fades in over the old one (250 ms), two lines
+    property <string> ta: root.text;
+    property <string> tb;
+    property <duration> ta0: Clock.base;
+    property <duration> tb0;
+    property <bool> on-b;
+    changed text => {
+        if root.on-b { root.ta = root.text; root.ta0 = animation-tick(); root.on-b = false; }
+        else { root.tb = root.text; root.tb0 = animation-tick(); root.on-b = true; }
+    }
+    property <float> kb: root.on-b ? 1 : 0;
+    animate kb { duration: 250ms; easing: ease-in-out; }
+    if root.kb < 0.999: MarqueeLine {
+        width: root.width; height: root.height; opacity: 1 - root.kb;
+        text: root.ta; t0: root.ta0; font-size: root.font-size; font-weight: root.font-weight; color: root.color; k: root.k;
+        neon: root.neon; glow: root.glow; horizontal-alignment: root.horizontal-alignment; scroll: root.scroll; speed: root.speed;
+    }
+    if root.kb > 0.001: MarqueeLine {
+        width: root.width; height: root.height; opacity: root.kb;
+        text: root.tb; t0: root.tb0; font-size: root.font-size; font-weight: root.font-weight; color: root.color; k: root.k;
+        neon: root.neon; glow: root.glow; horizontal-alignment: root.horizontal-alignment; scroll: root.scroll; speed: root.speed;
     }
 }
 
@@ -350,7 +387,14 @@ export component BigSlider inherits Rectangle {
     in property <int> min-value: 0;
     in property <int> max-value: 100;
     callback changed(float);
-    property <float> live: touch.pressed ? max(0, min(1, touch.mouse-x / self.width)) : root.value;
+    // let go: the slider keeps the dropped value until the device's value follows (or 3 s), then glides
+    // into it (no snap back and forth)
+    property <bool> holding;
+    property <float> held;
+    changed value => { root.holding = false; }
+    Timer { interval: 3s; running: root.holding; triggered => { root.holding = false; } }
+    property <float> live: touch.pressed ? max(0, min(1, touch.mouse-x / self.width)) : root.holding ? root.held : root.value;
+    animate live { duration: touch.pressed ? 0ms : 200ms; easing: ease-out; }
     height: 56px;
     border-radius: 16px;
     background: root.track;
@@ -384,7 +428,9 @@ export component BigSlider inherits Rectangle {
     touch := TouchArea {
         pointer-event(ev) => {
             if (ev.kind == PointerEventKind.up) {
-                root.changed(max(0, min(1, self.mouse-x / root.width)));
+                root.held = max(0, min(1, self.mouse-x / root.width));
+                root.holding = true;
+                root.changed(root.held);
             }
         }
     }

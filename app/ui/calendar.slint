@@ -418,8 +418,11 @@ export component CalendarPage inherits Rectangle {
                     vertical-alignment: center; overflow: elide; } } } }
 
     // ---------------------------------------------------------------- the page's sheet: the view
-    if root.settings: Rectangle { background: #00000080; }
-    if root.settings: Rectangle {
+    // the settings fades in (240 ms) and out (200 ms) instead of popping
+    property <float> settings-k: root.settings ? 1 : 0;
+    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
         property <length> need: 72px + (root.look == 0 ? 3 : 2) * 52px - 12px + 26px;
         x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
@@ -441,8 +444,11 @@ export component CalendarPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- an event's details (tap on an event, or the home page's next-event widget)
-    if root.detail: Rectangle { background: #00000080; TouchArea { clicked => { root.detail = false; } } }
-    if root.detail: Rectangle {
+    // the detail fades in (240 ms) and out (200 ms) instead of popping
+    property <float> detail-k: root.detail ? 1 : 0;
+    animate detail-k { duration: root.detail ? 240ms : 200ms; easing: ease-out; }
+    if root.detail-k > 0.001: Rectangle { opacity: root.detail-k; background: #00000080; TouchArea { clicked => { root.detail = false; } } }
+    if root.detail-k > 0.001: Rectangle { opacity: root.detail-k;
         property <length> need: dl.preferred-height + 24px;
         x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
         TouchArea { }

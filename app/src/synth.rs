@@ -57,11 +57,13 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
         .unwrap_or(0)
         .min(3) as usize;
     // The view by the sun: day above +3°, night below -6°, a fade between; the
-    // beach has a dawn view for the morning.
+    // beach has a dawn view for the morning: it comes in over the night view while the
+    // sun rises from -12° to -6° (never at solar midnight, never in the evening).
     let sun = s.states.get("sun.sun");
     let el = sun.and_then(|e| e.attrs.get("elevation")).and_then(Value::as_f64).unwrap_or(30.0);
     let rising = sun.and_then(|e| e.attrs.get("rising")).and_then(Value::as_bool).unwrap_or(false);
-    let night_view = if scene == 2 && rising { "dawn" } else { "night" };
+    let night_view = "night";
+    let dawn = if scene == 2 && rising { ((el + 12.0) / 6.0).clamp(0.0, 1.0) as f32 } else { 0.0 };
     let mix = ((3.0 - el) / 9.0).clamp(0.0, 1.0) as f32;
     let pic = |view: &str, floor: bool| {
         crate::quick::picture(&format!("home/fl/fl-{scene}-{view}{}.png", if floor { "-floor" } else { "" }))
@@ -72,6 +74,9 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
         ui.set_home_fl_floor_a(pic("day", true));
         ui.set_home_fl_back_b(pic(night_view, false));
         ui.set_home_fl_floor_b(pic(night_view, true));
+        // the beach's dawn view (the other scenes have none)
+        ui.set_home_fl_back_c(if scene == 2 { pic("dawn", false) } else { slint::Image::default() });
+        ui.set_home_fl_floor_c(if scene == 2 { pic("dawn", true) } else { slint::Image::default() });
         ui.set_timers_sw_scene(scene as i32);
         ui.set_timers_sw_back(crate::quick::picture(&format!("timers/sw/scene-{scene}-back.png")));
         ui.set_timers_sw_floor(crate::quick::picture(&format!("timers/sw/scene-{scene}-floor.png")));
@@ -79,11 +84,19 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     if (ui.get_home_fl_mix() - mix).abs() > 0.004 {
         ui.set_home_fl_mix(mix);
     }
+    if (ui.get_home_fl_mix_c() - dawn).abs() > 0.004 || (dawn == 0.0 && ui.get_home_fl_mix_c() != 0.0) {
+        ui.set_home_fl_mix_c(dawn);
+    }
+    // the view's colour: day, night and (the beach in the morning) dawn, mixed like the pictures
+    let lerp_c = |a: Color, b: Color, k: f32| {
+        let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * k).round() as u8;
+        Color::from_rgb_u8(l(a.red(), b.red()), l(a.green(), b.green()), l(a.blue(), b.blue()))
+    };
     let g = grid(scene, "day");
     let g = if mix > 0.0 {
         let n = grid(scene, night_view);
-        let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * mix).round() as u8;
-        Color::from_rgb_u8(lerp(g.red(), n.red()), lerp(g.green(), n.green()), lerp(g.blue(), n.blue()))
+        let n = if dawn > 0.0 { lerp_c(n, grid(scene, "dawn"), dawn) } else { n };
+        lerp_c(g, n, mix)
     } else {
         g
     };
@@ -109,11 +122,13 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     // between gusts the calm is 0.6-0.8x.
     let st = ui.get_scene_t();
     let at = ui.get_palm_gust_at();
-    if st > at + 3.5 + ui.get_palm_gust_hold() {
+    // (scheduled once the right palm, 0.22 s behind, has settled too)
+    if st > at + 3.8 + ui.get_palm_gust_hold() {
         let next = st + 6.0 + (random() % 800) as f32 / 100.0;
         ui.set_palm_gust_at(next);
         ui.set_palm_gust_peak(1.6 + (random() % 40) as f32 / 100.0);
         ui.set_palm_gust_hold(1.0 + (random() % 200) as f32 / 100.0);
+        ui.set_palm_calm_before(ui.get_palm_calm());
         ui.set_palm_calm(0.6 + (random() % 20) as f32 / 100.0);
     }
     // One car at a time: a new one when the last is gone (random line, never

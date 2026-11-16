@@ -82,8 +82,38 @@ pub fn rgba(src: &SharedPixelBuffer<Rgb8Pixel>) -> SharedPixelBuffer<Rgba8Pixel>
     out
 }
 
+/// A small picture softened (two 3x3 box passes, edges held): with the GPU's smooth upscaling it
+/// reads as an even blur, without the blocky cross of a raw few-pixel picture.
+pub fn soft(src: &SharedPixelBuffer<Rgb8Pixel>) -> SharedPixelBuffer<Rgb8Pixel> {
+    let (w, h) = (src.width() as i32, src.height() as i32);
+    let mut cur: Vec<[u32; 3]> = src.as_slice().iter().map(|p| [p.r as u32, p.g as u32, p.b as u32]).collect();
+    for _ in 0..2 {
+        let mut next = cur.clone();
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = [0u32; 3];
+                for dy in -1..=1 {
+                    for dx in -1..=1 {
+                        let p = cur[((y + dy).clamp(0, h - 1) * w + (x + dx).clamp(0, w - 1)) as usize];
+                        for c in 0..3 {
+                            acc[c] += p[c];
+                        }
+                    }
+                }
+                next[(y * w + x) as usize] = [acc[0] / 9, acc[1] / 9, acc[2] / 9];
+            }
+        }
+        cur = next;
+    }
+    let mut out = SharedPixelBuffer::<Rgb8Pixel>::new(w as u32, h as u32);
+    for (o, p) in out.make_mut_slice().iter_mut().zip(cur) {
+        *o = Rgb8Pixel { r: p[0] as u8, g: p[1] as u8, b: p[2] as u8 };
+    }
+    out
+}
+
 /// The frame scaled down to `n` pixels across (box filter).
-fn shrink(frame: &SharedPixelBuffer<Rgb8Pixel>, n: u32) -> SharedPixelBuffer<Rgb8Pixel> {
+pub fn shrink(frame: &SharedPixelBuffer<Rgb8Pixel>, n: u32) -> SharedPixelBuffer<Rgb8Pixel> {
     let (w, h) = (frame.width(), frame.height());
     let (nw, nh) = (n.min(w).max(1), ((n * h) / w.max(1)).clamp(1, h.max(1)));
     let mut out = SharedPixelBuffer::<Rgb8Pixel>::new(nw, nh);

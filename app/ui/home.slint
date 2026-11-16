@@ -64,8 +64,9 @@ component Halo inherits Rectangle {
 
 component Glass inherits Rectangle {
     in property <color> ink: #ffffff;      // text and lines (Ink on the plain light background)
+    in property <bool> off;                // a card set in the integration replaces the glass (the content stays)
     border-radius: 16px;
-    background: root.ink.with-alpha(0.12);
+    background: root.off ? transparent : root.ink.with-alpha(0.12);
 }
 
 // --------------------------------------------------------------------------- clock
@@ -85,9 +86,10 @@ component ClockW inherits Rectangle {
     property <bool> show-wx: root.on(4);
     property <bool> show-next: root.on(8) && root.event.title != "";
     property <bool> info: root.show-date || root.show-wx;
-    property <float> colon: root.secs ? 0.75 + 0.25 * Math.cos(root.seconds * 360deg) : 1;
-    property <float> hours: Math.mod(root.clock.hh.to-float(), 12) + root.clock.mm.to-float() / 60;
+    // the colon breathes evenly, once in 2 s
+    property <float> colon: root.secs ? 0.75 + 0.25 * Math.cos(root.seconds * 180deg) : 1;
     property <float> minutes: root.clock.mm.to-float() + root.seconds / 60;
+    property <float> hours: Math.mod(root.clock.hh.to-float(), 12) + root.minutes / 60;
     property <int> st: root.it.style;
     property <bool> analog: root.st >= 2 && root.st <= 5;
     property <bool> wide: root.width > root.height * 1.5;
@@ -102,9 +104,9 @@ component ClockW inherits Rectangle {
         spacing: 0;
         HorizontalLayout {
             alignment: center;
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.hh; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: ":"; font-size: dg.fs; font-weight: root.it.weight; color: root.it.accent; opacity: root.colon; }
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.mm; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.hh; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: ":"; font-size: dg.fs; font-weight: root.it.weight; color: root.it.accent; opacity: root.colon; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.mm; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
         }
         if root.st == 1 && root.secs: HorizontalLayout {
             alignment: center;
@@ -112,15 +114,17 @@ component ClockW inherits Rectangle {
             Rectangle {
                 width: root.width * 0.78; height: 3px; border-radius: 1.5px; background: root.ink.with-alpha(0.20);
                 Rectangle { x: 0; width: parent.width * root.seconds / 60; border-radius: 1.5px; background: root.it.accent; }
+                // at the minute the full line fades out (0.25 s) over the new one instead of running back
+                if root.seconds < 0.25: Rectangle { x: 0; border-radius: 1.5px; background: root.it.accent; opacity: 1 - root.seconds * 4; }
             }
         }
         if root.st == 0 && root.it.h >= 2 && root.info: HorizontalLayout {
             alignment: center;
             spacing: 8px;
-            if root.show-date: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 20px; color: root.ink.with-alpha(0.85); }
-            if root.show-date && root.show-wx: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: "·"; font-size: 20px; color: root.ink.with-alpha(0.50); }
-            if root.show-wx: GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 22px; color: root.ink.with-alpha(0.85); }
-            if root.show-wx: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 20px; color: root.ink.with-alpha(0.85); }
+            if root.show-date: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 20px; color: root.ink.with-alpha(0.85); }
+            if root.show-date && root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: "·"; font-size: 20px; color: root.ink.with-alpha(0.50); }
+            if root.show-wx: GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 22px; color: root.ink.with-alpha(0.85); }
+            if root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 20px; color: root.ink.with-alpha(0.85); }
         }
     }
 
@@ -148,18 +152,18 @@ component ClockW inherits Rectangle {
         if root.wide && (root.info || root.show-next): VerticalLayout {
             alignment: center;
             spacing: 6px;
-            if root.show-date: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 22px; font-weight: root.it.weight; color: root.ink; overflow: elide; }
+            if root.show-date: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 22px; font-weight: root.it.weight; color: root.ink; overflow: elide; }
             if root.show-wx: HorizontalLayout {
                 spacing: 8px;
                 alignment: start;
-                GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 26px; color: root.ink; }
-                GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature + "  " + root.data.condition; font-size: 18px; color: root.ink.with-alpha(0.85); overflow: elide; }
+                GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 26px; color: root.ink; }
+                GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature + "  " + root.data.condition; font-size: 18px; color: root.ink.with-alpha(0.85); overflow: elide; }
             }
             if root.show-next: HorizontalLayout {
                 spacing: 8px;
                 alignment: start;
                 Icon { text: "\u{F00ED}"; font-size: 18px; color: root.it.accent; }
-                GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.event.rel + " · " + root.event.title; font-size: 15px; color: root.ink.with-alpha(0.80); overflow: elide; }
+                GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.event.rel + " · " + root.event.title; font-size: 15px; color: root.ink.with-alpha(0.80); overflow: elide; }
             }
         }
     }
@@ -176,10 +180,10 @@ component ClockW inherits Rectangle {
         if root.it.h >= 2 && root.info: HorizontalLayout {
             alignment: center;
             spacing: 8px;
-            if root.show-date: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 19px; color: root.ink.with-alpha(0.85); }
-            if root.show-date && root.show-wx: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: "·"; font-size: 19px; color: root.ink.with-alpha(0.50); }
-            if root.show-wx: GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 21px; color: root.ink.with-alpha(0.85); }
-            if root.show-wx: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 19px; color: root.ink.with-alpha(0.85); }
+            if root.show-date: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 19px; color: root.ink.with-alpha(0.85); }
+            if root.show-date && root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: "·"; font-size: 19px; color: root.ink.with-alpha(0.50); }
+            if root.show-wx: GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 21px; color: root.ink.with-alpha(0.85); }
+            if root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 19px; color: root.ink.with-alpha(0.85); }
         }
     }
 
@@ -204,9 +208,9 @@ component ClockW inherits Rectangle {
     if root.st == 7: VerticalLayout {
         alignment: center;
         spacing: -(root.big * 0.24);
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.line1; font-size: root.on-hour ? root.big : root.small; font-weight: root.it.weight;
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.line1; font-size: root.on-hour ? root.big : root.small; font-weight: root.it.weight;
             color: root.on-hour ? root.it.accent.mix(root.ink, 0.85) : root.ink.with-alpha(0.90); horizontal-alignment: center; }
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.line2; font-size: root.on-hour ? root.small : root.big; font-weight: root.it.weight;
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.line2; font-size: root.on-hour ? root.small : root.big; font-weight: root.it.weight;
             color: root.on-hour ? root.ink.with-alpha(0.90) : root.it.accent.mix(root.ink, 0.85); horizontal-alignment: center; }
     }
 }
@@ -234,21 +238,21 @@ component DateW inherits Rectangle {
         HorizontalLayout {
             alignment: center;
             spacing: 8px;
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.weekday-long + ","; font-size: root.fs4; font-weight: root.it.weight; color: root.it.accent.mix(root.ink, 0.75); }
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.dm; font-size: root.fs4; font-weight: root.it.weight; color: root.ink; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.weekday-long + ","; font-size: root.fs4; font-weight: root.it.weight; color: root.it.accent.mix(root.ink, 0.75); }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.dm; font-size: root.fs4; font-weight: root.it.weight; color: root.ink; }
         }
-        if root.on(2) && root.it.h >= 1: GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.week; font-size: 15px; color: root.ink.with-alpha(0.70); horizontal-alignment: center; }
+        if root.on(2) && root.it.h >= 1: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.week; font-size: 15px; color: root.ink.with-alpha(0.70); horizontal-alignment: center; }
     }
     if root.it.w >= 2 && root.it.w < 4: VerticalLayout {
         alignment: center;
         padding-left: 12px; padding-right: 10px;
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.wl; font-size: root.fs2a; font-weight: 600; color: root.it.accent.mix(root.ink, 0.75); overflow: elide; }
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.dm; font-size: root.fs2b; font-weight: root.it.weight; color: root.ink; overflow: elide; }
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.wl; font-size: root.fs2a; font-weight: 600; color: root.it.accent.mix(root.ink, 0.75); overflow: elide; }
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.dm; font-size: root.fs2b; font-weight: root.it.weight; color: root.ink; overflow: elide; }
     }
     if root.it.w < 2: VerticalLayout {
         alignment: center;
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.weekday; font-size: 15px; font-weight: 600; color: root.it.accent.mix(root.ink, 0.75); horizontal-alignment: center; }
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.day; font-size: 40px; font-weight: root.it.weight; color: root.ink; horizontal-alignment: center; }
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.weekday; font-size: 15px; font-weight: 600; color: root.it.accent.mix(root.ink, 0.75); horizontal-alignment: center; }
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.day; font-size: 40px; font-weight: root.it.weight; color: root.ink; horizontal-alignment: center; }
     }
 }
 
@@ -270,39 +274,39 @@ component WeatherW inherits Rectangle {
         HorizontalLayout {
             alignment: center;
             spacing: 10px;
-            GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 64px; color: root.ink; }
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 104px; font-weight: root.it.weight; color: root.ink; }
+            GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 64px; color: root.ink; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 104px; font-weight: root.it.weight; color: root.ink; }
         }
-        if root.on(1): GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 24px; color: root.ink; horizontal-alignment: center; }
-        if root.extra != "": GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.extra; font-size: 16px; color: root.ink.with-alpha(0.80); horizontal-alignment: center; }
+        if root.on(1): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 24px; color: root.ink; horizontal-alignment: center; }
+        if root.extra != "": GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.extra; font-size: 16px; color: root.ink.with-alpha(0.80); horizontal-alignment: center; }
     }
     if root.it.h < 2 && root.it.w >= 4: HorizontalLayout {
         alignment: center;
         spacing: 12px;
         padding-left: 10px; padding-right: 10px;
-        GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 50px; color: root.ink; }
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 60px; font-weight: root.it.weight; color: root.ink; }
+        GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 50px; color: root.ink; }
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 60px; font-weight: root.it.weight; color: root.ink; }
         VerticalLayout {
             alignment: center;
-            if root.on(1): GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 18px; color: root.ink; overflow: elide; }
-            if root.on(2): GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.high-low; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
+            if root.on(1): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 18px; color: root.ink; overflow: elide; }
+            if root.on(2): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.high-low; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
         }
     }
     if root.it.h < 2 && root.it.w >= 2 && root.it.w < 4: HorizontalLayout {
         alignment: center;
         spacing: 8px;
         padding-left: 10px; padding-right: 10px;
-        GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 44px; color: root.ink; }
+        GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 44px; color: root.ink; }
         VerticalLayout {
             alignment: center;
-            GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 40px; font-weight: root.it.weight; color: root.ink; }
-            if root.on(1): GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 40px; font-weight: root.it.weight; color: root.ink; }
+            if root.on(1): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
         }
     }
     if root.it.w < 2: VerticalLayout {
         alignment: center;
-        GlowText { icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 34px; color: root.ink; }
-        GlowText { k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 26px; font-weight: root.it.weight; color: root.ink; horizontal-alignment: center; }
+        GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 34px; color: root.ink; }
+        GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 26px; font-weight: root.it.weight; color: root.ink; horizontal-alignment: center; }
     }
 }
 
@@ -312,7 +316,7 @@ component EventW inherits Rectangle {
     in property <HomeEvent> event;
     in property <HomeItem> it;
     pure function on(bit: int) -> bool { Math.mod(Math.floor(root.it.opts / bit), 2) == 1 }
-    Glass { ink: root.ink; visible: root.it.card == 0;
+    Glass { ink: root.ink; off: root.it.card > 0;
         x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px;
         Rectangle { x: 12px; y: 14px; width: 4px; height: parent.height - 28px; border-radius: 2px; background: root.on(2) ? root.event.tint : root.it.accent; }
         if root.it.w >= 4: VerticalLayout {
@@ -338,7 +342,7 @@ component CurveW inherits Rectangle {
     in property <HomeItem> it;
     pure function on(bit: int) -> bool { Math.mod(Math.floor(root.it.opts / bit), 2) == 1 }
     property <bool> icons: root.it.h >= 2 && root.on(2);
-    Glass { ink: root.ink; visible: root.it.card == 0; x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px; }
+    Glass { ink: root.ink; off: root.it.card > 0; x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px; }
     property <length> pw: self.width - 56px;
     property <length> top: self.icons ? 64px : 30px;
     property <length> ph: self.height - self.top - 34px;
@@ -455,25 +459,45 @@ component MusicW inherits Rectangle {
         t >= 3600 ? Math.floor(t / 3600) + ":" + root.two(Math.mod(Math.floor(t / 60), 60)) + ":" + root.two(Math.mod(Math.floor(t), 60))
             : Math.floor(t / 60) + ":" + root.two(Math.mod(Math.floor(t), 60))
     }
-    property <float> fr: root.m.dur > 0 ? max(0, min(1, root.pos / root.m.dur)) : 0;
+    // the position runs on smoothly between the app's updates (about once a second)
+    property <float> pos-base: root.pos;
+    property <duration> pos-t;
+    changed pos => { root.pos-base = root.pos; root.pos-t = animation-tick(); }
+    property <float> pos-live: root.m.playing && root.m.dur > 0
+        ? Math.min(root.m.dur, root.pos-base + Math.min(2, (animation-tick() - root.pos-t) / 1s)) : root.pos-base;
+    property <float> fr: root.m.dur > 0 ? max(0, min(1, root.pos-live / root.m.dur)) : 0;
     property <color> acc: root.m.accent;
+    // the cover: the next one fades in over the last (300 ms)
+    property <image> art-in: root.m.art;
+    property <image> art-a: root.m.art;
+    property <image> art-b;
+    property <bool> art-on-b;
+    changed art-in => {
+        if root.art-on-b { root.art-a = root.art-in; root.art-on-b = false; } else { root.art-b = root.art-in; root.art-on-b = true; }
+    }
+    property <float> art-k: root.art-on-b ? 1 : 0;
+    animate art-k { duration: 300ms; easing: ease-in-out; }
     property <bool> scroll: Math.mod(root.it.opts, 2) == 1;
     property <float> speed: root.it.style > 0 ? root.it.style : 3;
-    if root.m.active: Glass { ink: root.ink; visible: root.it.card == 0;
+    // the widget comes and goes with the player's track over 250 ms instead of popping
+    property <float> active-k: root.m.active ? 1 : 0;
+    animate active-k { duration: 250ms; easing: ease-in-out; }
+    if root.active-k > 0.001: Glass { ink: root.ink; off: root.it.card > 0; opacity: root.active-k;
         x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px;
         // 1 x 1: the cover, a thin progress line under it and the time
         if root.it.w < 2: Rectangle {
             Rectangle {
                 x: (parent.width - 54px) / 2; y: 6px; width: 54px; height: 54px;
                 background: @linear-gradient(135deg, root.acc.mix(#000000, 0.55) 0%, root.acc.mix(#000000, 0.25) 100%);
-                if root.m.has-art: Image { width: parent.width; height: parent.height; source: root.m.art; image-fit: cover; }
+                if root.m.has-art && root.art-k < 0.999: Image { width: parent.width; height: parent.height; source: root.art-a; image-fit: cover; }
+                if root.m.has-art && root.art-k > 0.001: Image { width: parent.width; height: parent.height; source: root.art-b; image-fit: cover; opacity: root.art-k; }
                 if !root.m.has-art: Icon { text: "\u{F0387}"; font-size: 30px; color: root.ink.with-alpha(0.80); }
             }
             if root.m.dur > 0: Rectangle {
                 x: (parent.width - 54px) / 2; y: 63px; width: 54px; height: 3px; border-radius: 1.5px; background: root.ink.with-alpha(0.20);
                 Rectangle { x: 0; width: parent.width * root.fr; border-radius: 1.5px; background: root.acc; }
             }
-            GlowText { live: true; x: 0; y: 67px; width: parent.width; height: 16px; text: root.m.dur > 0 ? root.mmss(root.pos) : "LIVE"; k: root.halo; neon: root.neon; glow: root.glow;
+            GlowText { paper: root.ink.red < 128; live: true; x: 0; y: 67px; width: parent.width; height: 16px; text: root.m.dur > 0 ? root.mmss(root.pos-live) : "LIVE"; k: root.halo; neon: root.neon; glow: root.glow;
                 font-size: 12px; color: root.ink.with-alpha(0.88); horizontal-alignment: center; }
             if !root.m.playing: Rectangle {
                 x: (parent.width - 54px) / 2 + 54px - 20px; y: 6px + 54px - 20px; width: 20px; height: 20px; border-radius: 10px; background: #000000a0;
@@ -485,7 +509,8 @@ component MusicW inherits Rectangle {
         if root.it.w >= 2: Rectangle {
             x: 8px; y: 8px; width: 70px; height: 70px;
             background: @linear-gradient(135deg, root.acc.mix(#000000, 0.55) 0%, root.acc.mix(#000000, 0.25) 100%);
-            if root.m.has-art: Image { width: parent.width; height: parent.height; source: root.m.art; image-fit: cover; }
+            if root.m.has-art && root.art-k < 0.999: Image { width: parent.width; height: parent.height; source: root.art-a; image-fit: cover; }
+                if root.m.has-art && root.art-k > 0.001: Image { width: parent.width; height: parent.height; source: root.art-b; image-fit: cover; opacity: root.art-k; }
             if !root.m.has-art: Icon { text: "\u{F0387}"; font-size: 36px; color: root.ink.with-alpha(0.80); }
         }
         if root.it.w >= 2: Marquee { x: 90px; y: 9px; width: parent.width - 90px - parent.rgt; height: 20px; text: root.m.title; k: root.halo; neon: root.neon; glow: root.glow;
@@ -496,10 +521,10 @@ component MusicW inherits Rectangle {
             x: 90px; y: 56px; width: parent.width - 90px - parent.rgt; height: 3px; border-radius: 1.5px; background: root.ink.with-alpha(0.20);
             Rectangle { x: 0; width: parent.width * root.fr; border-radius: 1.5px; background: root.acc; }
         }
-        if root.it.w >= 2 && root.m.dur > 0: GlowText { live: true; x: 90px; y: 61px; width: 50px; height: 16px; text: root.mmss(root.pos); k: root.halo; neon: root.neon; glow: root.glow;
+        if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; live: true; x: 90px; y: 61px; width: 50px; height: 16px; text: root.mmss(root.pos-live); k: root.halo; neon: root.neon; glow: root.glow;
             font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); }
-        if root.it.w >= 2 && root.m.dur > 0: GlowText { live: true; x: parent.width - parent.rgt - 50px; y: 61px; width: 50px; height: 16px; k: root.halo; neon: root.neon; glow: root.glow;
-            text: "−" + root.mmss(max(0, root.m.dur - root.pos)); font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); horizontal-alignment: right; }
+        if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; live: true; x: parent.width - parent.rgt - 50px; y: 61px; width: 50px; height: 16px; k: root.halo; neon: root.neon; glow: root.glow;
+            text: "−" + root.mmss(max(0, root.m.dur - root.pos-live)); font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); horizontal-alignment: right; }
         if root.it.w >= 2 && root.m.dur <= 0: Rectangle {
             x: 90px; y: 56px; width: 40px; height: 18px; border-radius: 9px; background: root.acc.with-alpha(0.3);
             Text { text: "LIVE"; font-size: 10px; font-weight: 700; color: root.ink; horizontal-alignment: center; vertical-alignment: center; }
@@ -507,8 +532,8 @@ component MusicW inherits Rectangle {
         // 4 x 1: the player between the times
         if root.it.w >= 4 && root.m.dur > 0: HorizontalLayout {
             x: 90px + 50px; y: 61px; width: parent.width - 90px - parent.rgt - 100px; height: 16px; alignment: center; spacing: 3px;
-            GlowText { icon: true; text: "\u{F04C3}"; font-size: 11px; color: root.ink.with-alpha(0.80); k: root.halo; neon: root.neon; glow: root.glow; }
-            GlowText { text: root.m.player; font-size: 11px; font-weight: 500; color: root.ink.with-alpha(0.80); overflow: elide; k: root.halo; neon: root.neon; glow: root.glow; horizontal-stretch: 1; }
+            GlowText { paper: root.ink.red < 128; icon: true; text: "\u{F04C3}"; font-size: 11px; color: root.ink.with-alpha(0.80); k: root.halo; neon: root.neon; glow: root.glow; }
+            GlowText { paper: root.ink.red < 128; text: root.m.player; font-size: 11px; font-weight: 500; color: root.ink.with-alpha(0.80); overflow: elide; k: root.halo; neon: root.neon; glow: root.glow; horizontal-stretch: 1; }
         }
         // the buttons act on the widget's player in place (hit areas of 48 px); the page does not change
         if root.it.w >= 3: Rectangle {
@@ -798,8 +823,11 @@ export component HomeGrid inherits Rectangle {
     property <HomeItem> pv-music1: { kind: 7, w: 1, h: 1, accent: root.accent, weight: 600, opts: 0 };
     property <HomeItem> pv-music3: { kind: 7, w: 3, h: 1, accent: root.accent, weight: 600, opts: 0 };
     property <HomeItem> pv-music4: { kind: 7, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0 };
-    if root.picker: Rectangle { background: #00000080; }
-    if root.picker: Rectangle {
+    // the picker fades in (240 ms) and out (200 ms) instead of popping
+    property <float> picker-k: root.picker ? 1 : 0;
+    animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
+    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k; background: #00000080; }
+    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k;
         x: 0; y: 40px; width: root.width; height: root.height - 40px;
         border-top-left-radius: 24px; border-top-right-radius: 24px;
         background: #202024f7;

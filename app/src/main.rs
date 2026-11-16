@@ -176,6 +176,8 @@ pub struct UiState {
     art_url: Option<String>,
     art_tx: Option<Sender<Option<String>>>,
     art: Option<slint::Image>,
+    /// The cover blurred into soft colour (the plain look, the cover behind the cassette).
+    art_bg: Option<slint::Image>,
     /// When a layer opened by a show request closes by itself.
     show_until: Option<Instant>,
     /// Split-flap clock: the digits shown before the last change, and when it changed.
@@ -659,7 +661,9 @@ fn refresh_pages(ui: &AppWindow) {
         ui.set_music_has_art(music.has_art);
         if let Some(art) = &s.art {
             ui.set_music_art(art.clone());
-            ui.set_music_art_bg(art.clone());
+        }
+        if let Some(bg) = &s.art_bg {
+            ui.set_music_art_bg(bg.clone());
         }
         ui.set_music_accent(a);
         if let Some(p) = s.states.get(&player) {
@@ -673,11 +677,14 @@ fn refresh_pages(ui: &AppWindow) {
             });
         }
         ui.set_home_music(music);
+        let shows = s.states.get(&player).is_some_and(pages::shows_track);
         let url = s.states.get(&player).and_then(|p| {
-            matches!(p.state.as_str(), "playing" | "paused" | "buffering")
+            pages::shows_track(p)
                 .then(|| p.attrs.get("entity_picture").and_then(Value::as_str).filter(|u| !u.is_empty()).map(str::to_string))
                 .flatten()
         });
+        // a paused track keeps its cover even if the player drops the picture meanwhile
+        let url = if url.is_none() && shows { s.art_url.clone() } else { url };
         let art = if url != s.art_url {
             s.art_url = url.clone();
             s.art_tx.clone().map(|tx| (tx, url))
@@ -701,6 +708,9 @@ fn refresh_pages(ui: &AppWindow) {
             ui.set_music_style(v);
         }
     }
+    // the cassettes: the cover behind the cassette (the integration's option, off as designed)
+    ui.set_music_cs_cover(with_state(|s| page_option(s, "music", "cover_bg").and_then(|v| v.as_bool())).unwrap_or(false));
+    ui.set_music_cover_blur(with_state(|s| page_option(s, "music", "cover_blur").and_then(|v| v.as_bool())).unwrap_or(true));
     // the turntable's wooden deck and grooves, the cassette's shell and hubs (full or half), once
     // and again when the wood or the cassette changes
     let looks = page_looks(ui, "music");
@@ -853,11 +863,22 @@ fn open_temporary_page(ui: &AppWindow, kind: &str) {
     let pages = ui.get_pages();
     let Some(vec) = pages.as_any().downcast_ref::<VecModel<PageSlot>>() else { return };
     let at = (ui.get_page().max(0) as usize + 1).min(vec.row_count());
-    vec.insert(at, PageSlot { kind: kind.into(), variant: 0, theme: -1, layout: -1 });
     with_state(|s| s.temp_page = Some(at));
-    ui.set_dots_hidden(true);
-    ui.set_page(at as i32);
-    refresh_pages(ui);
+    // the page frame restarts at the page shown (the same picture, drawn once), then the new page slides in
+    ui.set_instant(true);
+    ui.invoke_reset_pos();
+    let kind = kind.to_string();
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(40), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        ui.set_instant(false);
+        let pages = ui.get_pages();
+        let Some(vec) = pages.as_any().downcast_ref::<VecModel<PageSlot>>() else { return };
+        vec.insert(at.min(vec.row_count()), PageSlot { kind: kind.into(), variant: 0, theme: -1, layout: -1, light: 0 });
+        ui.set_dots_hidden(true);
+        ui.set_page(at as i32);
+        refresh_pages(&ui);
+    });
 }
 
 /// After a swipe: the temporary page goes once it is off screen (the pages
@@ -2676,6 +2697,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wake_hint: Default::default(),
             quick_title: String::new(),
             art_url: None,
+            art_bg: None,
             art_tx: None,
             art: None,
             show_until: None,
@@ -2827,10 +2849,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_offline_cause(c as i32);
             }
             if let Some(list) = v.get("pages").and_then(Value::as_array) {
-                let slots: Vec<PageSlot> =
-                    list.iter().filter_map(Value::as_str).map(|k| PageSlot { kind: k.into(), variant: 0, theme: -1, layout: -1 }).collect();
+                // "kind" or "kind:look" (e.g. "music:3", the cassette)
+                let slots: Vec<PageSlot> = list
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(|k| {
+                        let (kind, look) = k.split_once(':').unwrap_or((k, "0"));
+                        PageSlot { kind: kind.into(), variant: look.parse().unwrap_or(0), theme: -1, layout: -1, light: 0 }
+                    })
+                    .collect();
                 ui.set_page(0);
                 ui.set_pages(ModelRc::new(VecModel::from(slots)));
+                // the looks' pictures (turntable deck, cassette shell) follow the new list
+                refresh_pages(&ui);
             }
             if let Some(o) = v.get("wx") {
                 with_state(|s| s.dev_wx = o.as_object().map(|_| o.clone()));
@@ -2939,12 +2970,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // the panel as a media player in Home Assistant (alarms with music, Music Assistant)
     with_state(|s| media::init(s.device.clone(), s.device_notify.clone(), s.player.clone(), config.ha_url.clone()));
     let art_tx = artwork::spawn(config.ha_url.clone(), auth.clone(), move |img| {
-        // RGBA in this thread: the renderer takes it without converting.
+        // RGBA in this thread: the renderer takes it without converting. The blurred copy: the cover shrunk
+        // to a few pixels and softened (the GPU scales it up smoothly).
+        let bg = img.as_ref().map(|b| cam::rgba(&cam::soft(&cam::shrink(b, 18))));
         let img = img.map(|b| cam::rgba(&b));
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(ui) = weak.upgrade() {
-                with_state(|s| s.art = img.map(slint::Image::from_rgba8));
+                with_state(|s| {
+                    s.art = img.map(slint::Image::from_rgba8);
+                    s.art_bg = bg.map(slint::Image::from_rgba8);
+                });
                 refresh_pages(&ui);
             }
         });

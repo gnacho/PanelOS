@@ -73,8 +73,11 @@ export component WebLoading inherits Rectangle {
     in property <bool> show-a: true;
 
     background: #000000;
-    opacity: root.loading ? 1 : 0;
-    animate opacity { duration: 450ms; easing: ease-out; }
+    // it comes in over 200 ms (a reload: over the page that was there), and fades out when the page is ready
+    property <bool> came;
+    init => { root.came = true; }
+    opacity: root.loading && root.came ? 1 : 0;
+    animate opacity { duration: root.loading ? 200ms : 450ms; easing: ease-out; }
 
     Image {
         source: root.background-image;

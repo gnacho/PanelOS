@@ -430,8 +430,11 @@ export component TodoPage inherits Rectangle {
         Icon { text: "\u{F0415}"; font-size: 28px; color: #ffffff; } }
 
     // ---------------------------------------------------------------- the page's sheet: the look
-    if root.settings: Rectangle { background: #00000080; }
-    if root.settings: Rectangle {
+    // the settings fades in (240 ms) and out (200 ms) instead of popping
+    property <float> settings-k: root.settings ? 1 : 0;
+    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
         property <length> need: 72px + 2 * 52px - 12px + 26px;
         x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
@@ -448,8 +451,11 @@ export component TodoPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- list picker (tap on the list name)
-    if root.picker: Rectangle { background: #00000080; }
-    if root.picker: Rectangle {
+    // the picker fades in (240 ms) and out (200 ms) instead of popping
+    property <float> picker-k: root.picker ? 1 : 0;
+    animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
+    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k; background: #00000080; }
+    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k;
         property <length> need: 72px + root.lists.length * 56px - 4px + 26px;
         x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }

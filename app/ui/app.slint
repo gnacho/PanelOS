@@ -43,6 +43,8 @@ export struct PageSlot {
     // a weather (home) page's own background (-1: the panel's) and widget layout (-1: the panel's)
     theme: int,
     layout: int,
+    // drawn, line and plain backgrounds: 0 the panel's setting, 1 light, 2 dark
+    light: int,
 }
 
 // the widgets of one more weather page
@@ -294,6 +296,9 @@ export component AppWindow inherits Window {
     in property <image> home-fl-back-b;
     in property <image> home-fl-floor-b;
     in property <float> home-fl-mix;
+    in property <image> home-fl-back-c;
+    in property <image> home-fl-floor-c;
+    in property <float> home-fl-mix-c;
     in property <color> home-fl-grid: #ff2bd6;
     in property <float> home-fl-star;
     // the synthwave scenes' clock and the palms' sway run in the UI
@@ -301,34 +306,48 @@ export component AppWindow inherits Window {
     // number of the scenes' loops), so the number stays small and exact however long the panel runs
     in-out property <duration> scene-base;
     out property <float> scene-t: (animation-tick() - root.scene-base) / 1s;
-    property <[image]> palms-l: [@image-url("timers/sw/palm-l-00.png"), @image-url("timers/sw/palm-l-01.png"), @image-url("timers/sw/palm-l-02.png"), @image-url("timers/sw/palm-l-03.png"), @image-url("timers/sw/palm-l-04.png"), @image-url("timers/sw/palm-l-05.png"), @image-url("timers/sw/palm-l-06.png"), @image-url("timers/sw/palm-l-07.png"), @image-url("timers/sw/palm-l-08.png"), @image-url("timers/sw/palm-l-09.png"), @image-url("timers/sw/palm-l-10.png"), @image-url("timers/sw/palm-l-11.png"), @image-url("timers/sw/palm-l-12.png"), @image-url("timers/sw/palm-l-13.png"), @image-url("timers/sw/palm-l-14.png"), @image-url("timers/sw/palm-l-15.png")];
-    property <[image]> palms-r: [@image-url("timers/sw/palm-r-00.png"), @image-url("timers/sw/palm-r-01.png"), @image-url("timers/sw/palm-r-02.png"), @image-url("timers/sw/palm-r-03.png"), @image-url("timers/sw/palm-r-04.png"), @image-url("timers/sw/palm-r-05.png"), @image-url("timers/sw/palm-r-06.png"), @image-url("timers/sw/palm-r-07.png"), @image-url("timers/sw/palm-r-08.png"), @image-url("timers/sw/palm-r-09.png"), @image-url("timers/sw/palm-r-10.png"), @image-url("timers/sw/palm-r-11.png"), @image-url("timers/sw/palm-r-12.png"), @image-url("timers/sw/palm-r-13.png"), @image-url("timers/sw/palm-r-14.png"), @image-url("timers/sw/palm-r-15.png")];
+    property <[image]> palms-l: [@image-url("timers/sw/palm-l-00.png"), @image-url("timers/sw/palm-l-01.png"), @image-url("timers/sw/palm-l-02.png"), @image-url("timers/sw/palm-l-03.png"), @image-url("timers/sw/palm-l-04.png"), @image-url("timers/sw/palm-l-05.png"), @image-url("timers/sw/palm-l-06.png"), @image-url("timers/sw/palm-l-07.png"), @image-url("timers/sw/palm-l-08.png"), @image-url("timers/sw/palm-l-09.png"), @image-url("timers/sw/palm-l-10.png"), @image-url("timers/sw/palm-l-11.png"), @image-url("timers/sw/palm-l-12.png"), @image-url("timers/sw/palm-l-13.png"), @image-url("timers/sw/palm-l-14.png"), @image-url("timers/sw/palm-l-15.png"), @image-url("timers/sw/palm-l-16.png"), @image-url("timers/sw/palm-l-17.png"), @image-url("timers/sw/palm-l-18.png"), @image-url("timers/sw/palm-l-19.png"), @image-url("timers/sw/palm-l-20.png"), @image-url("timers/sw/palm-l-21.png"), @image-url("timers/sw/palm-l-22.png"), @image-url("timers/sw/palm-l-23.png"), @image-url("timers/sw/palm-l-24.png"), @image-url("timers/sw/palm-l-25.png"), @image-url("timers/sw/palm-l-26.png"), @image-url("timers/sw/palm-l-27.png"), @image-url("timers/sw/palm-l-28.png"), @image-url("timers/sw/palm-l-29.png"), @image-url("timers/sw/palm-l-30.png"), @image-url("timers/sw/palm-l-31.png"), @image-url("timers/sw/palm-l-32.png")];
+    property <[image]> palms-r: [@image-url("timers/sw/palm-r-00.png"), @image-url("timers/sw/palm-r-01.png"), @image-url("timers/sw/palm-r-02.png"), @image-url("timers/sw/palm-r-03.png"), @image-url("timers/sw/palm-r-04.png"), @image-url("timers/sw/palm-r-05.png"), @image-url("timers/sw/palm-r-06.png"), @image-url("timers/sw/palm-r-07.png"), @image-url("timers/sw/palm-r-08.png"), @image-url("timers/sw/palm-r-09.png"), @image-url("timers/sw/palm-r-10.png"), @image-url("timers/sw/palm-r-11.png"), @image-url("timers/sw/palm-r-12.png"), @image-url("timers/sw/palm-r-13.png"), @image-url("timers/sw/palm-r-14.png"), @image-url("timers/sw/palm-r-15.png"), @image-url("timers/sw/palm-r-16.png"), @image-url("timers/sw/palm-r-17.png"), @image-url("timers/sw/palm-r-18.png"), @image-url("timers/sw/palm-r-19.png"), @image-url("timers/sw/palm-r-20.png"), @image-url("timers/sw/palm-r-21.png"), @image-url("timers/sw/palm-r-22.png"), @image-url("timers/sw/palm-r-23.png"), @image-url("timers/sw/palm-r-24.png"), @image-url("timers/sw/palm-r-25.png"), @image-url("timers/sw/palm-r-26.png"), @image-url("timers/sw/palm-r-27.png"), @image-url("timers/sw/palm-r-28.png"), @image-url("timers/sw/palm-r-29.png"), @image-url("timers/sw/palm-r-30.png"), @image-url("timers/sw/palm-r-31.png"), @image-url("timers/sw/palm-r-32.png")];
     // The palms in the wind: three sines of unrelated periods (4.8, 7.5, 12.5 s: each a whole part of the
     // scene clock's 1200 s rebase, so the rebase never shows) with each palm's own
     // phases, scaled by gusts (synth.rs starts one every 6-14 s; it reaches the right palm 0.22 s
-    // later). The frame (16 per side, 0..15 across the sway) comes from that angle every frame, so
+    // later). The frame (33 per side, one sweep across the sway) comes from that angle every frame, so
     // nothing repeats and the two palms never move together.
     in property <float> palm-gust-at: -100;   // scene time the next or last gust starts
     in property <float> palm-gust-peak: 1.8;
     in property <float> palm-gust-hold: 2;
     in property <float> palm-calm: 0.7;
+    // the calm sway before this gust: the gust rises from it and settles into the new calm (no step)
+    in property <float> palm-calm-before: 0.7;
     pure function sstep(x: float) -> float { Math.max(0, Math.min(1, x)) * Math.max(0, Math.min(1, x)) * (3 - 2 * Math.max(0, Math.min(1, x))) }
     // rise 1 s, hold, fall 2.5 s; calm between gusts
     pure function gust(d: float) -> float {
-        d < 0 || d > 3.5 + root.palm-gust-hold ? root.palm-calm
-            : d < 1 ? root.palm-calm + (root.palm-gust-peak - root.palm-calm) * root.sstep(d)
+        d < 0 ? root.palm-calm-before
+            : d > 3.5 + root.palm-gust-hold ? root.palm-calm
+            : d < 1 ? root.palm-calm-before + (root.palm-gust-peak - root.palm-calm-before) * root.sstep(d)
             : d < 1 + root.palm-gust-hold ? root.palm-gust-peak
             : root.palm-gust-peak + (root.palm-calm - root.palm-gust-peak) * root.sstep((d - 1 - root.palm-gust-hold) / 2.5)
     }
-    pure function palm-frame(t: float, p1: float, p2: float, p3: float, delay: float) -> int {
-        Math.max(0, Math.min(15, Math.round(7.5 + 3.75 * root.gust(t - delay - root.palm-gust-at)
-            * (0.55 * Math.sin((t / 4.8 * 360 + p1) * 1deg) + 0.30 * Math.sin((t / 7.5 * 360 + p2) * 1deg) + 0.15 * Math.sin((t / 12.5 * 360 + p3) * 1deg)))))
+    // the frames are one sweep from the full left lean (0) to the full right lean (32), 16 upright; a gust's
+    // peak (1.8) reaches the ends, the calm sway about 40 % of the way
+    pure function palm-pos(t: float, p1: float, p2: float, p3: float, delay: float) -> float {
+        16 + 16 * Math.max(-1, Math.min(1, root.gust(t - delay - root.palm-gust-at) / 1.8
+            * (0.55 * Math.sin((t / 4.8 * 360 + p1) * 1deg) + 0.30 * Math.sin((t / 7.5 * 360 + p2) * 1deg) + 0.15 * Math.sin((t / 12.5 * 360 + p3) * 1deg))))
     }
+    // each palm between two of its 33 frames: the lower frame, the next one over it at the fraction
+    property <float> palm-fl: root.palm-pos(root.scene-t, 17, 211, 98, 0);
+    property <float> palm-fr: root.palm-pos(root.scene-t, 143, 37, 281, 0.22);
+    property <int> palm-il: Math.min(31, Math.floor(root.palm-fl));
+    property <int> palm-ir: Math.min(31, Math.floor(root.palm-fr));
     in property <float> home-fl-t: root.scene-t;
     in property <[SwCar]> home-fl-cars;
     in property <bool> home-fl-cars-on: true;
-    in property <image> home-fl-palm-l: root.palms-l[root.palm-frame(root.scene-t, 17, 211, 98, 0)];
-    in property <image> home-fl-palm-r: root.palms-r[root.palm-frame(root.scene-t, 143, 37, 281, 0.22)];
+    in property <image> home-fl-palm-l: root.palms-l[root.palm-il];
+    in property <image> home-fl-palm-r: root.palms-r[root.palm-ir];
+    in property <image> home-fl-palm-l2: root.palms-l[root.palm-il + 1];
+    in property <image> home-fl-palm-r2: root.palms-r[root.palm-ir + 1];
+    in property <float> home-fl-palm-lk: root.palm-fl - root.palm-il;
+    in property <float> home-fl-palm-rk: root.palm-fr - root.palm-ir;
     in property <bool> home-fl-neon;
     in property <bool> home-bg-sheet;
     in property <HomeMusic> home-music;
@@ -364,12 +383,14 @@ export component AppWindow inherits Window {
     in property <string> music-player;
     in property <image> music-art;
     in property <image> music-art-bg;
+    in property <bool> music-cover-blur: true;
     in property <bool> music-has-art: true;
     in property <string> music-kind-icon: "\u{F0387}";
     in property <color> music-accent: #e8262d;
     in property <[MusicPlayer]> music-players;
     in property <bool> music-picker;
     in property <int> music-style;
+    in property <bool> music-cs-cover;
     in property <int> music-tape-scope;
     in property <float> music-q-played;
     in property <float> music-q-total;
@@ -428,8 +449,12 @@ export component AppWindow inherits Window {
     in property <image> timers-sw-floor;
     in property <float> timers-sw-t: root.scene-t;
     in property <[SwCar]> timers-sw-cars;
-    in property <image> timers-sw-palm-l: root.palms-l[root.palm-frame(root.scene-t, 17, 211, 98, 0)];
-    in property <image> timers-sw-palm-r: root.palms-r[root.palm-frame(root.scene-t, 143, 37, 281, 0.22)];
+    in property <image> timers-sw-palm-l: root.palms-l[root.palm-il];
+    in property <image> timers-sw-palm-r: root.palms-r[root.palm-ir];
+    in property <image> timers-sw-palm-l2: root.palms-l[root.palm-il + 1];
+    in property <image> timers-sw-palm-r2: root.palms-r[root.palm-ir + 1];
+    in property <float> timers-sw-palm-lk: root.palm-fl - root.palm-il;
+    in property <float> timers-sw-palm-rk: root.palm-fr - root.palm-ir;
     in property <bool> timers-edit;
     in property <bool> timers-edit-new: true;
     in property <bool> timers-edit-timer;
@@ -549,7 +574,10 @@ export component AppWindow inherits Window {
         root.sec-base = s;
         root.sec-tick = animation-tick();
     }
-    out property <float> clock-sec: Math.mod(root.sec-base + (animation-tick() - root.sec-tick) / 1s, 60);
+    // At the minute the seconds hold at the very end until the app's new minute arrives (some ms later), so a
+    // minute hand made of minute + seconds never flicks back; a sync later than 0.3 s lets them run on as before.
+    property <float> sec-run: root.sec-base + (animation-tick() - root.sec-tick) / 1s;
+    out property <float> clock-sec: root.sec-run < 60.3 ? Math.min(59.999, root.sec-run) : Math.mod(root.sec-run, 60);
     // The music widget's position (seconds), apart from the rest of its data.
     in property <float> home-music-pos;
 
@@ -567,15 +595,38 @@ export component AppWindow inherits Window {
     // Endless: `pos` counts pages without wrapping (after the last page comes the first from the same side);
     // the page shown is pos modulo the count. A page set by the app (out of step with pos) is taken as it is.
     property <int> pos;
-    property <int> base: root.pages.length > 0 && Math.mod(root.pos, root.pages.length) == root.page ? root.pos : root.page;
-    property <length> offset: root.dragging ? -root.base * root.width + root.drag-x : -root.base * root.width;
+    pure function near(d: int) -> int {
+        d * 2 > root.pages.length ? d - root.pages.length : d * 2 < -root.pages.length ? d + root.pages.length : d
+    }
+    property <int> base: root.pages.length > 0 ? root.pos + root.near(root.page - Math.mod(root.pos, root.pages.length)) : root.page;
+    // where the picture was when the finger took it (the snap may still have been running)
+    property <length> drag-start;
+    property <length> drag-x0;
+    property <length> offset: root.dragging ? root.drag-start + root.drag-x - root.drag-x0 : -root.base * root.width;
     property <float> pf: -root.offset / root.width;
     // set by the app for one frame when pages are renumbered (a temporary page leaves): no slide
     in-out property <bool> instant;
     animate offset { duration: root.dragging || root.instant ? 0ms : 260ms; easing: cubic-bezier(0.2, 0.8, 0.25, 1); }
     // The page that covers most of the screen now (status bar colour while swiping).
     property <int> shown-page: Math.mod(round(root.pf), max(1, root.pages.length));
+    // the status bar's and the dots' light text mixed by how far the swipe is between two pages
+    property <int> pg-a: Math.mod(Math.floor(root.pf), max(1, root.pages.length));
+    property <int> pg-b: Math.mod(Math.floor(root.pf) + 1, max(1, root.pages.length));
+    property <float> pg-f: root.pf - Math.floor(root.pf);
+    property <float> on-k: root.pages.length == 0 ? 0
+        : (root.on-color(root.pages[root.pg-a]) ? 1 : 0) * (1 - root.pg-f) + (root.on-color(root.pages[root.pg-b]) ? 1 : 0) * root.pg-f;
     out property <bool> swiping: root.dragging;
+    // a temporary page comes or goes: the frame restarts at the page shown (same picture, no slide)
+    public function reset-pos() {
+        root.pos = root.page;
+    }
+    // the timers' side in the status bar (left where the page has its own chip at the top right), mixed by
+    // the swipe like the colours
+    pure function chips-left(p: PageSlot) -> bool {
+        p.kind == "music" || p.kind == "thermostat" || p.kind == "camera" || p.kind == "calendar"
+    }
+    property <float> left-k: root.screensaver-on || root.status-on || root.timers.length == 0 || root.pages.length == 0 ? 0
+        : (root.chips-left(root.pages[root.pg-a]) ? 1 : 0) * (1 - root.pg-f) + (root.chips-left(root.pages[root.pg-b]) ? 1 : 0) * root.pg-f;
 
     // Taps, holds and drags of every page and layer: what ("music.play",
     // "timers.cancel", ...) and a value ("", an id, a number as text).
@@ -600,8 +651,12 @@ export component AppWindow inherits Window {
     callback wifi-password-toggle-show();
     callback hidden-focus-field(int);
 
+    // a Custom page on a light scene (drawn, line or plain in light): dark status bar text
+    pure function light-home(p: PageSlot) -> bool {
+        (p.light == 1 || (p.light == 0 && !Theme.dark)) && (p.theme >= 0 ? p.theme : root.weather.theme) >= 3 && (p.theme >= 0 ? p.theme : root.weather.theme) != 8
+    }
     pure function on-color(p: PageSlot) -> bool {
-        (p.kind == "weather" && p.variant == 1) || (p.kind == "home" && !((p.theme >= 0 ? p.theme : root.weather.theme) == 9 && !Theme.dark)) || (p.kind == "music" && !(p.variant == 1 && !Theme.dark)) || (p.kind == "timers" && (root.timers-ringing || (p.variant == 3 && root.timers-mode == 1))) || (p.kind == "thermostat" && p.variant == 3) || (p.kind == "todo" && p.variant == 2) || (p.kind == "calendar" && p.variant == 1) || (p.kind == "info" && (root.info-critical || p.variant == 3)) || root.status-on || (p.kind == "quick" && p.variant > 0) || (p.kind == "camera" && (root.cam-ring || (root.cam-view == 0 && root.cam-items.length > 0 && root.cam-items[root.cam-sel].state == 0 && (root.cam-fit == 0 || Theme.dark))))
+        (p.kind == "weather" && p.variant == 1) || (p.kind == "home" && !root.light-home(p)) || (p.kind == "music" && !(p.variant == 1 && !Theme.dark)) || (p.kind == "timers" && (root.timers-ringing || (p.variant == 3 && root.timers-mode == 1))) || (p.kind == "thermostat" && p.variant == 3) || (p.kind == "todo" && p.variant == 2) || (p.kind == "calendar" && p.variant == 1) || (p.kind == "info" && (root.info-critical || p.variant == 3)) || root.status-on || (p.kind == "quick" && p.variant > 0) || (p.kind == "camera" && (root.cam-ring || (root.cam-view == 0 && root.cam-items.length > 0 && root.cam-items[root.cam-sel].state == 0 && (root.cam-fit == 0 || Theme.dark))))
     }
 
     // ---- the pages, side by side ----
@@ -630,26 +685,35 @@ export component AppWindow inherits Window {
             handle-swipe-right: root.pages.length > 1 && !Act.hold-swipe;
             moved => {
                 if !root.dragging {
-                    // a new swipe starts from the page shown (the same picture: pages sit at their nearest copy)
-                    root.pos = root.page;
+                    // a new swipe takes the picture where it is: the running snap stops under the finger, and the
+                    // recogniser's start distance is not jumped over
+                    root.drag-start = root.offset;
+                    root.pos = root.base;
+                    root.drag-x0 = self.current-position.x - self.pressed-position.x;
                 }
-                root.dragging = true;
                 root.drag-x = self.current-position.x - self.pressed-position.x;
+                root.dragging = true;
             }
             swiped => {
                 let dx = self.current-position.x - self.pressed-position.x;
-                let step = dx < -root.width * 0.22 ? 1 : dx > root.width * 0.22 ? -1 : 0;
+                // the page it settles on: the next one in the swipe's direction past 22 % of a width, else the nearest
+                let rp = -(root.drag-start + dx - root.drag-x0) / root.width;
+                let target = dx < -root.width * 0.22 ? Math.ceil(rp - 0.05) : dx > root.width * 0.22 ? Math.floor(rp + 0.05) : Math.round(rp);
+                let before = root.page;
+                root.pos = target;
                 root.dragging = false;
                 root.drag-x = 0;
-                if step != 0 {
-                    root.pos = root.pos + step;
-                    root.page = Math.mod(root.pos, root.pages.length);
+                root.page = Math.mod(target, root.pages.length);
+                if root.page != before {
                     root.page-changed(root.page);
                 }
             }
             cancelled => {
+                let rp = -(root.drag-start + root.drag-x - root.drag-x0) / root.width;
+                root.pos = Math.round(rp);
                 root.dragging = false;
                 root.drag-x = 0;
+                root.page = Math.mod(root.pos, root.pages.length);
             }
             for slot[i] in root.pages: home-slot := Rectangle {
                 // warm-up: each page drawn once in view, under the page shown (start-up, a new page list)
@@ -664,10 +728,13 @@ export component AppWindow inherits Window {
 
                 // several weather pages may each have their own background and widgets
                 property <int> home-theme: slot.theme >= 0 ? slot.theme : root.weather.theme;
+                // the light scene: drawn and line themes (and plain) follow the panel's theme, or the page's choice
+                property <bool> home-light: slot.light == 1 || (slot.light == 0 && !Theme.dark);
+                property <bool> light-scene: self.home-light && self.home-theme >= 3 && self.home-theme != 8;
                 property <[HomeItem]> home-items: slot.layout >= 0 && slot.layout < root.home-layouts.length ? root.home-layouts[slot.layout].items : root.home-items;
                 // the plain background: one colour, the panel's own ground (Night or Paper), the widgets in Ink on Paper
                 if slot.kind == "home" && home-slot.home-theme == 9: Rectangle {
-                    background: Theme.background;
+                    background: home-slot.home-light ? #F5F3EE : #000000;
                     HomeGrid {
                         items: home-slot.home-items;
                         data: root.weather;
@@ -680,7 +747,7 @@ export component AppWindow inherits Window {
                         day-month: root.home-day-month;
                         accent: root.clock-accent;
                         halo: 0;
-                        ink: Theme.dark ? #ffffff : #101114;
+                        ink: home-slot.home-light ? #101114 : #ffffff;
                         year: root.home-year;
                         week: root.home-week;
                         editing: root.home-editing;
@@ -702,8 +769,11 @@ export component AppWindow inherits Window {
                     }
                 }
                 if slot.kind == "home" && home-slot.home-theme != 8 && home-slot.home-theme != 9: sky := PhotoSky {
-                    mood: root.weather.mood;
+                    // clear night with the real sun: the clear day picture, the sun's elevation turns it to night
+                    // (no swap of the whole scene when the weather service says clear-night after sunset)
+                    mood: root.weather.real-sun && root.weather.mood == 7 ? 0 : root.weather.mood;
                     theme: home-slot.home-theme;
+                    light-variant: home-slot.light-scene;
                     rain: root.weather.rain;
                     dusk: root.weather.dusk;
                     dawn: root.weather.dawn;
@@ -718,6 +788,8 @@ export component AppWindow inherits Window {
                     sun-el: root.weather.sun-el;
                     moon-az: root.weather.moon-az;
                     moon-el: root.weather.moon-el;
+                    // Home Assistant moves the sun every few minutes: each step glides over 3 s (disc, light, night)
+                    animate sun-az, sun-el, moon-az, moon-el { duration: 3s; easing: ease-in-out; }
                     moon-phase: root.weather.moon-phase;
                     sun-veil: root.weather.sun-veil;
                     moon-veil: root.weather.moon-veil;
@@ -733,6 +805,7 @@ export component AppWindow inherits Window {
                         day-month: root.home-day-month;
                         accent: root.clock-accent;
                         halo: sky.glow-k;
+                        ink: home-slot.light-scene ? #101114 : #ffffff;
                         year: root.home-year;
                         week: root.home-week;
                         editing: root.home-editing;
@@ -755,8 +828,9 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "home" && home-slot.home-theme == 8: FastLane {
                     scene: root.home-fl-scene; back-a: root.home-fl-back-a; floor-a: root.home-fl-floor-a; back-b: root.home-fl-back-b; floor-b: root.home-fl-floor-b;
+                    back-c: root.home-fl-back-c; floor-c: root.home-fl-floor-c; mix-c: root.home-fl-mix-c;
                     mix: root.home-fl-mix; grid: root.home-fl-grid; star-k: root.home-fl-star; t: root.home-fl-t; cars: root.home-fl-cars;
-                    palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r;
+                    palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r; palm-l2: root.home-fl-palm-l2; palm-r2: root.home-fl-palm-r2; palm-lk: root.home-fl-palm-lk; palm-rk: root.home-fl-palm-rk;
                     HomeGrid {
                         items: home-slot.home-items;
                         data: root.weather;
@@ -818,7 +892,7 @@ export component AppWindow inherits Window {
                     title: root.music-title; artist: root.music-artist; album: root.music-album;
                     playing: root.music-playing; pos: root.music-pos; dur: root.music-dur;
                     shuffle: root.music-shuffle; repeat: root.music-repeat; volume: root.music-volume;
-                    player: root.music-player; art: root.music-art; art-bg: root.music-art-bg; has-art: root.music-has-art;
+                    player: root.music-player; art: root.music-art; art-bg: root.music-art-bg; cs-cover: root.music-cs-cover; cover-blur: root.music-cover-blur; has-art: root.music-has-art;
                     kind-icon: root.music-kind-icon; accent: root.music-accent; players: root.music-players; picker: root.music-picker;
                     style: slot.variant; tape-scope: root.music-tape-scope; q-played: root.music-q-played; q-total: root.music-q-total;
                     q-index: root.music-q-index; q-count: root.music-q-count; tt-deck: root.music-tt-deck; tt-grooves: root.music-tt-grooves;
@@ -836,15 +910,16 @@ export component AppWindow inherits Window {
                     hg-sand-mask: root.timers-hg-sand-mask; hg-sand-shade: root.timers-hg-sand-shade; hg-peak: root.timers-hg-peak;
                     hg-stream-mask: root.timers-hg-stream-mask; hg-stream-shade: root.timers-hg-stream-shade;
                     sw-scene: root.timers-sw-scene; sw-choice: root.timers-sw-choice; sw-back: root.timers-sw-back; sw-floor: root.timers-sw-floor; sw-t: root.timers-sw-t;
-                    sw-cars: root.timers-sw-cars; sw-palm-l: root.timers-sw-palm-l; sw-palm-r: root.timers-sw-palm-r;
+                    sw-cars: root.timers-sw-cars; sw-palm-l: root.timers-sw-palm-l; sw-palm-r: root.timers-sw-palm-r; sw-palm-l2: root.timers-sw-palm-l2; sw-palm-r2: root.timers-sw-palm-r2; sw-palm-lk: root.timers-sw-palm-lk; sw-palm-rk: root.timers-sw-palm-rk;
                     edit: root.timers-edit; edit-new: root.timers-edit-new; edit-timer: root.timers-edit-timer; edit-h <=> root.timers-edit-h; edit-m <=> root.timers-edit-m; edit-days: root.timers-edit-days;
                     edit-label: root.timers-edit-label; edit-sound: root.timers-edit-sound; edit-ha-sound: root.timers-edit-ha-sound; ha-sounds: root.timers-ha-sounds; edit-keyboard: root.timers-edit-keyboard; kb-layer: root.timers-kb-layer;
                     edit-info: root.timers-edit-info; edit-tint: root.timers-edit-tint;
                 }
                 if slot.kind == "thermostat" && slot.variant == 3: FastLane {
                     scene: root.home-fl-scene; back-a: root.home-fl-back-a; floor-a: root.home-fl-floor-a; back-b: root.home-fl-back-b; floor-b: root.home-fl-floor-b;
+                    back-c: root.home-fl-back-c; floor-c: root.home-fl-floor-c; mix-c: root.home-fl-mix-c;
                     mix: root.home-fl-mix; grid: root.home-fl-grid; star-k: root.home-fl-star; t: root.home-fl-t; cars: root.home-fl-cars;
-                    palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r;
+                    palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r; palm-l2: root.home-fl-palm-l2; palm-r2: root.home-fl-palm-r2; palm-lk: root.home-fl-palm-lk; palm-rk: root.home-fl-palm-rk;
                 }
                 if slot.kind == "thermostat": ThermostatPage {
                     devices: root.thermo-devices; sel: root.thermo-sel; rooms: root.thermo-rooms; picker: root.thermo-picker; sheet: root.thermo-sheet;
@@ -924,20 +999,26 @@ export component AppWindow inherits Window {
         problem: !root.connected;
         quiet: root.screensaver-on;
         on-color: root.status-on || (root.pages.length > 0 && root.on-color(root.pages[root.shown-page]));
-        left-chips: !root.screensaver-on && !root.status-on && root.timers.length > 0 && root.pages.length > 0
-            && (root.pages[root.shown-page].kind == "music" || root.pages[root.shown-page].kind == "thermostat"
-                || root.pages[root.shown-page].kind == "camera" || root.pages[root.shown-page].kind == "calendar");
+        on-k: root.status-on ? 1 : root.on-k;
+        left-chips: root.left-k > 0.5;
+        left-k: root.left-k;
     }
     property <bool> sheet-open: root.quick-sheet || root.thermo-sheet || root.thermo-picker || root.music-picker || root.cal-detail
         || root.timers-quick || root.todo-picker;
-    if !root.screensaver-on && !root.dots-hidden && !root.sheet-open && root.pages.length > 1: PageDots {
+    // the dots fade (200 ms) when a sheet, the screensaver or a temporary page hides them, and back
+    property <float> dots-k: !root.screensaver-on && !root.dots-hidden && !root.sheet-open && root.pages.length > 1 ? 1 : 0;
+    animate dots-k { duration: 200ms; easing: ease-out; }
+    if root.dots-k > 0.001 && root.pages.length > 1: PageDots {
         y: root.height - 22px;
         width: root.width;
         height: 6px;
         count: root.pages.length;
-        current: root.shown-page;
-        shown: 1;
+        current: root.pg-a;
+        next: root.pg-b;
+        frac: root.pg-f;
+        shown: root.dots-k;
         on-color: root.pages.length > 0 && root.on-color(root.pages[root.shown-page]);
+        on-k: root.on-k;
     }
 
     // ---- dashboard mode: the web view fills the screen; a swipe down from the
@@ -968,10 +1049,13 @@ export component AppWindow inherits Window {
         }
     }
 
-    if root.web-shown && root.web-pull > 0: PullToRefresh {
-        pull: root.web-pull;
+    // let go: the disc slides back up (200 ms) instead of vanishing
+    property <float> pull-shown: root.web-pull;
+    animate pull-shown { duration: root.web-pull > 0 ? 0ms : 200ms; easing: ease-out; }
+    if root.web-shown && root.pull-shown > 0.001: PullToRefresh {
+        pull: root.pull-shown;
         x: (root.width - self.width) / 2;
-        y: -self.height + root.web-pull * 80px;
+        y: -self.height + root.pull-shown * 80px;
     }
 
     if root.web-shown && root.web-overlay: WebLoading {

@@ -51,9 +51,12 @@ component Ring inherits Rectangle {
     in property <color> track: TFg.c.with-alpha(0.12);
     property <float> r: (self.width - self.stroke) / 2 / 1px;
     property <float> c: self.width / 2 / 1px;
-    property <angle> a: min(0.9999, max(0, root.fr)) * 360deg;
+    // the app counts whole seconds: the arc glides from one to the next (linear, 1 s) instead of stepping
+    property <float> fr-s: root.fr;
+    animate fr-s { duration: 1000ms; easing: linear; }
+    property <angle> a: min(0.9999, max(0, root.fr-s)) * 360deg;
     Rectangle { border-radius: self.width / 2; border-width: root.stroke; border-color: root.track; }
-    if root.fr > 0.001: Path {
+    if root.fr-s > 0.001: Path {
         x: -root.stroke / 2; y: -root.stroke / 2; width: root.width + root.stroke; height: root.height + root.stroke;
         viewbox-width: root.width / 1px; viewbox-height: root.height / 1px;
         stroke: root.arc; stroke-width: root.stroke;
@@ -180,25 +183,36 @@ export component SynthScene inherits Rectangle {
     in property <image> back2;             // second sky / floor faded in on top by mix (home page: night)
     in property <image> floor2;
     in property <float> mix;
+    in property <image> back3;             // the beach's dawn view, over the night view by mix3 (morning twilight)
+    in property <image> floor3;
+    in property <float> mix3;
     in property <int> scene;               // 0 sunset, 1 city, 2 beach, 3 stars
     in property <color> grid;              // the moving floor lines
     in property <float> t;                 // seconds (the floor glides 1.2 line spacings per second)
     in property <[SwCar]> cars;
     in property <image> palm-l;
     in property <image> palm-r;
+    in property <image> palm-l2;           // the next frame, over the first at the fraction (smooth sway)
+    in property <image> palm-r2;
+    in property <float> palm-lk;
+    in property <float> palm-rk;
     in property <float> star-k: 1;         // shooting star strength (home page: only at night)
     // the sky and the floor; during a crossfade (home page: day <-> night) the second pair on top
     if root.mix < 0.999: Image { x: 0; y: 0; width: 480px; height: 330px; source: root.back; }
     if root.mix < 0.999: Image { x: 0; y: 330px; width: 480px; height: 150px; source: root.floor; }
     if root.mix > 0.001: Image { x: 0; y: 0; width: 480px; height: 330px; source: root.back2; opacity: root.mix; }
     if root.mix > 0.001: Image { x: 0; y: 330px; width: 480px; height: 150px; source: root.floor2; opacity: root.mix; }
+    if root.mix * root.mix3 > 0.001: Image { x: 0; y: 0; width: 480px; height: 330px; source: root.back3; opacity: root.mix * root.mix3; }
+    if root.mix * root.mix3 > 0.001: Image { x: 0; y: 330px; width: 480px; height: 150px; source: root.floor3; opacity: root.mix * root.mix3; }
     // floor lines gliding towards the viewer (one line spacing every 0.83 s)
     for k in 18: fl := Rectangle {
         property <float> d: 0.7 * (k + 1 - (root.t * 1.2 - Math.floor(root.t * 1.2))) + 0.3;
         property <float> yy: 330 + 150 / self.d;
-        property <float> a: max(0.1, min(1, (self.yy - 331) / 70));
+        // the newest (farthest) line fades in over its first spacing instead of appearing at once; lines sit
+        // at their exact (sub-pixel) place so the slow far ones glide instead of stepping a pixel at a time
+        property <float> a: max(0.1, min(1, (self.yy - 331) / 70)) * (k == 17 ? root.t * 1.2 - Math.floor(root.t * 1.2) : 1);
         visible: self.yy < 481 && self.yy > 332;
-        x: 0; y: Math.round(self.yy - 2) * 1px; width: 480px; height: 5px;
+        x: 0; y: (self.yy - 2) * 1px; width: 480px; height: 5px;
         background: root.grid.with-alpha(0.10 * self.a);
         Rectangle { y: 1px; height: 3px; background: root.grid.with-alpha(0.22 * fl.a); }
         Rectangle { y: 2px; height: fl.yy > 410 ? 2px : 1px; background: root.grid.with-alpha(0.9 * fl.a); }
@@ -224,12 +238,17 @@ export component SynthScene inherits Rectangle {
         property <float> cx: 240 + c.line * self.sp;         // on its line
         property <float> gy: 330 + 150 / car.d;              // ground under the tyres
         property <float> sm: max(0, min(1, (1.8 - car.d) / 0.8));  // smoke only while it pulls away (near)
+        // it fades out over the last 6 % of the trip (a few pixels wide by then) instead of vanishing
+        property <float> fade: max(0, min(1, (1 - min(1, self.age / max(1, c.dur))) / 0.06));
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
+            opacity: car.fade;
             source: c.kind == 0 ? @image-url("timers/sw/pcar-0-paint.png") : c.kind == 1 ? @image-url("timers/sw/pcar-1-paint.png") : @image-url("timers/sw/pcar-2-paint.png");
             colorize: c.tint; }
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
+            opacity: car.fade;
             source: c.kind == 0 ? @image-url("timers/sw/pcar-0-shade.png") : c.kind == 1 ? @image-url("timers/sw/pcar-1-shade.png") : @image-url("timers/sw/pcar-2-shade.png"); }
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
+            opacity: car.fade;
             source: c.kind == 0 ? @image-url("timers/sw/pcar-0-fixed.png") : c.kind == 1 ? @image-url("timers/sw/pcar-1-fixed.png") : @image-url("timers/sw/pcar-2-fixed.png"); }
         // a little pixel smoke from the rear tyres, drifting towards the viewer
         if car.sm > 0: Rectangle {
@@ -246,7 +265,9 @@ export component SynthScene inherits Rectangle {
     }
     // swaying palms (beach)
     if root.scene == 2: Image { x: -34px; y: 112px; width: 210px; height: 300px; source: root.palm-l; }
+    if root.scene == 2: Image { x: -34px; y: 112px; width: 210px; height: 300px; source: root.palm-l2; opacity: root.palm-lk; }
     if root.scene == 2: Image { x: 304px; y: 112px; width: 210px; height: 300px; source: root.palm-r; }
+    if root.scene == 2: Image { x: 304px; y: 112px; width: 210px; height: 300px; source: root.palm-r2; opacity: root.palm-rk; }
 }
 
 export component TimersPage inherits Rectangle {
@@ -290,6 +311,10 @@ export component TimersPage inherits Rectangle {
     in property <[SwCar]> sw-cars;
     in property <image> sw-palm-l;
     in property <image> sw-palm-r;
+    in property <image> sw-palm-l2;
+    in property <image> sw-palm-r2;
+    in property <float> sw-palm-lk;
+    in property <float> sw-palm-rk;
     // alarm editor (new alarm or a tap on one) and its keyboard for the label
     in property <bool> edit;
     in property <bool> edit-new: true;
@@ -484,7 +509,7 @@ export component TimersPage inherits Rectangle {
     // ---------------------------------------------------------------- 3 synthwave: the scene, then the tubes
     if root.synth: syn := Rectangle {
         SynthScene { back: root.sw-back; floor: root.sw-floor; scene: root.sw-scene; grid: root.grid; t: root.sw-t; cars: root.sw-cars;
-            palm-l: root.sw-palm-l; palm-r: root.sw-palm-r; }
+            palm-l: root.sw-palm-l; palm-r: root.sw-palm-r; palm-l2: root.sw-palm-l2; palm-r2: root.sw-palm-r2; palm-lk: root.sw-palm-lk; palm-rk: root.sw-palm-rk; }
 
         // one timer: a big tube, the controls at the bottom
         if root.n == 1: Rectangle {
@@ -790,8 +815,11 @@ export component TimersPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- settings: functions, colour, theme (+ scene)
-    if root.settings: Rectangle { background: #00000080; }
-    if root.settings: st := Rectangle {
+    // the settings fades in (240 ms) and out (200 ms) instead of popping
+    property <float> settings-k: root.settings ? 1 : 0;
+    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
+    if root.settings-k > 0.001: st := Rectangle { opacity: root.settings-k;
         property <bool> scenes: root.theme == 3;
         property <length> r0: 72px;
         property <length> r1: self.r0 + 32px + 22px;
