@@ -300,7 +300,12 @@ class Panel:
         # A dashboard saved in Home Assistant may need other card resources.
         self.entry.async_on_unload(self.hass.bus.async_listen("lovelace_updated", self._lovelace_updated))
         # Dashboards and resources are there once Home Assistant has started.
-        self.entry.async_on_unload(async_at_started(self.hass, lambda _hass: self.refresh_skip()))
+        self.entry.async_on_unload(async_at_started(self.hass, self._started))
+
+    @callback
+    def _started(self, _hass: HomeAssistant) -> None:
+        # a callback: it runs in the event loop (a plain function would run in a worker thread)
+        self.refresh_skip()
 
     @callback
     def _lovelace_updated(self, event: Event) -> None:

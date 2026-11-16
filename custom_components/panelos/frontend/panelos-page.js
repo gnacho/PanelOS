@@ -2297,8 +2297,9 @@ class PanelOSPage extends HTMLElement {
       this._card("Picture", {},
         this._row("Opens on", this._seg([["one", "One camera"], ["all", "All cameras"]], o.view === "all" ? "all" : "one", (v) => this._setPageOption(p, i, "view", v), { label: "Opens on" })),
         this._row("Fit", this._seg([["whole", "Whole picture"], ["fill", "Fill the screen"]], o.fit === "whole" ? "whole" : "fill", (v) => this._setPageOption(p, i, "fit", v), { label: "Fit" }))),
-      this._card("Visitor alert", { info: "When this sensor turns on, the first camera's picture opens over any page and the panel rings (also in do not disturb, if the doorbell is allowed to come through there)." },
-        this._row("Opens when", this._entityButton(o.ring || "", { title: "Opens when", domains: ["binary_sensor"], none: "Never", p, onPick: (v) => this._setPageOption(p, i, "ring", v || undefined) }))),
+      this._card("Visitor alert", { info: "When this sensor turns on, the first camera's picture opens over any page and the panel rings (also in do not disturb, if the doorbell is allowed to come through there). With a door chosen, holding the button on the picture opens it." },
+        this._row("Opens when", this._entityButton(o.ring || "", { title: "Opens when", domains: ["binary_sensor"], none: "Never", p, onPick: (v) => this._setPageOption(p, i, "ring", v || undefined) })),
+        this._row("Door to open", this._entityButton(o.lock || "", { title: "Door to open", domains: ["lock", "cover"], none: "None", p, onPick: (v) => this._setPageOption(p, i, "lock", v || undefined) }))),
     ];
   }
 
@@ -3294,3 +3295,4 @@ class PanelOSPage extends HTMLElement {
 }
 
 customElements.define("panelos-page", PanelOSPage);
+             
