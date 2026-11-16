@@ -429,6 +429,19 @@ fn weather_key(w: &WeatherData) -> String {
 }
 
 fn update_clock(ui: &AppWindow) {
+    // the clocks turn at hh:mm:00 (the 1 s tick could be up to a second late): once more right then
+    thread_local!(static AT_MINUTE: std::cell::Cell<i64> = const { std::cell::Cell::new(0) });
+    let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
+    let to_minute = 60_000 - wall.rem_euclid(60_000);
+    let minute = wall / 60_000 + 1;
+    if to_minute < 1_100 && AT_MINUTE.with(|m| m.replace(minute)) != minute {
+        let weak = ui.as_weak();
+        slint::Timer::single_shot(Duration::from_millis(to_minute as u64 + 15), move || {
+            if let Some(ui) = weak.upgrade() {
+                update_clock(&ui);
+            }
+        });
+    }
     let ring = STATE.with(|st| {
         let mut guard = st.borrow_mut();
         let s = guard.as_mut()?;
@@ -2356,13 +2369,30 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
         w if w.starts_with("pop.") => info::pop_act(ui, w, value),
         "shade.close" => ui.set_set_view(0),
         "music.picker" | "music.picker-close" | "music.show" | "music.transfer" | "music.group" => mus::act(ui, what, value),
-        "music.play" | "music.next" | "music.prev" | "music.shuffle" | "music.repeat" | "music.volume" | "music.seek" => {
+        "music.play" | "music.next" | "music.prev" | "music.shuffle" | "music.repeat" | "music.volume" | "music.seek" | "music.pause" | "music.resume" => {
             let entity = with_state(|s| media_entity(s));
             if entity.is_empty() {
                 return;
             }
             match what {
-                "music.play" => call("media_player", "media_play_pause", &entity, json!({})),
+                "music.play" => {
+                    call("media_player", "media_play_pause", &entity, json!({}));
+                    // the glyph turns at once; the player's next state confirms it, or after 3 s the
+                    // views show its real state again
+                    let mut m = ui.get_home_music();
+                    m.playing = !m.playing;
+                    ui.set_music_playing(m.playing);
+                    ui.set_home_music(m);
+                    let weak = ui.as_weak();
+                    slint::Timer::single_shot(Duration::from_secs(3), move || {
+                        if let Some(ui) = weak.upgrade() {
+                            refresh_pages(&ui);
+                        }
+                    });
+                }
+                // the turntable's arm: dropped on its rest pauses, dropped on the record plays
+                "music.pause" => call("media_player", "media_pause", &entity, json!({})),
+                "music.resume" => call("media_player", "media_play", &entity, json!({})),
                 "music.next" => call("media_player", "media_next_track", &entity, json!({})),
                 "music.prev" => call("media_player", "media_previous_track", &entity, json!({})),
                 "music.shuffle" => call("media_player", "shuffle_set", &entity, json!({"shuffle": !ui.get_music_shuffle()})),

@@ -22,6 +22,8 @@ export struct HomeItem {
                     //   date: 1 year, 2 week number; weather: 1 condition, 2 high / low, 4 rain chance, 8 feels like
                     //   event: 1 time, 2 calendar colour; curve: 1 rain bars, 2 icons; hourly / daily: 1 rain chance
                     //   music: 1 long titles scroll (style = speed 1..5) instead of being cut off
+    card: int,      // the card behind the widget: 0 = the widget's own (as designed), 1..101 = (card - 1) %
+                    // opacity of a card in the card colour (the integration's "Background" slider)
 }
 
 // What the panel's music player plays (the last used player); accent = from the cover.
@@ -310,7 +312,7 @@ component EventW inherits Rectangle {
     in property <HomeEvent> event;
     in property <HomeItem> it;
     pure function on(bit: int) -> bool { Math.mod(Math.floor(root.it.opts / bit), 2) == 1 }
-    Glass { ink: root.ink;
+    Glass { ink: root.ink; visible: root.it.card == 0;
         x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px;
         Rectangle { x: 12px; y: 14px; width: 4px; height: parent.height - 28px; border-radius: 2px; background: root.on(2) ? root.event.tint : root.it.accent; }
         if root.it.w >= 4: VerticalLayout {
@@ -336,7 +338,7 @@ component CurveW inherits Rectangle {
     in property <HomeItem> it;
     pure function on(bit: int) -> bool { Math.mod(Math.floor(root.it.opts / bit), 2) == 1 }
     property <bool> icons: root.it.h >= 2 && root.on(2);
-    Glass { ink: root.ink; x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px; }
+    Glass { ink: root.ink; visible: root.it.card == 0; x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px; }
     property <length> pw: self.width - 56px;
     property <length> top: self.icons ? 64px : 30px;
     property <length> ph: self.height - self.top - 34px;
@@ -457,7 +459,7 @@ component MusicW inherits Rectangle {
     property <color> acc: root.m.accent;
     property <bool> scroll: Math.mod(root.it.opts, 2) == 1;
     property <float> speed: root.it.style > 0 ? root.it.style : 3;
-    if root.m.active: Glass { ink: root.ink;
+    if root.m.active: Glass { ink: root.ink; visible: root.it.card == 0;
         x: 4px; y: 6px; width: parent.width - 8px; height: parent.height - 12px;
         // 1 x 1: the cover, a thin progress line under it and the time
         if root.it.w < 2: Rectangle {
@@ -508,12 +510,28 @@ component MusicW inherits Rectangle {
             GlowText { icon: true; text: "\u{F04C3}"; font-size: 11px; color: root.ink.with-alpha(0.80); k: root.halo; neon: root.neon; glow: root.glow; }
             GlowText { text: root.m.player; font-size: 11px; font-weight: 500; color: root.ink.with-alpha(0.80); overflow: elide; k: root.halo; neon: root.neon; glow: root.glow; horizontal-stretch: 1; }
         }
+        // the buttons act on the widget's player in place (hit areas of 48 px); the page does not change
         if root.it.w >= 3: Rectangle {
-            x: parent.width - (root.it.w >= 4 ? 84px : 52px); y: (parent.height - 44px) / 2; width: 44px; height: 44px; border-radius: 22px; background: root.acc;
+            x: parent.width - (root.it.w >= 4 ? 84px : 52px); y: (parent.height - 44px) / 2; width: 44px; height: 44px; border-radius: 22px;
+            background: play-ta.pressed ? root.acc.darker(0.3) : root.acc;
+            animate background { duration: 120ms; easing: ease-out; }
             Icon { width: parent.width; height: parent.height; text: root.m.playing ? "\u{F03E4}" : "\u{F040A}"; font-size: 26px; color: root.ink; }
+            play-ta := TouchArea { x: -2px; y: -2px; width: 48px; height: 48px; clicked => { Act.act("music.play", "widget"); } }
         }
-        if root.it.w >= 4: Icon { x: parent.width - 120px; y: (parent.height - 40px) / 2; width: 36px; height: 40px; text: "\u{F04AE}"; font-size: 26px; color: root.ink; }
-        if root.it.w >= 4: Icon { x: parent.width - 40px; y: (parent.height - 40px) / 2; width: 36px; height: 40px; text: "\u{F04AD}"; font-size: 26px; color: root.ink; }
+        if root.it.w >= 4: Rectangle {
+            x: parent.width - 126px; y: (parent.height - 48px) / 2; width: 48px; height: 48px; border-radius: 24px;
+            background: prev-ta.pressed ? root.ink.with-alpha(0.18) : transparent;
+            animate background { duration: 120ms; easing: ease-out; }
+            Icon { width: parent.width; height: parent.height; text: "\u{F04AE}"; font-size: 26px; color: root.ink; }
+            prev-ta := TouchArea { clicked => { Act.act("music.prev", "widget"); } }
+        }
+        if root.it.w >= 4: Rectangle {
+            x: parent.width - 46px; y: (parent.height - 48px) / 2; width: 48px; height: 48px; border-radius: 24px;
+            background: next-ta.pressed ? root.ink.with-alpha(0.18) : transparent;
+            animate background { duration: 120ms; easing: ease-out; }
+            Icon { width: parent.width; height: parent.height; text: "\u{F04AD}"; font-size: 26px; color: root.ink; }
+            next-ta := TouchArea { clicked => { Act.act("music.next", "widget"); } }
+        }
     }
 }
 
@@ -537,6 +555,11 @@ export component HomeWidget inherits Rectangle {
     // Widgets without per-second changes are drawn once into a layer; the clock and
     // the music widget keep their moving parts live (their texts are layers of their own).
     cache-rendering-hint: root.it.kind != 0 && root.it.kind != 7;
+    // a card set in the integration (0 % = none, 100 % = solid), dark under white text, Paper under Ink
+    if root.it.card > 0: Rectangle {
+        x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; border-radius: 16px;
+        background: (root.ink.red > 128 ? #121314 : #F5F3EE).with-alpha((root.it.card - 1) / 100);
+    }
     if root.it.kind == 7: MusicW { width: root.width; height: root.height; ink: root.ink; m: root.music; pos: root.music-pos; it: root.it; halo: root.halo; neon: root.neon; glow: root.glow; }
     if root.it.kind == 0: ClockW { width: root.width; height: root.height; ink: root.ink; clock: root.clock; seconds: root.seconds; data: root.data; event: root.event; it: root.it; halo: root.halo; neon: root.neon; glow: root.glow; }
     if root.it.kind == 1: DateW { width: root.width; height: root.height; ink: root.ink; clock: root.clock; it: root.it; weekday-long: root.weekday-long; day-month: root.day-month;
@@ -685,6 +708,9 @@ export component HomeGrid inherits Rectangle {
         y: root.gy + it.row * root.ch + (self.up ? root.lift-dy : 0px);
         width: it.w * root.cw; height: it.h * root.ch;
         if cell.up: Rectangle { x: -2px; y: 4px; width: parent.width + 4px; height: parent.height; border-radius: 18px; background: #00000059; }
+        // a tap opens the widget's view (the app knows which page that is); it lies under the widget, so a
+        // widget's own buttons (the music widget's) take their taps first
+        if !root.editing && it.tap: TouchArea { clicked => { Act.act("home.tap", it.kind); } }
         HomeWidget {
             width: parent.width; height: parent.height;
             it: it; data: root.data; clock: root.clock; event: root.event; halo: root.halo; music: root.music; ink: root.ink;
@@ -692,8 +718,6 @@ export component HomeGrid inherits Rectangle {
             neon: root.neon; glow: root.glow;
             weekday-long: root.weekday-long; day-month: root.day-month; year: root.year; week: root.week;
         }
-        // a tap opens the widget's view (the app knows which page that is)
-        if !root.editing && it.tap: TouchArea { clicked => { Act.act("home.tap", it.kind); } }
         if root.editing: EditFrame { width: parent.width; height: parent.height; up: cell.up; selected: i == root.selected; accent: root.accent; }
     }
 

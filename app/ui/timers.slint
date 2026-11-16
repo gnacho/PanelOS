@@ -468,13 +468,14 @@ export component TimersPage inherits Rectangle {
             horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
         HorizontalLayout {
             x: 0; y: flp.fy; width: root.width; height: flp.ch; alignment: center; spacing: 8px;
-            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; old-digit: Math.floor(flp.mm / 10); new-digit: Math.floor(flp.mm / 10); flip: 1; }
-            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; old-digit: Math.mod(flp.mm, 10); new-digit: Math.mod(flp.mm, 10); flip: 1; }
+            // the cards flip at every change, shortened to 2 x 160 ms (they change every second)
+            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.floor(flp.mm / 10); dur: 320ms; delay: 210ms; }
+            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.mod(flp.mm, 10); dur: 320ms; delay: 140ms; }
             VerticalLayout { alignment: center; spacing: 26px;
                 Rectangle { width: 12px; height: 12px; border-radius: 6px; background: #ffffff; }
                 Rectangle { width: 12px; height: 12px; border-radius: 6px; background: #ffffff; } }
-            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; old-digit: Math.floor(flp.ss / 10); new-digit: Math.floor(flp.ss / 10); flip: 1; }
-            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; old-digit: Math.mod(flp.ss, 10); new-digit: Math.mod(flp.ss, 10); flip: 1; }
+            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.floor(flp.ss / 10); dur: 320ms; delay: 70ms; }
+            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.mod(flp.ss, 10); dur: 320ms; }
         }
         Text { x: 0; y: flp.fy + flp.ch + 10px; width: root.width; height: 20px; text: (flp.hrs ? "h : min  ·  " : "") + (root.cur.running ? "of " + root.clock(root.cur.total) : "Paused");
             font-size: 14px; color: #ffffffcc; horizontal-alignment: center; vertical-alignment: center; }

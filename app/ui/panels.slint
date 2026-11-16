@@ -341,9 +341,11 @@ component NextLine inherits HorizontalLayout {
 // the digit changes, the old top half rotates down to the hinge (getting
 // shorter and darker), then the new bottom half falls open below it.
 export component FlapCard inherits Rectangle {
-    in property <string> old-digit;
+    // The card flips by itself when its digit changes: the old top half folds to the hinge, then the new
+    // bottom half falls open (2 x dur/2). It is drawn frame by frame only while it flips.
     in property <string> new-digit;
-    in property <float> flip: 1;         // 0..1; 1 = settled on new-digit
+    in property <duration> delay: 0ms;   // later cards of a clock start a little after the minute units
+    in property <duration> dur: 560ms;
     in property <int> weight: 600;
     in property <color> card: #1d1d21;
     in property <color> ink: #f4f4f5;
@@ -360,6 +362,20 @@ export component FlapCard inherits Rectangle {
         root.weight <= 450 ? root.w300[root.idx(d)] : root.weight <= 650 ? root.w600[root.idx(d)]
             : root.weight <= 750 ? root.w700[root.idx(d)] : root.w800[root.idx(d)]
     }
+    property <string> old-digit;         // the digit before the change
+    property <string> shown;             // the digit it settled on
+    property <bool> flipping;
+    property <duration> started;
+    init => { root.shown = root.new-digit; root.old-digit = root.new-digit; }
+    changed new-digit => {
+        root.old-digit = root.shown;
+        root.shown = root.new-digit;
+        root.started = animation-tick();
+        root.flipping = root.old-digit != root.new-digit;
+    }
+    // the clock is read only while it flips, so a still card costs nothing
+    property <float> flip: root.flipping ? Math.max(0, Math.min(1, (animation-tick() - root.started - root.delay) / root.dur)) : 1;
+    Timer { interval: root.delay + root.dur + 60ms; running: root.flipping; triggered => { root.flipping = false; } }
     property <length> half: self.height / 2;
     property <bool> moving: root.flip < 1 && root.old-digit != root.new-digit;
     property <float> p1: min(1, root.flip * 2);         // top flap rotating down
@@ -428,9 +444,9 @@ export component FlipClock inherits HorizontalLayout {
     spacing: 8px;
     alignment: center;
     FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
-        old-digit: root.data.o1; new-digit: root.data.d1; flip: root.data.flip; }
+        new-digit: root.data.d1; delay: 210ms; }
     FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
-        old-digit: root.data.o2; new-digit: root.data.d2; flip: root.data.flip; }
+        new-digit: root.data.d2; delay: 140ms; }
     VerticalLayout {
         alignment: center;
         spacing: root.card-height * 0.22;
@@ -439,9 +455,9 @@ export component FlipClock inherits HorizontalLayout {
         Rectangle { width: 12px; height: 12px; border-radius: 6px; background: root.accent; }
     }
     FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
-        old-digit: root.data.o3; new-digit: root.data.d3; flip: root.data.flip; }
+        new-digit: root.data.d3; delay: 70ms; }
     FlapCard { width: root.card-width; height: root.card-height; card: root.card; weight: root.weight;
-        old-digit: root.data.o4; new-digit: root.data.d4; flip: root.data.flip; }
+        new-digit: root.data.d4; delay: 0ms; }
 }
 
 // Clock face. style: 0 big clock + details, 1 huge digits, 2 round analog,

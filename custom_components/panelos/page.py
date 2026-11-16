@@ -138,6 +138,8 @@ _HOME_ITEM = vol.Schema(
         vol.Optional("weight", default=600): vol.All(int, vol.Range(min=300, max=800)),
         vol.Optional("tap", default=True): bool,
         vol.Optional("opts", default=0): vol.All(int, vol.Range(min=0, max=0xFFFF)),
+        # the card behind the widget: -1 = its own (as designed), 0..100 % opacity
+        vol.Optional("bg", default=-1): vol.All(int, vol.Range(min=-1, max=100)),
     }
 )
 

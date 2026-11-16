@@ -7,6 +7,8 @@
 // index, a number as text).
 export global Act {
     callback act(string, string);
+    // a drag on a page that moves sideways (the turntable's arm): the pages do not swipe meanwhile
+    in-out property <bool> hold-swipe;
 }
 
 // The animations' clock base. Slint turns a time into a 32-bit float before any arithmetic, and the

@@ -891,6 +891,7 @@ button.chip:hover { border-color: var(--signal-line); }
 .sndlist { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .snd { display: flex; align-items: center; gap: 12px; padding: 7px 8px; border-radius: 12px; cursor: pointer; min-width: 0; }
 .snd:hover { background: var(--raised); }
+.linkbtn { border: 0; background: none; padding: 0; margin-top: 2px; color: var(--text); text-decoration: underline; font: inherit; font-size: 13px; cursor: pointer; text-align: left; }
 .playbtn.ma { display: inline-flex; align-items: center; justify-content: center; color: var(--muted); background: none; border: 0; pointer-events: none; }
 .snd.on { background: var(--signal-soft); }
 .snd .t { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; border: 0; background: none; padding: 0; text-align: left; color: var(--text); overflow-wrap: anywhere; }
@@ -3332,7 +3333,15 @@ class PanelOSPage extends HTMLElement {
     body.push(h("div", { class: "sec" }, h("h3", null, "Colour"), h("div", { class: "swatches" },
       h("button", { class: `sw panel${!w.accent ? " on" : ""}`, "aria-label": "The panel's colour", title: "The panel's colour", onclick: () => set({ accent: "" }) }),
       ACCENTS.map((c) => h("button", { class: `sw${w.accent === c ? " on" : ""}`, style: { background: c }, "aria-label": c, onclick: () => set({ accent: c }) })))));
-    body.push(h("div", { class: "group" }, this._row("Opens its page on a tap", this._toggle(w.tap !== false, (v) => set({ tap: v }), { label: "Opens its page on a tap" }), { cls: "first" })));
+    // the card behind the widget: -1 = its own as designed (a glass card behind the event, the curve and
+    // the music widget, none behind the others), 0..100 % = a card of that opacity
+    const ownCard = [3, 4, 7].includes(w.kind) ? 12 : 0;
+    const bg = Number.isInteger(w.bg) && w.bg >= 0 ? w.bg : -1;
+    body.push(h("div", { class: "group" },
+      this._row("Background", this._slider(bg >= 0 ? bg : ownCard, 0, 100, 5, (v) => set({ bg: v }), (v) => (bg < 0 ? `${v} % · Default` : `${v} %`), { label: "Background" }),
+        { cls: "first", info: "How solid the card behind this widget is: 0 % is no card, 100 % a solid one. Text stays readable at every value.",
+          sub: bg >= 0 ? h("button", { class: "linkbtn", onclick: () => set({ bg: -1 }) }, "Back to the default") : null }),
+      this._row("Opens its page on a tap", this._toggle(w.tap !== false, (v) => set({ tap: v }), { label: "Opens its page on a tap" }))));
     return this._sheetFrame(meta.name, body, [
       this._btn("Remove", () => { this._ui.sheet = null; this._removeWidget(p, sh.page, sh.item); this._renderLayer(); }, { cls: "ghost danger", icon: "delete-outline" }),
       h("span", { class: "grow" }), this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);

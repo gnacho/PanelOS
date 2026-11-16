@@ -103,6 +103,18 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
             c.born -= shift;
             slint::Model::set_row_data(&cars, 0, c);
         }
+        ui.set_palm_gust_at(ui.get_palm_gust_at() - shift);
+    }
+    // The palms' gusts: the next one 6-14 s after the last started, 1.6-2.0x the calm sway, held 1-3 s;
+    // between gusts the calm is 0.6-0.8x.
+    let st = ui.get_scene_t();
+    let at = ui.get_palm_gust_at();
+    if st > at + 3.5 + ui.get_palm_gust_hold() {
+        let next = st + 6.0 + (random() % 800) as f32 / 100.0;
+        ui.set_palm_gust_at(next);
+        ui.set_palm_gust_peak(1.6 + (random() % 40) as f32 / 100.0);
+        ui.set_palm_gust_hold(1.0 + (random() % 200) as f32 / 100.0);
+        ui.set_palm_calm(0.6 + (random() % 20) as f32 / 100.0);
     }
     // One car at a time: a new one when the last is gone (random line, never
     // the same one twice, random kind and vivid colour, 10–30 s to the horizon).

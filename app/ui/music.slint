@@ -126,9 +126,29 @@ export component MusicPage inherits Rectangle {
     in property <int> style;               // 0 plain, 1 full cover, 2 turntable, 3 cassette, 4 half cassette
     // turning parts: time since a base set every minute (the speeds make whole turns per minute, so the
     // new base is not seen; a small number stays exact however long the panel runs)
-    property <duration> spin-base;
-    Timer { interval: 60s; running: true; triggered => { root.spin-base = animation-tick(); } }
-    property <float> spin-ms: (animation-tick() - root.spin-base) / 1ms;
+    // The platter's angle in degrees: it spins up to 33 1/3 rpm in 1.2 s (ease-in), coasts down in 2 s
+    // (ease-out) and stays where it stopped (no snap back). Counted from the last start or stop; while it
+    // plays the count moves on by whole minutes (33 whole turns), so the number stays small and exact.
+    property <float> spin-a0;
+    property <duration> spin-t0;
+    property <bool> spin-on;
+    property <bool> coasting;
+    init => { root.spin-on = root.playing; }
+    pure function spin-at(dt: float) -> float {
+        root.spin-on
+            ? root.spin-a0 + 198 * (dt < 1.2 ? dt * dt * dt / 4.32 : 0.4 + dt - 1.2)
+            : root.spin-a0 + 198 * (dt < 2 ? (1 - (1 - dt / 2) * (1 - dt / 2) * (1 - dt / 2)) * 2 / 3 : 2 / 3)
+    }
+    // the clock is read only while the platter turns
+    property <float> spin-deg: root.spin-on || root.coasting ? root.spin-at((animation-tick() - root.spin-t0) / 1s) : root.spin-a0 + 132;
+    changed playing => {
+        root.spin-a0 = Math.mod(root.spin-deg, 360);
+        root.spin-t0 = animation-tick();
+        root.coasting = !root.playing;
+        root.spin-on = root.playing;
+    }
+    Timer { interval: 2100ms; running: root.coasting; triggered => { root.coasting = false; } }
+    Timer { interval: 60s; running: root.spin-on; triggered => { if (animation-tick() - root.spin-t0) > 3s { root.spin-t0 = root.spin-t0 + 60s; } } }
     in property <string> title;
     in property <string> artist;
     in property <string> album;
@@ -227,11 +247,29 @@ export component MusicPage inherits Rectangle {
         property <float> la: 238;          // pivot to stylus
         property <float> r-out: 128;
         property <float> r-in: 66;
-        property <bool> on-record: !root.live || root.playing;
         property <float> r: root.tt-arm-r >= 0 ? root.tt-arm-r : self.r-out - root.fr * (self.r-out - self.r-in);
         property <float> d: Math.sqrt((self.cx - self.px) * (self.cx - self.px) + (self.cy - self.py) * (self.cy - self.py));
         property <angle> th-c: Math.atan2(self.cy - self.py, self.cx - self.px);
-        property <angle> th: !self.on-record ? 94deg : self.th-c - Math.acos((self.la * self.la + self.d * self.d - self.r * self.r) / (2 * self.la * self.d));
+        pure function th-of(r: float) -> angle { self.th-c - Math.acos((self.la * self.la + self.d * self.d - r * r) / (2 * self.la * self.d)) }
+        property <angle> th-groove: self.th-of(self.r);
+        property <angle> rest: 94deg;
+        // paused or stopped: the arm lifts, swings to its rest and sets down there (0.2 + 0.75 s); playing: back
+        // onto the groove of the position
+        property <float> park: root.playing ? 0 : 1;
+        animate park { duration: 750ms; delay: 200ms; easing: ease-in-out; }
+        // dragging: the arm follows the finger around the pivot, between the rest and the run-out groove
+        property <bool> drag;
+        property <angle> th-drag: 94deg;
+        // the groove follows the position; a jump (another track) glides over in 0.6 s with the arm lifted
+        property <angle> th-glide: self.th-groove;
+        animate th-glide { duration: 600ms; easing: ease-in-out; }
+        property <bool> gliding: Math.abs((self.th-glide - self.th-groove) / 1deg) > 1.5;
+        property <angle> th: self.drag ? self.th-drag : self.th-glide + (self.rest - self.th-glide) * self.park;
+        // where the stylus is while dragging: over the rest, or this far into the record (0 lead-in … 1 run-out)
+        property <bool> drag-rest: self.th-drag < self.th-of(self.r-out) - 3deg;
+        property <float> drag-r: Math.sqrt((self.px + self.la * Math.cos(self.th-drag) - self.cx) * (self.px + self.la * Math.cos(self.th-drag) - self.cx)
+            + (self.py + self.la * Math.sin(self.th-drag) - self.cy) * (self.py + self.la * Math.sin(self.th-drag) - self.cy));
+        property <float> drag-f: Math.max(0, Math.min(1, (self.r-out - self.drag-r) / (self.r-out - self.r-in)));
         property <float> ux: Math.cos(self.th);
         property <float> uy: Math.sin(self.th);
         property <float> sx: self.px + self.la * self.ux;
@@ -239,7 +277,8 @@ export component MusicPage inherits Rectangle {
         property <angle> th-h: self.th + 16deg;      // headshell offset
         property <float> hx: Math.cos(self.th-h);
         property <float> hy: Math.sin(self.th-h);
-        property <float> lift: root.tt-lift >= 0 ? root.tt-lift : root.playing ? 0 : 1;  // paused: the arm is lifted (cue)
+        // lifted while it swings or is dragged; down on the record or on its rest
+        property <float> lift: self.drag || self.gliding ? 1 : root.tt-lift >= 0 ? root.tt-lift : Math.min(1, self.park * (1 - self.park) * 12);
         property <float> so-x: 5 + 6 * self.lift;
         property <float> so-y: 7 + 7 * self.lift;
         property <color> amber: #ffb54c;
@@ -263,7 +302,7 @@ export component MusicPage inherits Rectangle {
             x: (tt.cx - 70) * 1px; y: (tt.cy - 70) * 1px; width: 140px; height: 140px;   // ~1.3 × the label: its middle shows
             background: root.acc.mix(#000000, 0.5);
             if root.has-art: Image { width: parent.width; height: parent.height; source: root.art; image-fit: cover;
-                rotation-angle: root.playing ? root.spin-ms * 0.198deg : 0deg;      // 33 rpm
+                rotation-angle: root.spin-deg * 1deg;      // 33 rpm, spinning up and coasting down
                 rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
             if !root.has-art: Icon { text: root.kind-icon; font-size: 52px; color: #ffffffcc; }
         }
@@ -317,6 +356,43 @@ export component MusicPage inherits Rectangle {
             LineTo { x: tt.sx - 6 * tt.hx - 17 * tt.hy; y: tt.sy - 6 * tt.hy + 17 * tt.hx; } }
         Rectangle { x: (tt.px - 11) * 1px; y: (tt.py - 11) * 1px; width: 22px; height: 22px; border-radius: 11px; background: #e4e6ea; border-width: 1px; border-color: #7a7e86; }
         Rectangle { x: (tt.px - 4) * 1px; y: (tt.py - 4) * 1px; width: 8px; height: 8px; border-radius: 4px; background: #44474e; }
+        // drag the arm to seek: a press on the arm or the headshell lifts it, it follows the finger, a
+        // bubble shows the time; let go on the record = seek there (and play), on the rest = pause
+        TouchArea {
+            x: 20px; y: 110px; width: 400px; height: 300px;
+            pure function dist-to-arm(mx: float, my: float) -> float {
+                Math.min(Math.sqrt((mx - tt.sx) * (mx - tt.sx) + (my - tt.sy) * (my - tt.sy)),
+                    Math.abs((my - tt.py) * tt.ux - (mx - tt.px) * tt.uy))
+            }
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down && self.dist-to-arm(self.x / 1px + self.mouse-x / 1px, self.y / 1px + self.mouse-y / 1px) < 26 {
+                    tt.th-drag = tt.th;
+                    tt.drag = true;
+                    Act.hold-swipe = true;
+                }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) && tt.drag {
+                    tt.drag = false;
+                    Act.hold-swipe = false;
+                    // a cancelled touch only lets the arm go back
+                    if e.kind == PointerEventKind.up && tt.drag-rest {
+                        Act.act("music.pause", "");
+                    } else if e.kind == PointerEventKind.up && !root.live {
+                        Act.act("music.seek", tt.drag-f * root.dur);
+                        if !root.playing { Act.act("music.resume", ""); }
+                    }
+                }
+            }
+            moved => {
+                if tt.drag {
+                    tt.th-drag = Math.max(tt.rest, Math.min(tt.th-of(tt.r-in), Math.atan2(self.y / 1px + self.mouse-y / 1px - tt.py, self.x / 1px + self.mouse-x / 1px - tt.px)));
+                }
+            }
+        }
+        if tt.drag && !root.live: Rectangle {
+            x: (tt.sx - 34) * 1px; y: (tt.sy - 52) * 1px; width: 68px; height: 28px; border-radius: 14px; background: #000000cc;
+            Text { text: tt.drag-rest ? "Pause" : Math.floor(tt.drag-f * root.dur / 60) + ":" + (Math.mod(Math.floor(tt.drag-f * root.dur), 60) < 10 ? "0" : "") + Math.mod(Math.floor(tt.drag-f * root.dur), 60);
+                font-size: 15px; font-weight: 600; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+        }
         // volume fader (dark print on aluminium)
         // speaker over the value, both centred on the fader (100 % fits inside the plate)
         // the fader follows the finger; the volume is set when it lets go
@@ -424,9 +500,9 @@ export component MusicPage inherits Rectangle {
         Path { x: -((0.7 * cs.k) * 1px) / 2; y: -((0.7 * cs.k) * 1px) / 2; width: 480px + (0.7 * cs.k) * 1px; height: 480px + (0.7 * cs.k) * 1px; viewbox-width: 480; viewbox-height: 480; stroke: #4b3427; stroke-width: (0.7 * cs.k) * 1px; commands: cs.tape; }
         // hubs (on the panel: a sprite frame per rotation step)
         Image { x: (cs.ox + cs.sx0 * cs.k) * 1px - self.width / 2; y: (cs.oy + cs.hub-y * cs.k) * 1px - self.height / 2; source: root.cs-hub;
-            rotation-angle: root.playing ? -(root.spin-ms * 0.09deg) : 0deg; rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
+            rotation-angle: -root.spin-deg * 90 / 198 * 1deg; rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
         Image { x: (cs.ox + cs.tx0 * cs.k) * 1px - self.width / 2; y: (cs.oy + cs.hub-y * cs.k) * 1px - self.height / 2; source: root.cs-hub-r.width > 0 ? root.cs-hub-r : root.cs-hub;
-            rotation-angle: root.playing ? -(root.spin-ms * 0.13deg) : 0deg; rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
+            rotation-angle: -root.spin-deg * 120 / 198 * 1deg; rotation-origin-x: self.width / 2; rotation-origin-y: self.height / 2; }
         Image { x: (cs.ox - 14) * 1px; y: (cs.oy - 14) * 1px; source: root.cs-front; }
         // label: side letter, title, artist, stripes in the accent
         Rectangle {

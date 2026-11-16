@@ -153,6 +153,8 @@ fn items_from(a: &[Value], accent: Color) -> Vec<HomeItem> {
                 weight: n("weight", 600),
                 tap: i.get("tap").and_then(Value::as_bool).unwrap_or(true),
                 opts: n("opts", 0),
+                // the integration's background (-1 = the widget's own card, 0..100 %)
+                card: i.get("bg").and_then(Value::as_i64).filter(|b| (0..=100).contains(b)).map_or(0, |b| b as i32 + 1),
             }
         })
         .collect()
@@ -427,9 +429,9 @@ pub fn home_items(config: Option<&Value>, accent: Color) -> Vec<HomeItem> {
         return from_config;
     }
     vec![
-        HomeItem { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, accent, weight: 600, tap: true, opts: 1 },
-        HomeItem { kind: 4, col: 0, row: 1, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, opts: 3 },
-        HomeItem { kind: 7, col: 0, row: 3, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, opts: 0 },
+        HomeItem { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, accent, weight: 600, tap: true, opts: 1, card: 0 },
+        HomeItem { kind: 4, col: 0, row: 1, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, opts: 3, card: 0 },
+        HomeItem { kind: 7, col: 0, row: 3, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, opts: 0, card: 0 },
     ]
 }
 
