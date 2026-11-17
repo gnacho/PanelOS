@@ -16,7 +16,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity import Entity, entity_sources
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -139,8 +139,23 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         # each Music Assistant player and the speaker it plays on: the panel trusts the speaker when they
         # disagree (Music Assistant can say "playing" long after the speaker stopped)
         "player_links": _player_links(entry),
+        # the area of the panel's device ("" when it has none)
+        "room": _room(entry),
         **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
+
+
+def _room(entry: ConfigEntry) -> str:
+    panel = getattr(entry, "runtime_data", None)
+    if panel is None:
+        return ""
+    hass = panel.hass
+    areas = ar.async_get(hass)
+    for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id):
+        area = areas.async_get_area(device.area_id) if device.area_id else None
+        if area is not None:
+            return area.name
+    return ""
 
 
 def _player_links(entry: ConfigEntry) -> dict[str, str]:

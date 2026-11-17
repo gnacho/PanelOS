@@ -446,6 +446,8 @@ function lookArt(kind, variant, page, plain = null) {
 // The looks as the panel itself draws them: pictures taken on a panel with demo content (looks/<name>-<dark|light>.webp,
 // 224 px), and per browser the panel's own screen whenever it showed a look (newest first, see _captureLook).
 const LIVE_LOOKS_KEY = "panelos-live-looks";
+// Look pictures that do not exist (the drawing is shown instead, without asking for the file again).
+const MISSING_LOOKS = new Set();
 const LIVE_LOOKS_MAX = 120;
 function readLiveLooks() {
   try {
@@ -872,7 +874,8 @@ button.chip:hover { border-color: var(--signal-line); }
 /* toast */
 .toasts { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 90; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; width: max-content; max-width: calc(100vw - 32px); }
 :host([size=narrow]) .toasts { bottom: calc(88px + env(safe-area-inset-bottom, 0px)); }
-.toast { background: #101114; color: #F5F3EE; border-radius: 14px; padding: 11px 16px; font-size: 14px; display: flex; align-items: center; gap: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.3); animation: toastin .25s ease-out; pointer-events: auto; max-width: 100%; overflow-wrap: anywhere; }
+.toast { background: #101114; color: #F5F3EE; border-radius: 14px; padding: 11px 16px; font-size: 14px; display: flex; align-items: center; gap: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.3); animation: toastin .25s ease-out; pointer-events: none; max-width: 100%; overflow-wrap: anywhere; }
+.toast button { pointer-events: auto; }
 :host([dark]) .toast { background: #2A2C30; }
 .toast .mdi { color: var(--signal); --mdc-icon-size: 19px; }
 .toast.err .mdi { color: #FF6A4D; }
@@ -1047,6 +1050,7 @@ class PanelOSPage extends HTMLElement {
         this._ui.info = null;
         this._render();
       }
+      this._endPress();
     };
     this._onKey = (ev) => {
       if (ev.key !== "Escape") return;
@@ -1054,17 +1058,24 @@ class PanelOSPage extends HTMLElement {
       else if (this._ui.sheet) this._closeSheet();
     };
     this._onFocusOut = () => setTimeout(() => this._flush(), 0);
-    // While a press lasts the page is not drawn again: a text field that saves when it loses focus to a
-    // button or another field would otherwise swap that button or field away under the pointer.
+    // A press lasts from pointerdown until its click: the page is not drawn again in between, so the element
+    // under the pointer is still there when the click comes (on touch screens the click comes after the finger
+    // has left; a text field that saves on leaving would otherwise redraw the page between the two). The click
+    // ends the press (_onClick, after the element's own handler), and what it changed is drawn at once.
     this._press = 0;
     this._onPointerDown = () => {
+      clearTimeout(this._pressTimer);
       this._press = Date.now();
-      setTimeout(() => this._flush(), 2100);
     };
     this._onPointerUp = () => {
       if (!this._press) return;
+      clearTimeout(this._pressTimer);
+      this._pressTimer = setTimeout(() => this._endPress(), 450);
+    };
+    this._endPress = () => {
+      clearTimeout(this._pressTimer);
       this._press = 0;
-      setTimeout(() => this._flush(), 0);
+      this._flush();
     };
   }
 
@@ -1229,6 +1240,13 @@ class PanelOSPage extends HTMLElement {
       if (old) np.settings = old.settings;
     }
     if (flying.house > 0 && this._data?.house && data.house) data.house = { ...this._data.house, active: data.house.active };
+    const cmd = this._cmdFly || {};
+    for (const np of data.panels || []) {
+      for (const [key, f] of Object.entries(cmd[np.entry_id] || {})) {
+        if (Date.now() > f.until || (np.states && np.states[key] === f.value)) delete cmd[np.entry_id][key];
+        else if (np.states) np.states[key] = f.value;
+      }
+    }
     this._data = data;
     for (const [id, s] of Object.entries(this._sync)) {
       if (s.state === "wait") this._syncDone(id);
@@ -1611,12 +1629,17 @@ class PanelOSPage extends HTMLElement {
   // the Display page is left.
   _showSaver(p) {
     if (!p?.connected) return;
-    if (this._saverShown !== p.entry_id) this._lookChangedAt = Date.now();
+    this._lookChangedAt = Date.now();
     this._saverShown = p.entry_id;
     if (p.states?.screen !== false) this._command(p, "screen", false);
   }
 
   async _command(p, key, value) {
+    // shown at once; an update sent before the panel took it does not flip it back (for 6 s at most)
+    const fly = (this._cmdFly = this._cmdFly || {});
+    (fly[p.entry_id] = fly[p.entry_id] || {})[key] = { value, until: Date.now() + 6000 };
+    if (p.states) p.states[key] = value;
+    this._render();
     try {
       await this._hass.callWS({ type: "panelos/page/command", entry_id: p.entry_id, key, value });
       this._schedulePicture(PICTURE_AFTER_CHANGE_MS);
@@ -1699,10 +1722,19 @@ class PanelOSPage extends HTMLElement {
   // every 20 s per look.
   _captureLook(p, img) {
     const now = Date.now();
-    if (now - this._lookChangedAt < 2500 || !img.naturalWidth) return;
+    // the change has to be on the panel first: saved, sent, applied and faded in (a weather crossfade takes 3 s,
+    // and a picture can be a second old), so nothing is kept until 4.5 s after the last change was confirmed
+    const sync = this._sync[p.entry_id]?.state;
+    if (sync === "busy" || sync === "wait") { this._lookChangedAt = Math.max(this._lookChangedAt, now); return; }
+    if (now - this._lookChangedAt < 4500 || !img.naturalWidth) return;
+    // dark or light only when it is clear which one the panel shows (Auto switches below 10 / above 30 lx)
+    const theme = String(p?.states?.theme || "").toLowerCase();
+    const lx = Number(p?.states?.illuminance);
+    if (theme !== "dark" && theme !== "light" && !(Number.isFinite(lx) && (lx < 8 || lx > 35))) return;
     let name = null;
     if (this._saverShown === p.entry_id) {
       if (p.states?.screen !== false) return;
+      if (!/clock/i.test(String(p.states?.screensaver_style || "clock"))) return;
       const saver = { ...DEFAULT_SCREENSAVER, ...(this._settings(p).screensaver || {}) };
       name = `saver-${Number.isInteger(saver.face) ? saver.face : 1}`;
     } else {
@@ -1715,7 +1747,7 @@ class PanelOSPage extends HTMLElement {
     }
     const key = `${p.entry_id}|${name}|${this._lookMode(p)}`;
     const old = this._liveLooks[key];
-    if (old && now - old.t < 20000) return;
+    if (old && now - old.t < 6000) return;
     try {
       const c = document.createElement("canvas");
       c.width = c.height = 224;
@@ -1767,10 +1799,11 @@ class PanelOSPage extends HTMLElement {
     const mode = this._lookMode(p);
     const key = `${p?.entry_id}|${name}|${mode}`;
     const live = name.startsWith("timers-") ? null : this._liveLooks[key];
+    if (!live && MISSING_LOOKS.has(`${name}-${mode}`) && fallback) return fallback();
     return h("img", {
       class: `lookimg${fit === "contain" ? " contain" : ""}`, alt: "", draggable: "false", "data-look": key, loading: "lazy",
       src: live ? live.u : `${this._static}/looks/${name}-${mode}.webp`,
-      onerror: (e) => { if (fallback) e.currentTarget.replaceWith(fallback()); },
+      onerror: (e) => { MISSING_LOOKS.add(`${name}-${mode}`); if (fallback) e.currentTarget.replaceWith(fallback()); },
     });
   }
 
@@ -1833,24 +1866,31 @@ class PanelOSPage extends HTMLElement {
 
   // -- rendering ---------------------------------------------------------------------
 
+  // Typing (a text field with the focus), a press, a drag or an open menu: the page is not drawn again now.
   _interacting() {
     const a = this.shadowRoot.activeElement;
-    const pressing = Boolean(this._press) && Date.now() - this._press < 2000;
-    return this._dragging || pressing || Boolean(this._menu) || Boolean(a && /^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName) && a.type !== "checkbox" && a.type !== "radio");
+    const pressing = Boolean(this._press) && Date.now() - this._press < 30000;
+    const typing = Boolean(a && (a.tagName === "TEXTAREA" || (a.tagName === "INPUT" && !["checkbox", "radio", "range"].includes(a.type))));
+    return this._dragging || pressing || Boolean(this._menu) || typing;
   }
 
-  _requestRender() {
+  // Every redraw goes through here: it waits while the user is interacting and runs right after (_flush).
+  _render() {
     if (this._interacting()) {
       this._pending = true;
       return;
     }
+    this._renderNow();
+  }
+
+  _requestRender() {
     this._render();
   }
 
   _flush() {
     if (this._pending && !this._interacting()) {
       this._pending = false;
-      this._render();
+      this._renderNow();
     }
   }
 
@@ -1866,7 +1906,7 @@ class PanelOSPage extends HTMLElement {
     }, undo ? 6000 : error ? 6000 : 3200);
   }
 
-  _render() {
+  _renderNow() {
     const root = this.shadowRoot;
     if (!root) return;
     this._pending = false;
@@ -2086,7 +2126,7 @@ class PanelOSPage extends HTMLElement {
     return h("div", { class: "seg", role: "radiogroup", "aria-label": label },
       options.map(([v, text, dis]) => h("button", {
         class: v === value ? "on" : "", role: "radio", "aria-checked": v === value ? "true" : "false",
-        disabled: Boolean(dis), title: typeof dis === "string" ? dis : null, onclick: () => v !== value && onchange(v),
+        disabled: Boolean(dis), title: typeof dis === "string" ? dis : null, onclick: () => onchange(v),
       }, text)));
   }
 
@@ -2094,7 +2134,7 @@ class PanelOSPage extends HTMLElement {
     const list = options.map((o) => (Array.isArray(o) ? o : [o, o]));
     if (value != null && value !== "" && !list.some(([v]) => v === value)) list.push([value, value]);
     return h("div", { class: `sel${full ? " full" : ""}` },
-      h("select", { "aria-label": label, onchange: (e) => onchange(e.target.value) }, list.map(([v, l, dis]) => h("option", { value: v, selected: v === value, disabled: Boolean(dis) }, l))),
+      h("select", { "aria-label": label, onchange: (e) => { const v = e.target.value; e.target.blur(); onchange(v); } }, list.map(([v, l, dis]) => h("option", { value: v, selected: v === value, disabled: Boolean(dis) }, l))),
       icon("chevron-down"));
   }
 
@@ -2119,7 +2159,7 @@ class PanelOSPage extends HTMLElement {
         e.target.style.setProperty("--fill", fill(v));
         if (live && !timer) timer = setTimeout(() => { timer = null; send(+inp.value); }, 140);
       },
-      onchange: (e) => { clearTimeout(timer); timer = null; send(+e.target.value); },
+      onchange: (e) => { clearTimeout(timer); timer = null; send(+e.target.value); e.target.blur(); },
     });
     inp.value = value;
     return h("div", { class: "slider" }, inp, out);
@@ -2142,7 +2182,7 @@ class PanelOSPage extends HTMLElement {
   // One of a few choices as chips that wrap (panels, rooms, screens).
   _radioChips(options, value, onchange) {
     return h("div", { class: "chips", role: "radiogroup" }, options.map(([v, label]) =>
-      h("button", { class: `chip${v === value ? " on" : ""}`, role: "radio", "aria-checked": v === value ? "true" : "false", onclick: () => v !== value && onchange(v) }, v === value ? icon("check") : null, h("span", null, label))));
+      h("button", { class: `chip${v === value ? " on" : ""}`, role: "radio", "aria-checked": v === value ? "true" : "false", onclick: () => onchange(v) }, v === value ? icon("check") : null, h("span", null, label))));
   }
 
   _times(from, to, onchange) {
@@ -2187,7 +2227,7 @@ class PanelOSPage extends HTMLElement {
   }
 
   _btn(label, onclick, opts = {}) {
-    return h("button", { class: `btn${opts.cls ? ` ${opts.cls}` : ""}`, onclick, disabled: Boolean(opts.disabled), title: opts.title || null, "aria-label": opts.aria || null },
+    return h("button", { class: `btn${opts.cls ? ` ${opts.cls}` : ""}`, onclick, disabled: Boolean(opts.disabled), title: opts.title || null, "aria-label": opts.aria || null, ...(opts.attrs || {}) },
       opts.icon ? icon(opts.icon) : null, h("span", null, label));
   }
 
@@ -2212,7 +2252,7 @@ class PanelOSPage extends HTMLElement {
     const why = [...new Set(items.filter((it) => it.disabled && it.why).map((it) => it.why))];
     return [
       h("div", { class: `looks${wide ? " wide" : ""}`, role: "radiogroup" }, items.map((it) =>
-        h("button", { class: `look${it.id === value ? " on" : ""}`, disabled: Boolean(it.disabled), title: it.why || null, role: "radio", "aria-checked": it.id === value ? "true" : "false", onclick: () => it.id !== value && onpick(it.id) },
+        h("button", { class: `look${it.id === value ? " on" : ""}`, disabled: Boolean(it.disabled), title: it.why || null, role: "radio", "aria-checked": it.id === value ? "true" : "false", onclick: () => onpick(it.id) },
           h("div", { class: "pic" }, it.pic, it.id === value ? h("span", { class: "chk" }, icon("check")) : null),
           h("span", null, it.name)))),
       why.length ? h("p", { class: "note", style: { margin: "0 0 14px" } }, `Greyed looks are not available: ${why.join(" ")}`) : null,
@@ -2476,6 +2516,8 @@ class PanelOSPage extends HTMLElement {
       } catch (err) {
         console.error("PanelOS sheet", sh.kind, err);
         node = null;
+        this._ui.sheet = null;
+        this._toast("This could not be opened. Reload the page and try again.", null, true);
       }
     }
     if (node && !this._ui.sheetFresh) node.classList.add("noanim");
@@ -4440,9 +4482,9 @@ class PanelOSPage extends HTMLElement {
     if (sh.step === 1) {
       body = [steps,
         h("div", { class: "sec" }, h("h3", null, "Panel ID", h("span", { class: "rinfo" }, this._infoBtn("add:id", "The panel's network name, as its PanelOS settings show it. The panel then finds its settings here by this name."))),
-          h("input", { class: "inp", value: sh.panelId, maxlength: 64, "aria-label": "Panel ID", oninput: (e) => { sh.panelId = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") { sh.step = 2; this._renderLayer(); } } })),
+          h("input", { class: "inp", value: sh.panelId, maxlength: 64, "aria-label": "Panel ID", oninput: (e) => { sh.panelId = e.target.value; const nb = this._layer.querySelector("[data-next]"); if (nb) nb.disabled = !sh.panelId.trim(); }, onkeydown: (e) => { if (e.key === "Enter" && sh.panelId.trim()) { sh.step = 2; this._renderLayer(); } } })),
         h("p", { class: "note", style: { margin: 0 } }, "Start PanelOS on the panel and connect it to Wi-Fi and Home Assistant first.")];
-      foot = [this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }), this._btn("Next", () => { if (sh.panelId.trim()) { sh.step = 2; this._renderLayer(); } }, { cls: "primary", disabled: !sh.panelId.trim() })];
+      foot = [this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }), this._btn("Next", () => { if (sh.panelId.trim()) { sh.step = 2; this._renderLayer(); } }, { cls: "primary", disabled: !sh.panelId.trim(), attrs: { "data-next": "1" } })];
     } else {
       body = [steps,
         h("div", { class: "sec" }, h("h3", null, "Start with"), h("div", { class: "group" },

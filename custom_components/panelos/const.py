@@ -112,7 +112,7 @@ SERVICE_CLEAR_STATUS = "clear_status"
 SERVICE_CRITICAL_ALERT = "critical_alert"
 SERVICE_CLEAR_CRITICAL_ALERT = "clear_critical_alert"
 
-# Sounds: the designed ones the panel has (ids as in the sound values "lib:<id>"), and the owner's
+# Sounds: the designed ones the panel has (ids as in the sound values "lib:<id>"), and the
 # uploaded ones ("own:<id>"), converted to 16-bit PCM WAV for the panels and kept here.
 SOUND_LIB = ("chimes", "marimba", "birds", "bell", "digital", "synth", "sos", "warning")
 SOUND_DIR = "panelos/sounds"

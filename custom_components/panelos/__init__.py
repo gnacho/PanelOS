@@ -47,7 +47,9 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.service import async_register_admin_service
 
 from .const import (
+    CONF_PAGES,
     CONF_PANEL_ID,
+    DEFAULT_PAGES,
     DOMAIN,
     PLATFORMS,
     SERVICE_CLEAR_CRITICAL_ALERT,
@@ -229,12 +231,56 @@ def ws_report(hass: HomeAssistant, connection: websocket_api.ActiveConnection, m
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "panelos/page_set",
+        vol.Optional("panel_id", default=""): str,
+        vol.Required("index"): vol.All(int, vol.Range(min=0, max=63)),
+        vol.Optional("variant"): vol.All(int, vol.Range(min=0, max=15)),
+        vol.Optional("options"): {str: vol.Any(None, bool, int, float, vol.All(str, vol.Length(max=200)))},
+    }
+)
+@callback
+def ws_page_set(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A page's look or some of its options set on the panel itself (its page sheet); `index` counts the pages it shows."""
+    panel = _loaded_panel(hass, msg["panel_id"])
+    if panel is None:
+        connection.send_error(msg["id"], "not_found", f"No PanelOS entry for the panel '{msg['panel_id']}'")
+        return
+    if not panel.linked_on(id(connection)):
+        connection.send_error(msg["id"], "not_subscribed", "Subscribe with panelos/subscribe first")
+        return
+    entry = panel.entry
+    pages = [dict(p) for p in {**entry.data, **entry.options}.get(CONF_PAGES, DEFAULT_PAGES)]
+    shown = [i for i, p in enumerate(pages) if i == 0 or not p.get("hidden")]
+    if msg["index"] >= len(shown):
+        connection.send_error(msg["id"], "not_found", "No such page")
+        return
+    page = pages[shown[msg["index"]]]
+    if "variant" in msg:
+        page["variant"] = msg["variant"]
+    if "options" in msg:
+        if any(not key.replace("_", "").isalpha() or len(key) > 32 for key in msg["options"]):
+            connection.send_error(msg["id"], "invalid_format", "Option names are lower-case words")
+            return
+        options = dict(page.get("options", {}))
+        for key, value in msg["options"].items():
+            if value is None:
+                options.pop(key, None)
+            else:
+                options[key] = value
+        page["options"] = options
+    hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_PAGES: pages})
+    connection.send_result(msg["id"])
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register the websocket commands, the actions and the sidebar page's files once."""
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_report)
     websocket_api.async_register_command(hass, ws_alive)
     websocket_api.async_register_command(hass, ws_log)
+    websocket_api.async_register_command(hass, ws_page_set)
 
     # A panel that stopped saying it is there is offline at once (checked every second).
     gone_before: set[int] = set()
