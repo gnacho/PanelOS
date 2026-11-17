@@ -369,7 +369,8 @@ fn session(
                     }
                     Some("result") if msg["id"] == panel_id && msg["success"] == false => {
                         emit(Event::Panel(None));
-                        panel_retry_at = Some(Instant::now() + Duration::from_secs(60));
+                        // Home Assistant may still be loading the integration: asked again soon
+                        panel_retry_at = Some(Instant::now() + Duration::from_secs(10));
                     }
                     Some("result") if msg["id"] == panel_id => report = Report { linked: true, ..Default::default() },
                     Some("event") if msg["id"] == notes_id => {

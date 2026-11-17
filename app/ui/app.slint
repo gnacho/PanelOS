@@ -432,6 +432,7 @@ export component AppWindow inherits Window {
     public function watch-start() { root.timers-watch-t0 = animation-tick(); root.timers-watch-running = true; }
     public function watch-stop() { root.timers-watch-base = root.timers-watch; root.timers-watch-running = false; }
     in property <bool> timers-quick;
+    in property <int> timers-sheet: -1;
     in-out property <bool> timers-watch-running;
     in property <[float]> timers-laps;
     in property <bool> timers-ring-alarm;
@@ -977,7 +978,7 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "timers": TimersPage {
                     timers: root.timers-list; ringing: root.timers-ringing; ring-label: root.timers-ring-label; ring-over: root.timers-ring-over;
-                    pulse: root.timers-pulse; mode: root.timers-mode; theme: slot.variant; pick: root.timers-focus; alarms: root.timers-alarms; quick: root.timers-quick;
+                    pulse: root.timers-pulse; mode: root.timers-mode; theme: slot.variant; pick: root.timers-focus; alarms: root.timers-alarms; quick: root.timers-quick; sheet: root.timers-sheet;
                     next-alarm: root.timers-next-alarm; watch: root.timers-watch; watch-running: root.timers-watch-running; laps: root.timers-laps;
                     ring-alarm: root.timers-ring-alarm; ring-time: root.timers-ring-time; ring-tint: root.timers-ring-tint; settings: root.timers-settings;
                     colourful: root.timers-colourful; alarm-on: root.timers-alarm-on; timer-on: root.timers-timer-on; watch-on: root.timers-watch-on;

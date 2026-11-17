@@ -292,6 +292,7 @@ export component TimersPage inherits Rectangle {
     in property <[TimerItem]> timers;
     in property <int> pick;               // kitchen, hourglass, flip: the timer shown big
     in property <bool> quick;             // the quick starts over the running timers (the + cell)
+    in property <int> sheet: -1;          // one timer's own sheet (a tap on it where several run), -1: none
     in property <[AlarmItem]> alarms;
     in property <string> next-alarm;      // "6:45 · in 14 h 52 min"
     in property <color> next-tint: #ffb21e;
@@ -383,6 +384,7 @@ export component TimersPage inherits Rectangle {
         for t[i] in root.timers: Rectangle {
             x: 24px + i * 224px; y: root.top + 6px; width: 208px; height: 300px;
             Ring { x: 4px; y: 0; width: 200px; height: 200px; stroke: 10px; fr: t.total > 0 ? t.remaining / t.total : 0; arc: t.tint; opacity: t.running ? 1 : 0.55; }
+            TouchArea { x: 4px; y: 0; width: 200px; height: 200px; clicked => { Act.act("timers.sheet", i); } }
             Text { x: 29px; y: 56px; width: 150px; height: 22px; text: root.name(t.label); font-size: 16px; font-weight: 600; color: t.tint.mix(TFg.c, 0.55);
                 horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
             Text { x: 0; y: 78px; width: 208px; height: 46px; text: root.clock(t.remaining); font-size: t.remaining >= 3600 ? 32px : 40px; font-weight: 600; color: TFg.c;
@@ -401,7 +403,7 @@ export component TimersPage inherits Rectangle {
             border-radius: 20px; background: TFg.c.with-alpha(0.05);
             property <bool> has: c < root.n;
             property <TimerItem> t: self.has ? root.timers[c] : { label: "", remaining: 0, total: 0, running: false, tint: #ffffff };
-            TouchArea { clicked => { Act.act(cell.has ? "timers.toggle" : "timers.quick", c); } }
+            TouchArea { clicked => { Act.act(cell.has ? "timers.sheet" : "timers.quick", c); } }
             if cell.has: Ring { x: (cell.width - 116px) / 2; y: 12px; width: 116px; height: 116px; stroke: 8px;
                 fr: cell.t.total > 0 ? cell.t.remaining / cell.t.total : 0; arc: cell.t.tint; opacity: cell.t.running ? 1 : 0.55; }
             if cell.has: Text { x: 0; y: 12px + 36px; width: cell.width; height: 44px; text: root.clock(cell.t.remaining); font-size: cell.t.remaining >= 3600 ? 22px : 28px; font-weight: 600;
@@ -606,6 +608,7 @@ export component TimersPage inherits Rectangle {
                 property <color> g: root.sw-rings[root.sw-scene * 4 + i];
                 x: 22px + i * 230px; y: root.top + 12px; width: 206px; height: 300px;
                 NeonRing { x: 8px; y: 0; width: 190px; height: 190px; stroke: 7px; glow: parent.g; paused: !t.running; fr: t.total > 0 ? t.remaining / t.total : 0; }
+                TouchArea { x: 8px; y: 0; width: 190px; height: 190px; clicked => { Act.act("timers.sheet", i); } }
                 NeonText { x: 28px; y: 50px; width: 150px; height: 22px; text: root.name(t.label); size: 15px; weight: 600; glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.45); }
                 NeonText { x: 0; y: 72px; width: 206px; height: 50px; text: root.clock(t.remaining); size: t.remaining >= 3600 ? 32px : 40px; weight: 400; glow: parent.g; rim: root.deep; }
                 NeonText { x: 0; y: 122px; width: 206px; height: 18px; text: t.running ? "of " + root.clock(t.total) : "PAUSED"; size: 12px; weight: 600; glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.6); }
@@ -624,7 +627,7 @@ export component TimersPage inherits Rectangle {
                 property <bool> has: c < root.n;
                 property <TimerItem> t: self.has ? root.timers[c] : { label: "", remaining: 0, total: 0, running: false, tint: #ffffff };
                 property <color> g: root.sw-rings[root.sw-scene * 4 + Math.mod(c, 4)];
-                TouchArea { clicked => { Act.act(scell.has ? "timers.toggle" : "timers.quick", c); } }
+                TouchArea { clicked => { Act.act(scell.has ? "timers.sheet" : "timers.quick", c); } }
                 if scell.has: NeonRing { x: (scell.width - 118px) / 2; y: 10px; width: 118px; height: 118px; stroke: 6px; glow: scell.g; paused: !scell.t.running;
                     fr: scell.t.total > 0 ? scell.t.remaining / scell.t.total : 0; }
                 if scell.has: NeonText { x: 0; y: 10px + 38px; width: scell.width; height: 42px; text: root.clock(scell.t.remaining); size: scell.t.remaining >= 3600 ? 22px : 28px; weight: 400;
@@ -772,6 +775,30 @@ export component TimersPage inherits Rectangle {
             Text { width: parent.width; height: parent.height; text: "Stop"; font-size: 22px; font-weight: 700; color: root.ring-tint.mix(#000000, 0.6); horizontal-alignment: center; vertical-alignment: center; } }
         Rectangle { x: (root.width - 140px) / 2; y: 392px; width: 140px; height: 44px; border-radius: 22px; background: #ffffff2e;
             Text { width: parent.width; height: parent.height; text: root.ring-alarm ? "Snooze 9 min" : "+1 min"; font-size: 16px; font-weight: 600; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } }
+    }
+
+    // ---------------------------------------------------------------- one timer's sheet: its ring and time, +1 min, pause / go on,
+    // cancel (a tap on it where several run); the scrim closes it
+    property <bool> sheet-on: !root.ringing && root.mode == 1 && root.sheet >= 0 && root.sheet < root.n;
+    property <float> sheet-k: root.sheet-on ? 1 : 0;
+    animate sheet-k { duration: root.sheet-on ? 240ms : 200ms; easing: ease-out; }
+    property <TimerItem> st: root.sheet >= 0 && root.sheet < root.n ? root.timers[root.sheet]
+        : { label: "", remaining: 0, total: 0, running: false, tint: #ffffff };
+    if root.sheet-k > 0.001: Rectangle { opacity: root.sheet-k; background: #00000080;
+        TouchArea { clicked => { Act.act("timers.sheet-close", ""); } } }
+    if root.sheet-k > 0.001: Rectangle { opacity: root.sheet-k;
+        x: 0; y: root.height - 330px; width: root.width; height: 354px; border-radius: 24px; background: TFg.c.red > 128 ? #17181b : #ffffff;
+        TouchArea { }
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: TFg.c.with-alpha(0.3); }
+        Text { x: 24px; y: 22px; width: parent.width - 48px; height: 28px; text: root.name(root.st.label); font-size: 18px; font-weight: 600;
+            color: root.st.tint.mix(TFg.c, 0.55); horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+        Ring { x: (parent.width - 170px) / 2; y: 58px; width: 170px; height: 170px; stroke: 10px; track: TFg.c.with-alpha(0.12);
+            fr: root.st.total > 0 ? root.st.remaining / root.st.total : 0; arc: root.st.tint; opacity: root.st.running ? 1 : 0.55; }
+        Text { x: 0; y: 58px + 52px; width: parent.width; height: 48px; text: root.clock(root.st.remaining); font-size: root.st.remaining >= 3600 ? 34px : 42px;
+            font-weight: 600; color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
+        Text { x: 0; y: 58px + 100px; width: parent.width; height: 18px; text: root.st.running ? "of " + root.clock(root.st.total) : "Paused";
+            font-size: 13px; color: TFg.c.with-alpha(0.55); horizontal-alignment: center; vertical-alignment: center; }
+        TimerControls { x: 0; y: 244px; width: parent.width; height: 64px; running: root.st.running; tint: root.st.tint; index: root.sheet; }
     }
 
     // ---------------------------------------------------------------- alarm editor: time, days, sound, label

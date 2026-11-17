@@ -200,6 +200,25 @@ fn path() -> String {
     std::env::var("NSPANEL_SETTINGS").unwrap_or_else(|_| format!("{PERSIST_DIR}/settings.json"))
 }
 
+/// A file next to the settings (the same folder, so a second instance with its own settings keeps its own).
+fn beside(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(&path()).with_file_name(name)
+}
+
+/// The last settings the PanelOS integration sent: the pages come back exactly as they were after a restart, a
+/// reboot or while Home Assistant starts (it answers without them until the integration has loaded).
+pub fn load_panel_config() -> Option<serde_json::Value> {
+    std::fs::read_to_string(beside("panel-config.json")).ok().and_then(|t| serde_json::from_str(&t).ok())
+}
+
+pub fn save_panel_config(config: &serde_json::Value) {
+    let p = beside("panel-config.json");
+    let tmp = p.with_extension("json.tmp");
+    if std::fs::write(&tmp, config.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &p);
+    }
+}
+
 impl Settings {
     pub fn load() -> Self {
         std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()

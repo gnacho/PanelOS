@@ -94,6 +94,11 @@ pub struct UiState {
     pairing_started: bool,
     dashboards: Vec<(String, String)>,
     connected: bool,
+    /// When the link to Home Assistant last came back: for two minutes after that, an entity that turns
+    /// "unavailable" / "unknown" (Home Assistant starting, its integrations not loaded yet) keeps its last good
+    /// state on the screen; the held ones are applied when it is over or a real state comes.
+    linked_at: Option<Instant>,
+    held_states: HashMap<String, Option<ha::EntityState>>,
     /// Connected at least once since the start (offline screen vs connecting screen).
     ever_connected: bool,
     /// Home Assistant away since (the offline screen comes after a grace period).
@@ -447,6 +452,17 @@ fn weather_key(w: &WeatherData) -> String {
 }
 
 fn update_clock(ui: &AppWindow) {
+    // states held after the link came back: applied when the two minutes are over
+    let held = with_state(|s| {
+        if s.held_states.is_empty() || s.linked_at.is_some_and(|t| t.elapsed() < Duration::from_secs(120)) {
+            return Vec::new();
+        }
+        s.linked_at = None;
+        s.held_states.drain().collect::<Vec<_>>()
+    });
+    if !held.is_empty() {
+        handle_event(ui, Event::States(held));
+    }
     // the clocks turn at hh:mm:00 (the 1 s tick could be up to a second late): once more right then
     thread_local!(static AT_MINUTE: std::cell::Cell<i64> = const { std::cell::Cell::new(0) });
     let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
@@ -588,6 +604,8 @@ fn update_clock(ui: &AppWindow) {
 }
 
 thread_local! {
+    /// A timer went away: its sheet (if open) closes.
+    static TIMER_SHEET_CLOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A timer the panel runs reached zero during this clock update.
     static RANG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -987,7 +1005,21 @@ fn leave_temporary_page(ui: &AppWindow, now: i32) {
 // ---------------------------------------------------------------- timers and voice
 
 fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, total: u32, active: bool) {
-    let finished = with_state(|s| {
+    let finished = handle_timer_state(ui, kind, id, name, left, total, active);
+    if TIMER_SHEET_CLOSE.with(|c| c.replace(false)) || finished {
+        ui.set_timers_sheet(-1);
+    }
+    if finished {
+        wake(ui);
+        if !go_to_page(ui, "timers") {
+            open_temporary_page(ui, "timers");
+        }
+    }
+    update_clock(ui);
+}
+
+fn handle_timer_state(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, total: u32, active: bool) -> bool {
+    with_state(|s| {
         if s.dismissed_timers.contains(&id) {
             if kind >= 2 {
                 s.dismissed_timers.remove(&id);
@@ -1014,11 +1046,11 @@ fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, 
                 );
                 false
             }
-            // cancelled
+            // cancelled (by voice too): gone from the panel as well, even when the panel had taken it over after a
+            // tap (otherwise the voice says it is cancelled while the panel keeps counting)
             2 => {
-                if !s.timers.get(&id).is_some_and(|t| t.own) {
-                    s.timers.remove(&id);
-                }
+                s.timers.remove(&id);
+                TIMER_SHEET_CLOSE.with(|c| c.set(true));
                 false
             }
             // finished (a timer the panel runs rings by its own clock)
@@ -1032,14 +1064,7 @@ fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, 
             }
             _ => false,
         }
-    });
-    if finished {
-        wake(ui);
-        if !go_to_page(ui, "timers") {
-            open_temporary_page(ui, "timers");
-        }
-    }
-    update_clock(ui);
+    })
 }
 
 /// A timer reached zero: the ringing screen and the beeps.
@@ -1262,6 +1287,9 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
         "timers.mode" => ui.set_timers_mode(n as i32),
         "timers.pick" => ui.set_timers_focus(n as i32),
         "timers.quick" => ui.set_timers_quick(true),
+        // one timer's own sheet (its controls), from a tap on it where several run
+        "timers.sheet" => ui.set_timers_sheet(n as i32),
+        "timers.sheet-close" => ui.set_timers_sheet(-1),
         "timers.quick-close" => ui.set_timers_quick(false),
         "timers.new" => {
             // a timer of one's own: the editor with hours and minutes (10 min to start from)
@@ -1291,6 +1319,7 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
             let Some(id) = id_at(s) else { return };
             match what {
                 "timers.cancel" => {
+                    TIMER_SHEET_CLOSE.with(|c| c.set(true));
                     if let Some(t) = s.timers.remove(&id) {
                         if !t.own || !id.starts_with("panel-") {
                             s.dismissed_timers.insert(id);
@@ -1343,6 +1372,9 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
             ui.set_timers_laps(ModelRc::new(VecModel::from(Vec::<f32>::new())));
         }
         _ => eprintln!("nspanel-app: act {what} {value} (not handled yet)"),
+    }
+    if TIMER_SHEET_CLOSE.with(|c| c.replace(false)) {
+        ui.set_timers_sheet(-1);
     }
     update_clock(ui);
 }
@@ -1873,6 +1905,9 @@ fn handle_event(ui: &AppWindow, event: Event) {
             HA_LINKED.store(connected, Ordering::SeqCst);
             ui.set_connected(connected);
             with_state(|s| {
+                if connected && !s.connected {
+                    s.linked_at = Some(Instant::now());
+                }
                 s.connected = connected;
                 if connected {
                     s.ever_connected = true;
@@ -1915,7 +1950,15 @@ fn handle_event(ui: &AppWindow, event: Event) {
             }
             let watched = with_state(|s| {
                 let mut new_person = false;
+                let holding = s.linked_at.is_some_and(|t| t.elapsed() < Duration::from_secs(120));
                 for (id, st) in &changes {
+                    let bad = st.as_ref().map_or(true, |e| e.state == "unavailable" || e.state == "unknown");
+                    let had_good = s.states.get(id).is_some_and(|e| e.state != "unavailable" && e.state != "unknown");
+                    if holding && bad && had_good {
+                        s.held_states.insert(id.clone(), st.clone());
+                        continue;
+                    }
+                    s.held_states.remove(id);
                     match st {
                         Some(st) => {
                             if id.starts_with("person.") && !s.states.contains_key(id) {
@@ -1952,6 +1995,12 @@ fn handle_event(ui: &AppWindow, event: Event) {
         }
         Event::Panel(config) => {
             with_state(|s| {
+                // Home Assistant starting (the integration not loaded yet) or a moment without the entry: the pages
+                // and settings stay exactly as they were
+                if config.is_none() && s.panel_config.is_some() {
+                    eprintln!("nspanel-app: no PanelOS settings from Home Assistant now; keeping the last ones");
+                    return;
+                }
                 let web = config.as_ref().map(settings::WebConfig::from_integration).unwrap_or_default();
                 if web != s.settings.web {
                     eprintln!("nspanel-app: dashboard mode settings from Home Assistant: {web:?}");
@@ -1963,6 +2012,11 @@ fn handle_event(ui: &AppWindow, event: Event) {
                     eprintln!("nspanel-app: sensor reporting from Home Assistant: {reporting:?}");
                     s.settings.reporting = reporting;
                     s.settings.save();
+                }
+                if let Some(c) = &config {
+                    if s.panel_config.as_ref() != Some(c) {
+                        settings::save_panel_config(c);
+                    }
                 }
                 s.panel_config = config;
                 // Development settings stay on top of what Home Assistant sends.
@@ -2987,7 +3041,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             wake_words: wake_words.clone(),
             player: player.clone(),
             voice_hide_at: None,
-            panel_config: None,
+            panel_config: settings::load_panel_config(),
+            linked_at: None,
+            held_states: HashMap::new(),
             forecast_hourly: Vec::new(),
             forecast_daily: Vec::new(),
             wake_phrase: phrase,
@@ -3255,6 +3311,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ui.set_pair_ha_url(config.ha_url.clone().into());
 
     with_state(|s| s.commands = Some(cmd_tx));
+    // the pages as they were (the stored settings), before Home Assistant answers
+    if with_state(|s| s.panel_config.is_some()) {
+        apply_panel_config(&ui);
+    }
 
     // The Home Assistant client started before the display: hand its events
     // to the UI thread, the ones from the wait first, in order.

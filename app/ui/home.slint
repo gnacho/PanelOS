@@ -492,6 +492,8 @@ component MusicW inherits Rectangle {
     }
     property <float> fr: root.m.dur > 0 ? max(0, min(1, root.pos-live / root.m.dur)) : 0;
     property <color> acc: root.m.accent;
+    // the weight slider of the integration: the title at that weight, the smaller lines a step lighter
+    property <int> sub-weight: max(300, root.it.weight - 100);
     // the cover: the next one fades in over the last (300 ms)
     property <image> art-in: root.m.art;
     property <image> art-a: root.m.art;
@@ -523,7 +525,7 @@ component MusicW inherits Rectangle {
                 Rectangle { x: 0; width: parent.width * root.fr; border-radius: 1.5px; background: root.acc; }
             }
             GlowText { paper: root.ink.red < 128; x: 0; y: 67px; width: parent.width; height: 16px; text: root.m.dur > 0 ? root.mmss(root.pos-live) : "LIVE"; k: root.halo; neon: root.neon; glow: root.glow;
-                font-size: 12px; color: root.ink.with-alpha(0.88); horizontal-alignment: center; }
+                font-size: 12px; font-weight: root.sub-weight; color: root.ink.with-alpha(0.88); horizontal-alignment: center; }
             if !root.m.playing: Rectangle {
                 x: (parent.width - 54px) / 2 + 54px - 20px; y: 6px + 54px - 20px; width: 20px; height: 20px; border-radius: 10px; background: #000000a0;
                 Icon { width: parent.width; height: parent.height; text: "\u{F03E4}"; font-size: 14px; color: root.ink; }
@@ -539,17 +541,17 @@ component MusicW inherits Rectangle {
             if !root.m.has-art: Icon { text: "\u{F0387}"; font-size: 36px; color: root.ink.with-alpha(0.80); }
         }
         if root.it.w >= 2: Marquee { x: 90px; y: 9px; width: parent.width - 90px - parent.rgt; height: 20px; text: root.m.title; k: root.halo; neon: root.neon; glow: root.glow;
-            font-size: 15px; font-weight: 600; color: root.ink; scroll: root.scroll; speed: root.speed; }
+            font-size: 15px; font-weight: root.it.weight; color: root.ink; scroll: root.scroll; speed: root.speed; }
         if root.it.w >= 2: Marquee { x: 90px; y: 29px; width: parent.width - 90px - parent.rgt; height: 18px; text: root.m.artist; k: root.halo; neon: root.neon; glow: root.glow;
-            font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.88); scroll: root.scroll; speed: root.speed; }
+            font-size: 12px; font-weight: root.sub-weight; color: root.ink.with-alpha(0.88); scroll: root.scroll; speed: root.speed; }
         if root.it.w >= 2 && root.m.dur > 0: Rectangle {
             x: 90px; y: 56px; width: parent.width - 90px - parent.rgt; height: 3px; border-radius: 1.5px; background: root.ink.with-alpha(0.20);
             Rectangle { x: 0; width: parent.width * root.fr; border-radius: 1.5px; background: root.acc; }
         }
         if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; x: 90px; y: 61px; width: 50px; height: 16px; text: root.mmss(root.pos-live); k: root.halo; neon: root.neon; glow: root.glow;
-            font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); }
+            font-size: 12px; font-weight: root.sub-weight; color: root.ink.with-alpha(0.92); }
         if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; x: parent.width - parent.rgt - 50px; y: 61px; width: 50px; height: 16px; k: root.halo; neon: root.neon; glow: root.glow;
-            text: "−" + root.mmss(max(0, root.m.dur - root.pos-live)); font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); horizontal-alignment: right; }
+            text: "−" + root.mmss(max(0, root.m.dur - root.pos-live)); font-size: 12px; font-weight: root.sub-weight; color: root.ink.with-alpha(0.92); horizontal-alignment: right; }
         if root.it.w >= 2 && root.m.dur <= 0: Rectangle {
             x: 90px; y: 56px; width: 40px; height: 18px; border-radius: 9px; background: root.acc.with-alpha(0.3);
             Text { text: "LIVE"; font-size: 10px; font-weight: 700; color: root.ink; horizontal-alignment: center; vertical-alignment: center; }
@@ -558,7 +560,7 @@ component MusicW inherits Rectangle {
         if root.it.w >= 4 && root.m.dur > 0: HorizontalLayout {
             x: 90px + 50px; y: 61px; width: parent.width - 90px - parent.rgt - 100px; height: 16px; alignment: center; spacing: 3px;
             GlowText { paper: root.ink.red < 128; icon: true; text: "\u{F04C3}"; font-size: 11px; color: root.ink.with-alpha(0.80); k: root.halo; neon: root.neon; glow: root.glow; }
-            GlowText { paper: root.ink.red < 128; text: root.m.player; font-size: 11px; font-weight: 500; color: root.ink.with-alpha(0.80); overflow: elide; k: root.halo; neon: root.neon; glow: root.glow; horizontal-stretch: 1; }
+            GlowText { paper: root.ink.red < 128; text: root.m.player; font-size: 11px; font-weight: root.sub-weight; color: root.ink.with-alpha(0.80); overflow: elide; k: root.halo; neon: root.neon; glow: root.glow; horizontal-stretch: 1; }
         }
         // the buttons act on the widget's player in place (hit areas of 48 px); the page does not change
         if root.it.w >= 3: Rectangle {
