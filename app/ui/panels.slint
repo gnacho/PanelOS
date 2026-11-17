@@ -163,24 +163,133 @@ export component StatusBar inherits Rectangle {
     }
 }
 
-// Page dots; they fade out a few seconds after the last swipe.
-export component PageDots inherits HorizontalLayout {
+// Page dots; they fade out a few seconds after the last swipe. During a swipe the pill and the dot it goes to
+// stick together with a liquid neck (a Path, thinner in the middle as the swipe goes on); past 0.82 of the way
+// the neck tears and the two wobble like pulled-apart jelly (width and height about the centre, the area kept,
+// ~0.5 s); a swipe that goes back pulls the neck into the pill, which wobbles a little. Across the ends of the
+// endless row a bud grows towards the outer edge instead and tears off.
+export component PageDots inherits Rectangle {
     in property <int> count;
     in property <int> current;
     in property <int> next: -1;          // the page the swipe goes towards, and how far it is (0..1)
     in property <float> frac;
+    in property <int> start: 0;          // the page the swipe started from (the settled page)
     in property <float> shown: 1;
     in property <bool> on-color;
     in property <float> on-k: root.on-color ? 1 : 0;
-    spacing: 6px;
-    alignment: center;
     opacity: root.shown;
+    property <color> on-c: (#ffffff).mix(Theme.accent, root.on-k);
+    property <color> off-c: (#ffffff80).mix(Theme.faint.with-alpha(0.6), root.on-k);
+    // the row: dots 6 px apart, the pill 12 px wider than a dot
+    property <length> row-w: root.count * 6px + 12px + (root.count - 1) * 6px;
+    property <length> x0: (root.width - root.row-w) / 2;
+    pure function w-of(i: int) -> float {
+        return (i == root.current ? 1 - root.frac : 0) + (i == root.next ? root.frac : 0);
+    }
+    pure function left-of(i: int) -> length {
+        // dots before i, plus the extra width of the pill parts before it
+        return root.x0 + i * 12px + 12px * ((root.current < i ? 1 - root.frac : 0) + (root.next < i && root.next >= 0 ? root.frac : 0));
+    }
+    // how far the swipe has gone from where it started (0..1); the ends of the row are a wrap
+    property <bool> moving: root.frac > 0.01 && root.frac < 0.99 && root.next >= 0;
+    property <bool> wrap: root.moving && ((root.current == 0 && root.next == root.count - 1) || (root.current == root.count - 1 && root.next == 0));
+    property <float> prog: !root.moving ? 0 : root.start == root.current ? root.frac : root.start == root.next ? 1 - root.frac : 0;
+    property <int> from: root.start == root.next ? root.next : root.current;
+    property <int> to: root.start == root.next ? root.current : root.next;
+    // torn: the neck broke in this gesture (it re-forms only below 0.65)
+    property <bool> torn;
+    property <float> peak;               // the furthest point of this gesture (a snap back without a tear wobbles)
+    // the wobble: which dot, when, how strong (0.16 the new pill, the old dot 0.10 the other way; 0.08 a snap back)
+    property <int> wob-a: -1;
+    property <int> wob-b: -1;
+    property <float> wob-amp;
+    property <duration> wob-t0;
+    property <bool> wobbling;
+    property <duration> tear-t0;
+    changed prog => {
+        if root.moving && !root.torn && root.prog > 0.82 {
+            root.torn = true;
+            root.tear-t0 = animation-tick();
+            root.wob-a = root.to;
+            root.wob-b = root.from;
+            root.wob-amp = 0.16;
+            root.wob-t0 = animation-tick();
+            root.wobbling = true;
+        } else if root.torn && root.moving && root.prog < 0.65 {
+            root.torn = false;
+        }
+        if root.moving {
+            root.peak = Math.max(root.peak, root.prog);
+        }
+    }
+    changed moving => {
+        if !root.moving {
+            // the gesture ended: back where it began without a tear → the pill wobbles a little
+            if !root.torn && root.peak > 0.15 && root.current == root.start {
+                root.wob-a = root.start;
+                root.wob-b = -1;
+                root.wob-amp = 0.08;
+                root.wob-t0 = animation-tick();
+                root.wobbling = true;
+            }
+            root.torn = false;
+            root.peak = 0;
+        }
+    }
+    Timer { interval: 520ms; running: root.wobbling; triggered => { root.wobbling = false; } }
+    property <float> wt: root.wobbling ? (animation-tick() - root.wob-t0) / 1ms : 1000;
+    pure function sx-of(i: int) -> float {
+        return !root.wobbling || root.wt > 500 ? 1
+            : i == root.wob-a ? 1 + root.wob-amp * Math.pow(2.71828, -root.wt / 120) * Math.cos(360deg * root.wt / 180)
+            : i == root.wob-b ? 1 - 0.10 * Math.pow(2.71828, -root.wt / 120) * Math.cos(360deg * root.wt / 180)
+            : 1;
+    }
+    // the neck: from the pill's edge to the target dot's edge, its middle h(prog) = 6 · (1 − 0.75 · prog) high;
+    // it grows out of the pill over the first 15 % of the way (and goes back into it the same way)
+    property <bool> neck: root.moving && !root.wrap && !root.torn && root.to >= 0;
+    property <length> from-l: root.left-of(root.from);
+    property <length> from-r: root.from-l + (6px + 12px * root.w-of(root.from));
+    property <length> to-l: root.left-of(root.to);
+    property <length> to-r: root.to-l + (6px + 12px * root.w-of(root.to));
+    property <bool> rightward: root.to > root.from;
+    property <length> n1: root.rightward ? root.from-r - 2px : root.from-l + 2px;
+    property <length> n2-full: root.rightward ? root.to-l + 2px : root.to-r - 2px;
+    property <length> n2: root.n1 + (root.n2-full - root.n1) * Math.min(1, root.prog / 0.15);
+    property <float> nh: 6 * (1 - 0.75 * root.prog);
+    if root.neck: Path {
+        x: 0; y: 0; width: root.width; height: 6px;
+        viewbox-width: root.width / 1px; viewbox-height: 6;
+        fill: root.on-c;
+        MoveTo { x: root.n1 / 1px; y: 0; }
+        QuadraticTo { control-x: (root.n1 + root.n2) / 2px; control-y: 6 - root.nh; x: root.n2 / 1px; y: 0; }
+        LineTo { x: root.n2 / 1px; y: 6; }
+        QuadraticTo { control-x: (root.n1 + root.n2) / 2px; control-y: root.nh; x: root.n1 / 1px; y: 6; }
+        Close { }
+    }
+    // the bud across the ends: grows from the pill towards the outer edge, tears off at 0.82 and fades in 90 ms
+    property <bool> bud: root.wrap && root.from >= 0;
+    property <float> bud-k: root.torn ? Math.max(0, 1 - (animation-tick() - root.tear-t0) / 90ms) : 1;
+    if root.bud && root.bud-k > 0.01: Rectangle {
+        property <length> len: 10px * Math.min(1, root.prog / 0.6);
+        property <bool> outward-right: root.from == root.count - 1;
+        x: self.outward-right ? root.from-r - 2px : root.from-l + 2px - self.len;
+        y: 1px; width: self.len; height: 4px; border-radius: 2px;
+        background: root.on-c; opacity: root.bud-k;
+    }
     for i in root.count: Rectangle {
-        property <float> w: (i == root.current ? 1 - root.frac : 0) + (i == root.next ? root.frac : 0);
-        width: 6px + 12px * self.w;
-        height: 6px;
-        border-radius: 3px;
-        background: ((#ffffff).mix(Theme.accent, root.on-k)).mix((#ffffff80).mix(Theme.faint.with-alpha(0.6), root.on-k), self.w);
+        property <float> w: root.w-of(i);
+        property <float> sx: root.sx-of(i);
+        // across the ends the far dot grows in from 0.6 of its size with the wobble
+        property <float> grow: root.wrap && root.torn && i == root.to ? 0.6 + 0.4 * Math.min(1, root.wt / 200) : 1;
+        property <length> bw: (6px + 12px * self.w) * self.sx * self.grow;
+        property <length> bh: 6px / self.sx * self.grow;
+        x: root.left-of(i) + (6px + 12px * self.w - self.bw) / 2;
+        y: (6px - self.bh) / 2;
+        width: self.bw;
+        height: self.bh;
+        border-radius: Math.min(self.bw, self.bh) / 2;
+        // the old end keeps the active colour while stuck, and fades only after the tear
+        background: root.neck && i == root.from ? root.on-c : root.on-c.mix(root.off-c, self.w);
     }
 }
 

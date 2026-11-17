@@ -61,6 +61,37 @@ export component Crawl inherits Rectangle {
         font-family: root.font-family; letter-spacing: root.letter-spacing; color: root.ink; vertical-alignment: center; }
 }
 
+// The play triangle sits 1/16 em right of the middle in the icon font (its box: 171..405 of 512): an icon in a
+// round button moves it back by this much, so play and pause are both in the middle of the circle.
+export global Glyph {
+    pure public function nudge(text: string, size: length) -> length {
+        return text == "\u{F040A}" ? -size * 0.0625 : 0px;
+    }
+}
+
+// Play / pause as one shape (M13): the play triangle (38,28) (68,48) (38,68) in a 96 px square, its centroid in
+// the middle, split at x 53 into two quads that morph into the pause bars (34–44 and 52–62, y 30–66) in 160 ms.
+export component PlayGlyph inherits Rectangle {
+    in property <bool> playing;          // true: the pause bars (it plays), false: the play triangle
+    in property <color> ink: #ffffff;
+    property <float> k: root.playing ? 1 : 0;
+    animate k { duration: 160ms; easing: ease-in-out; }
+    pure function m(a: float, b: float) -> float { return a + (b - a) * root.k; }
+    Path {
+        width: root.width; height: root.height; viewbox-width: 96; viewbox-height: 96; fill: root.ink;
+        MoveTo { x: root.m(38, 34); y: root.m(28, 30); }
+        LineTo { x: root.m(53, 44); y: root.m(38, 30); }
+        LineTo { x: root.m(53, 44); y: root.m(58, 66); }
+        LineTo { x: root.m(38, 34); y: root.m(68, 66); }
+        Close { }
+        MoveTo { x: root.m(53, 52); y: root.m(38, 30); }
+        LineTo { x: root.m(68, 62); y: root.m(48, 30); }
+        LineTo { x: root.m(68, 62); y: root.m(48, 66); }
+        LineTo { x: root.m(53, 52); y: root.m(58, 66); }
+        Close { }
+    }
+}
+
 export component Icon inherits Text {
     font-family: "Material Design Icons";
     // No layer of its own: a cached Text item kept showing the old glyph after
@@ -344,6 +375,7 @@ export component RoundButton inherits Rectangle {
         clicked => { root.clicked(); }
     }
     Icon {
+        x: Glyph.nudge(root.icon, root.size * 0.55); width: parent.width; height: parent.height;
         text: root.icon;
         font-size: root.size * 0.55;
         color: root.tint;

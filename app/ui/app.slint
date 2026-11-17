@@ -1118,6 +1118,7 @@ export component AppWindow inherits Window {
         current: root.pg-a;
         next: root.pg-b;
         frac: root.pg-f;
+        start: root.page;
         shown: root.dots-k;
         on-color: root.pages.length > 0 && root.on-color(root.pages[root.shown-page]);
         on-k: root.on-k;
@@ -1197,8 +1198,11 @@ export component AppWindow inherits Window {
     }
 
     // the theme switch: every colour of the palette eases between light and dark over 0.4 s
+    // light / dark: 700 ms when someone switches it, 1200 ms when Auto does (nobody waits for it); a sine
+    // ease-in-out, softer at both ends; every colour moves together
+    in property <bool> theme-slow;
     property <float> theme-k: Theme.dark ? 1 : 0;
-    animate theme-k { duration: 400ms; easing: ease-in-out; }
+    animate theme-k { duration: root.theme-slow ? 1200ms : 700ms; easing: cubic-bezier(0.37, 0, 0.63, 1); }
     changed theme-k => { Theme.k = root.theme-k; }
     init => { Theme.k = Theme.dark ? 1 : 0; }
 

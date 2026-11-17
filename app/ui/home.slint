@@ -3,7 +3,7 @@
 // The layout is edited in Home Assistant; editing on the panel itself is optional (switched on in
 // HA): a long press opens a lock, holding the lock unlocks the edit mode.
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, GlowText, Marquee } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText, Marquee } from "widgets.slint";
 import { WeatherData, ClockData, AnalogDial, FlipClock } from "panels.slint";
 
 export struct HomeItem {
@@ -567,7 +567,7 @@ component MusicW inherits Rectangle {
             x: parent.width - (root.it.w >= 4 ? 84px : 52px); y: (parent.height - 44px) / 2; width: 44px; height: 44px; border-radius: 22px;
             background: play-ta.pressed ? root.acc.darker(0.3) : root.acc;
             animate background { duration: 120ms; easing: ease-out; }
-            Icon { width: parent.width; height: parent.height; text: root.m.playing ? "\u{F03E4}" : "\u{F040A}"; font-size: 26px; color: root.ink; }
+            PlayGlyph { width: parent.width; height: parent.height; playing: root.m.playing; ink: root.ink; }
             play-ta := TouchArea { x: -2px; y: -2px; width: 48px; height: 48px; clicked => { Act.act("music.play", "widget"); } }
         }
         if root.it.w >= 4: Rectangle {

@@ -181,8 +181,12 @@ pub struct UiState {
     wake_phrase: String,
     /// The status bar's wake hint: for which wake phrase, and its text.
     wake_hint: (String, String),
+    /// When the wake hint got its line (a new one every 10 minutes).
+    wake_hint_at: Option<Instant>,
     /// The status line's line while the microphone is muted (picked at each mute).
     muted_hint: String,
+    /// The theme setting at the last check (Auto changing the theme by itself gets the slower change).
+    theme_mode_seen: Option<String>,
     /// Quick controls: the title picked for this run.
     art_url: Option<String>,
     art_tx: Option<Sender<Option<String>>>,
@@ -717,8 +721,10 @@ fn refresh_pages(ui: &AppWindow) {
             String::new()
         } else {
             s.muted_hint.clear();
-            if s.wake_hint.0 != s.wake_phrase {
+            let stale = s.wake_hint_at.is_none_or(|t| t.elapsed() > Duration::from_secs(600));
+            if s.wake_hint.0 != s.wake_phrase || stale {
                 s.wake_hint = (s.wake_phrase.clone(), texts::fresh("voice.wake").replace("{wake}", &s.wake_phrase));
+                s.wake_hint_at = Some(Instant::now());
             }
             s.wake_hint.1.clone()
         };
@@ -727,7 +733,8 @@ fn refresh_pages(ui: &AppWindow) {
         }
         // Music page
         let player = media_entity(s);
-        let mut music = pages::home_music(&s.states, &player, s.art.as_ref(), a);
+        let cover_accent = if s.art.is_some() { s.art_accent.unwrap_or(a) } else { a };
+        let mut music = pages::home_music(&s.states, &player, s.art.as_ref(), cover_accent);
         if music.playing && !really_playing(s, &player) {
             music.playing = false;
         }
@@ -745,7 +752,7 @@ fn refresh_pages(ui: &AppWindow) {
             ui.set_music_art_bg(bg.clone());
         }
         // the music page takes the cover's colour (the record, the accents), else the panel's
-        ui.set_music_accent(if music.has_art { s.art_accent.unwrap_or(a) } else { a });
+        ui.set_music_accent(if music.has_art { cover_accent } else { a });
         // the record: the cover's own colour as it is
         let record = if music.has_art { s.art_record } else { None };
         ui.set_music_has_record(record.is_some());
@@ -2470,9 +2477,12 @@ fn update_theme(ui: &AppWindow, s: &mut UiState) {
         _ => 1,
     });
     if s.dark != Some(dark) {
+        // Auto changed it by itself (the light, the sun): the calmer change; a switch by someone: the quicker one
+        ui.set_theme_slow(s.dark.is_some() && s.settings.theme == "auto" && s.theme_mode_seen.as_deref() == Some("auto"));
         s.dark = Some(dark);
         ui.global::<Theme>().set_dark(dark);
     }
+    s.theme_mode_seen = Some(s.settings.theme.clone());
 }
 
 /// Backlight fade, every 20 ms: towards the target in perceived brightness
@@ -3159,7 +3169,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forecast_daily: Vec::new(),
             wake_phrase: phrase,
             wake_hint: Default::default(),
+            wake_hint_at: None,
             muted_hint: String::new(),
+            theme_mode_seen: None,
             art_url: None,
             art_bg: None,
             art_accent: None,

@@ -9,7 +9,7 @@
 // Images are drawn at their exact size (the renderer scales without filtering). Coloured shapes are a
 // white mask (colorize = the colour) with a grey + alpha shading layer on top.
 import { Theme, Act, Clock, Words } from "theme.slint";
-import { Icon, GlowText } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText } from "widgets.slint";
 import { FlapCard } from "panels.slint";
 import { Keyboard } from "overlays.slint";
 
@@ -126,7 +126,11 @@ component RoundButton inherits Rectangle {
     background: root.outline ? transparent : root.fill;
     border-width: root.outline ? 1.5px : 0px; border-color: root.line;
     opacity: rb-touch.pressed ? 0.6 : 1;
-    Icon { width: parent.width; height: parent.height; text: root.icon; font-size: root.icon-size; color: root.ink; }
+    // play / pause morph into each other (M13); every other icon as it is
+    property <bool> pp: root.icon == "\u{F040A}" || root.icon == "\u{F03E4}";
+    if root.pp: PlayGlyph { x: (parent.width - root.icon-size * 96 / 62) / 2; y: (parent.height - root.icon-size * 96 / 62) / 2;
+        width: root.icon-size * 96 / 62; height: self.width; playing: root.icon == "\u{F03E4}"; ink: root.ink; }
+    if !root.pp: Icon { width: parent.width; height: parent.height; text: root.icon; font-size: root.icon-size; color: root.ink; }
     rb-touch := TouchArea { clicked => { if root.act != "" { Act.act(root.act, root.act-value); } } }
 }
 

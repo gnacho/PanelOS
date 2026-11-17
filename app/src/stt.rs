@@ -50,8 +50,10 @@ pub fn recognize(samples: &[i16]) -> Result<String, String> {
 /// turns a lone "állj" into another word: "Fájl.", "Jók.", "Folytat." were measured), never a longer sentence
 /// (another speaker's answer, a sentence to someone).
 pub fn stops_ring(text: &str) -> bool {
-    let words = text.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).count();
-    is_stop(text) || words == 1
+    let words: Vec<String> = text.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(str::to_lowercase).collect();
+    // a short sentence with an "áll…" or "stop" word in it ("Álljuk meg …" was measured for "állj")
+    let stem = words.len() <= 6 && words.iter().any(|w| w.starts_with("áll") || w.starts_with("stop") || w.starts_with("sztop"));
+    is_stop(text) || words.len() == 1 || stem
 }
 
 /// A short phrase that means "stop" (Hungarian and English): at most four words, one of them a stop word, or a
@@ -88,6 +90,8 @@ mod tests {
         assert!(!stops_ring("Köszönöm szépen."));
         assert!(!stops_ring(""));
         assert!(!stops_ring("Beállítottam egy egyperces időzítőt."));
+        assert!(stops_ring("Álljuk meg az időpontot állítsuk."));
+        assert!(!stops_ring("Állítsd be a konyhai időzítőt öt percre, kérlek szépen most."));
     }
 
     #[test]

@@ -144,6 +144,14 @@ extern "C" {
     fn aec_process(e: *mut AecEngine, far: *const i16, near: *const i16, out: *mut i16) -> c_int;
 }
 
+/// The echo canceller keeps running (with silence as the far end) while this is set (the file
+/// /tmp/nspanel-aec-warm sets it, for measurements: measured 2026-11-17 at 10 % volume, a warm canceller left more of
+/// a ring's first second than one started with the ring, so it is not used otherwise).
+pub static AEC_WARM: AtomicBool = AtomicBool::new(false);
+static FORCE_WARM: AtomicBool = AtomicBool::new(false);
+/// /tmp/nspanel-aec-cold: the canceller runs only around playback, as before (for comparing measurements).
+static FORCE_COLD: AtomicBool = AtomicBool::new(false);
+
 /// Echo canceller for 10 ms frames; passes the microphones through if the
 /// library cannot start, and while the speaker has been silent for 2 s (it
 /// costs about a quarter of a core while it runs: 31 % of one core for the
@@ -192,7 +200,8 @@ impl Aec {
                 self.last_far = Some(Instant::now());
             }
             let near = &self.near[start..start + AEC_FRAME];
-            if self.last_far.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
+            let warm = !FORCE_COLD.load(Ordering::Relaxed) && (AEC_WARM.load(Ordering::Relaxed) || FORCE_WARM.load(Ordering::Relaxed));
+            if warm || self.last_far.is_some_and(|t| t.elapsed() < Duration::from_secs(2)) {
                 // SAFETY: three buffers of AEC_FRAME samples.
                 unsafe { aec_process(self.ptr, far.as_ptr(), near.as_ptr(), frame.as_mut_ptr()) };
                 if playing {
@@ -442,7 +451,9 @@ const RING_SPEECH_FRAMES: u32 = 6;
 /// long, with RING_PREROLL samples from before its start (the first sound of the word).
 const RING_SPEECH_END: f64 = 6.0;
 const RING_SPEECH_TAIL: u32 = 60;
-const RING_SPEECH_MAX: u32 = 300;
+const RING_SPEECH_MAX: u32 = 250;
+/// A piece cut at its longest leaves this many samples for the start of the next one.
+const RING_OVERLAP: usize = 16000;
 const RING_PREROLL: usize = 8000;
 /// At a ring's start the echo canceller is still learning the new sound for about a second, and its leftover
 /// sounds like speech to the ear and the "Stop" model (measured: a false piece of speech 1 s after every ring
@@ -488,8 +499,15 @@ impl RingEar {
                 buf.extend_from_slice(f);
                 *len += 1;
                 *quiet = if db - self.floor > RING_SPEECH_END { 0 } else { *quiet + 1 };
-                if *quiet >= RING_SPEECH_TAIL || *len >= RING_SPEECH_MAX {
+                if *quiet >= RING_SPEECH_TAIL {
                     done = self.rec.take().map(|(b, _, _)| b);
+                } else if *len >= RING_SPEECH_MAX {
+                    // still loud: the next piece goes on from the last second of this one
+                    let b = self.rec.take().map(|(b, _, _)| b).unwrap_or_default();
+                    let keep = b[b.len().saturating_sub(RING_OVERLAP)..].to_vec();
+                    let frames = (keep.len() / AEC_FRAME) as u32;
+                    self.rec = Some((keep, frames, 0));
+                    done = Some(b);
                 }
                 continue;
             }
@@ -963,6 +981,10 @@ pub fn spawn(
         // someone speaks.
         let mut ring_listen = false;
         let mut ring_audio: std::collections::VecDeque<i16> = std::collections::VecDeque::new();
+        // a ring's start: (raw, processed) energy per 100 ms for its first 3 s, for the log
+        let mut ring_erle: Vec<(f64, f64)> = Vec::new();
+        let mut erle_acc = (0f64, 0f64, 0usize);
+        let mut warm_check = Instant::now();
         let mut ring_ear = RingEar::new();
         // texts of speech heard over a ring (from the speech recognition threads)
         let (ring_tx, ring_rx) = mpsc::channel::<String>();
@@ -1063,7 +1085,28 @@ pub fn spawn(
                 let b = buf[i * MIC_CHANNELS + 3] as i32;
                 mono[i] = (((a + b) / 2) * MIC_GAIN).clamp(-32768, 32767) as i16;
             }
+            if warm_check.elapsed() > Duration::from_secs(1) {
+                warm_check = Instant::now();
+                FORCE_WARM.store(std::path::Path::new("/tmp/nspanel-aec-warm").exists(), Ordering::Relaxed);
+                FORCE_COLD.store(std::path::Path::new("/tmp/nspanel-aec-cold").exists(), Ordering::Relaxed);
+            }
             aec.process(&mono[..frames], &player.echo, &mut clean);
+            // the first 3 s of a ring: how much of it the canceller takes out, per 100 ms
+            if ring_listen && ring_erle.len() < 30 {
+                let raw = &mono[frames - clean.len().min(frames)..frames];
+                erle_acc.0 += raw.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+                erle_acc.1 += clean.iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+                erle_acc.2 += clean.len();
+                if erle_acc.2 >= 1600 {
+                    ring_erle.push((erle_acc.0, erle_acc.1));
+                    erle_acc = (0.0, 0.0, 0);
+                    if ring_erle.len() == 30 {
+                        let db = |e: f64| 10.0 * (e / 1600.0 + 1.0).log10();
+                        let line: Vec<String> = ring_erle.iter().map(|(r, c)| format!("{:.0}/{:.0}", db(*r), db(*c))).collect();
+                        eprintln!("nspanel-app: voice: ring start, microphone/processed dB per 100 ms: {}", line.join(" "));
+                    }
+                }
+            }
             if let Some(f) = aec_dump.as_mut() {
                 use std::io::Write;
                 // Raw and processed frames line up from the end (the canceller keeps < 10 ms back).
@@ -1317,6 +1360,8 @@ pub fn spawn(
             if control.ringing.load(Ordering::SeqCst) && !muted && !aec.ptr.is_null() {
                 if !ring_listen {
                     ring_listen = true;
+                    ring_erle.clear();
+                    erle_acc = (0.0, 0.0, 0);
                     ring_audio.clear();
                     ring_ear = RingEar::new();
                     eprintln!("nspanel-app: voice: listening while the timer rings");

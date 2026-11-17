@@ -6,7 +6,7 @@
 // The software renderer can't rotate images or clip to a circle, so the vinyl hole is a thick round
 // border over the square cover, and the tone arm / tape run are paths computed here.
 import { Theme, Act } from "theme.slint";
-import { Icon, GlowText, Marquee } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText, Marquee } from "widgets.slint";
 
 export struct MusicPlayer {
     name: string,       // "Kitchen speaker"
@@ -142,7 +142,7 @@ component Controls inherits HorizontalLayout {
         Rectangle {
             width: root.play; height: root.play; border-radius: root.play / 2; background: root.play-bg;
             opacity: play-touch.pressed ? 0.75 : 1;
-            Icon { width: parent.width; height: parent.height; text: root.playing ? "\u{F03E4}" : "\u{F040A}"; font-size: root.play * 0.55; color: #ffffff; }
+            PlayGlyph { width: parent.width; height: parent.height; playing: root.playing; ink: #ffffff; }
             play-touch := TouchArea { clicked => { Act.act("music.play", ""); } }
         }
     }
@@ -578,7 +578,7 @@ export component MusicPage inherits Rectangle {
             x: 21px; y: 405px; width: 82px; height: 36px; border-radius: 6px;
             background: tt-play.pressed ? #b02a20 : #cf3428;
             Rectangle { x: 6px; y: 3px; width: parent.width - 12px; height: 2px; border-radius: 1px; background: #ffffff4d; }
-            Icon { text: root.playing ? "\u{F03E4}" : "\u{F040A}"; font-size: 24px; color: #ffffff; }
+            PlayGlyph { x: (parent.width - 44px) / 2; y: (parent.height - 44px) / 2; width: 44px; height: 44px; playing: root.playing; ink: #ffffff; }
             tt-play := TouchArea { clicked => { Act.act("music.play", ""); } }
         }
         for b[i] in [
@@ -734,7 +734,7 @@ export component MusicPage inherits Rectangle {
             }
             Rectangle {
                 x: (parent.width - 72px) / 2; y: 158px; width: 72px; height: 72px; border-radius: 36px; background: root.acc;
-                Icon { width: parent.width; height: parent.height; text: root.playing ? "\u{F03E4}" : "\u{F040A}"; font-size: 40px; color: #ffffff; }
+                PlayGlyph { width: parent.width; height: parent.height; playing: root.playing; ink: #ffffff; }
             }
             Ctl { x: parent.width / 2 - 56px; y: 246px; size: 48px; icon-size: 34px; icon: "\u{F04AE}"; }
             Ctl { x: parent.width / 2 + 8px; y: 246px; size: 48px; icon-size: 34px; icon: "\u{F04AD}"; }
