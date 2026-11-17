@@ -904,6 +904,14 @@ fn apply_panel_config(ui: &AppWindow) {
         ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
         let mut changed = false;
         let extra = extra_entities(s);
+        // an entity a page needs that the running session does not follow (e.g. pages from the stored settings
+        // before the session knew them): a new session
+        {
+            let subscribed = s.shared.subscribed.lock().unwrap();
+            if !subscribed.is_empty() && extra.iter().any(|e| !e.is_empty() && !subscribed.contains(e)) {
+                changed = true;
+            }
+        }
         {
             let mut e = s.shared.extra_entities.lock().unwrap();
             if *e != extra {
@@ -925,6 +933,7 @@ fn apply_panel_config(ui: &AppWindow) {
     });
     refresh_pages(ui);
     if reload {
+        eprintln!("nspanel-app: the pages follow other entities: new Home Assistant session");
         send(Command::Reload);
     }
 }
@@ -1256,8 +1265,20 @@ fn ring_timer(ui: &AppWindow, s: &mut UiState, name: String) {
     ui.set_timers_ringing(true);
 }
 
-/// A timer started on the panel (a quick start or one of one's own).
+/// A timer started on the panel (a quick start or one of one's own): Home Assistant's timer of the panel (voice
+/// and every other device see it), or the panel's own while it has no Home Assistant.
 fn start_timer(ui: &AppWindow, secs: u32, name: String) {
+    if HA_LINKED.load(Ordering::SeqCst) && with_state(|s| s.panel_config.is_some()) {
+        send(Command::Timer { action: "start".into(), timer_id: String::new(), seconds: secs, name });
+        ui.set_timers_quick(false);
+        ui.set_timers_mode(1);
+        return;
+    }
+    start_local_timer(ui, secs, name);
+}
+
+/// A timer the panel runs itself (no Home Assistant, or it refused the timer).
+fn start_local_timer(ui: &AppWindow, secs: u32, name: String) {
     with_state(|s| {
         s.timer_seq += 1;
         let seq = s.timer_seq;
@@ -1321,14 +1342,24 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
                 "timers.cancel" => {
                     TIMER_SHEET_CLOSE.with(|c| c.set(true));
                     if let Some(t) = s.timers.remove(&id) {
-                        if !t.own || !id.starts_with("panel-") {
-                            s.dismissed_timers.insert(id);
+                        if !t.own {
+                            // Home Assistant's timer: cancelled there (voice and other devices see it gone too)
+                            let _ = s.commands.as_ref().map(|tx| {
+                                tx.send(Command::Timer { action: "cancel".into(), timer_id: id.clone(), seconds: 0, name: String::new() })
+                            });
                         }
                     }
                 }
                 _ => {
                     let Some(t) = s.timers.get_mut(&id) else { return };
-                    t.own = true;
+                    // Home Assistant's timer: asked of Home Assistant (its answer comes as an updated event); shown
+                    // at once
+                    if !t.own {
+                        let action = if what == "timers.add" { "add" } else if t.active { "pause" } else { "resume" };
+                        let _ = s.commands.as_ref().map(|tx| {
+                            tx.send(Command::Timer { action: action.into(), timer_id: id.clone(), seconds: if action == "add" { 60 } else { 0 }, name: String::new() })
+                        });
+                    }
                     if what == "timers.add" {
                         if t.active {
                             t.end += Duration::from_secs(60);
@@ -2027,6 +2058,33 @@ fn handle_event(ui: &AppWindow, event: Event) {
             apply_panel_config(ui);
         }
         Event::Show(v) => handle_show(ui, &v),
+        Event::Timers(list) => {
+            // Home Assistant's timers of the panel now: these replace the ones the panel had from it (its own stay)
+            with_state(|s| {
+                let ids: Vec<String> = list.iter().filter_map(|t| t["id"].as_str().map(str::to_string)).collect();
+                s.timers.retain(|id, t| t.own || ids.contains(id));
+                for t in &list {
+                    let Some(id) = t["id"].as_str() else { continue };
+                    let left = t["left"].as_u64().unwrap_or(0) as u32;
+                    let total = (t["total"].as_u64().unwrap_or(left as u64) as u32).max(left);
+                    let active = t["active"].as_bool().unwrap_or(true);
+                    let seq = match s.timers.get(id) {
+                        Some(x) => x.seq,
+                        None => {
+                            s.timer_seq += 1;
+                            s.timer_seq
+                        }
+                    };
+                    let name = t["name"].as_str().unwrap_or("").to_string();
+                    s.timers.insert(
+                        id.to_string(),
+                        pages::Timer { name, active, end: Instant::now() + Duration::from_secs(left as u64), left, total, seq, own: false },
+                    );
+                }
+            });
+            update_clock(ui);
+        }
+        Event::TimerRefused { seconds, name } => start_local_timer(ui, seconds, name),
         Event::Command { key, .. } if key == "screenshot" => {
             // The live preview: each request keeps a short stream going (a picture about every 120 ms
             // for 3 s), so the page gets the newest picture at once instead of waiting a round trip.
@@ -3313,6 +3371,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     with_state(|s| s.commands = Some(cmd_tx));
     // the pages as they were (the stored settings), before Home Assistant answers
     if with_state(|s| s.panel_config.is_some()) {
+        eprintln!("nspanel-app: pages from the stored settings");
         apply_panel_config(&ui);
     }
 

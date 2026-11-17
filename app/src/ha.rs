@@ -32,6 +32,9 @@ pub enum Command {
     Screen(String),
     /// A page's look or options set on the panel (its page sheet): the integration keeps them.
     PageSet { index: usize, variant: Option<i32>, options: Value },
+    /// A timer started or changed on the panel: Home Assistant's own timer of the panel's voice device
+    /// (start / pause / resume / add / cancel); a start Home Assistant refuses runs on the panel instead.
+    Timer { action: String, timer_id: String, seconds: u32, name: String },
 }
 
 pub enum Event {
@@ -48,6 +51,11 @@ pub enum Event {
     Show(Value),
     /// Command from an entity of the panel's device (PanelOS integration).
     Command { key: String, value: Value },
+    /// The timers running on the panel in Home Assistant (sent when the panel subscribes).
+    Timers(Vec<Value>),
+    /// Home Assistant could not start a timer for the panel (an older integration, no timer device): the
+    /// panel runs it itself.
+    TimerRefused { seconds: u32, name: String },
     /// Weather forecast (hourly or daily) of the forecast entity.
     Forecast { hourly: bool, items: Vec<Value> },
     /// Persistent notifications: "current" (all of them), "added",
@@ -63,6 +71,9 @@ pub const PANEL_ID: &str = "nspanel-pro";
 pub struct Shared {
     pub dashboard: std::sync::Mutex<String>,
     pub extra_entities: std::sync::Mutex<Vec<String>>,
+    /// The entities the running session subscribed to (the UI thread asks for a new session when a page needs one
+    /// that is missing).
+    pub subscribed: std::sync::Mutex<Vec<String>>,
     /// Weather entity whose forecasts are followed ("" = none).
     pub forecast_entity: std::sync::Mutex<String>,
     /// What the panel's device in Home Assistant shows; filled by the UI
@@ -233,6 +244,7 @@ fn session(
             entities.push(extra.clone());
         }
     }
+    *shared.subscribed.lock().unwrap() = entities.clone();
     emit(Event::Dashboard(config));
 
     next_id += 1;
@@ -280,6 +292,8 @@ fn session(
     // The panel's device (PanelOS integration): reported once the
     // subscription is accepted, then only what changed.
     let mut report = Report::default();
+    // timer starts asked of Home Assistant: request id -> (seconds, name), so a refused one runs on the panel
+    let mut timer_starts: std::collections::HashMap<u64, (u32, String)> = std::collections::HashMap::new();
     loop {
         while let Ok(cmd) = commands.try_recv() {
             match cmd {
@@ -308,6 +322,29 @@ fn session(
                 }
                 Command::Screen(_) => {
                     crate::SCREENS_SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                Command::Timer { action, timer_id, seconds, name } => {
+                    next_id += 1;
+                    let mut msg = json!({"id": next_id, "type": "panelos/timer", "panel_id": PANEL_ID, "action": action});
+                    if !timer_id.is_empty() {
+                        msg["timer_id"] = json!(timer_id);
+                    }
+                    if seconds > 0 {
+                        msg["seconds"] = json!(seconds);
+                    }
+                    if !name.is_empty() {
+                        msg["name"] = json!(name);
+                    }
+                    if action == "start" {
+                        timer_starts.insert(next_id, (seconds, name));
+                    }
+                    if report.linked {
+                        send_json(&mut ws, &msg)?;
+                    } else if action == "start" {
+                        // no integration link: the panel runs it
+                        timer_starts.remove(&next_id);
+                        emit(Event::TimerRefused { seconds, name: msg["name"].as_str().unwrap_or("").to_string() });
+                    }
                 }
                 Command::PageSet { index, variant, options } => {
                     next_id += 1;
@@ -363,6 +400,9 @@ fn session(
                         if let Some(show) = ev.get("show") {
                             emit(Event::Show(show.clone()));
                         }
+                        if let Some(list) = ev.get("timers").and_then(Value::as_array) {
+                            emit(Event::Timers(list.clone()));
+                        }
                         if let Some(key) = ev["command"]["key"].as_str() {
                             emit(Event::Command { key: key.to_string(), value: ev["command"]["value"].clone() });
                         }
@@ -373,6 +413,14 @@ fn session(
                         panel_retry_at = Some(Instant::now() + Duration::from_secs(10));
                     }
                     Some("result") if msg["id"] == panel_id => report = Report { linked: true, ..Default::default() },
+                    Some("result") if msg["id"].as_u64().is_some_and(|id| timer_starts.contains_key(&id)) => {
+                        if let Some((seconds, name)) = msg["id"].as_u64().and_then(|id| timer_starts.remove(&id)) {
+                            if msg["success"] != true {
+                                eprintln!("nspanel-app: Home Assistant did not start the timer ({}): the panel runs it", msg["error"]["message"]);
+                                emit(Event::TimerRefused { seconds, name });
+                            }
+                        }
+                    }
                     Some("event") if msg["id"] == notes_id => {
                         let ev = &msg["event"];
                         emit(Event::Notes {

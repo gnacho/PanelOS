@@ -434,6 +434,10 @@ pub enum Sound {
     Stream(Receiver<Vec<i16>>),
 }
 
+/// While the panel listens during a ringing (a spoken "stop"), the looped sound dips to 30 % for 2 s out of every
+/// 5, so the speech recognition hears the voice between the loud parts (the echo reference gets the dipped sound).
+pub static RING_LISTEN: AtomicBool = AtomicBool::new(false);
+
 /// Longest sound the panel plays from a file (an answer or announcement).
 const MAX_AUDIO_SECS: usize = 180;
 
@@ -657,6 +661,9 @@ impl Player {
                 }
                 let stereo: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
                 let mut stopped = false;
+                // the dip of a looped sound while the panel listens (gain moves 10 % per 10 ms: no clicks)
+                let mut played: u64 = 0;
+                let mut gain: f32 = 1.0;
                 // 10 ms at a time; each written piece also goes to the echo
                 // reference (48 kHz → 16 kHz, mean of three samples). A looped
                 // sound starts over until a stop.
@@ -676,12 +683,17 @@ impl Player {
                         break;
                     }
                     let end = (offset + 960).min(stereo.len());
-                    match io.writei(&stereo[offset..end]) {
+                    let target = if looped && RING_LISTEN.load(Ordering::Relaxed) && (played / 48000) % 5 >= 3 { 0.3 } else { 1.0 };
+                    gain = if gain < target { (gain + 0.1).min(target) } else { (gain - 0.1).max(target) };
+                    let dipped: Option<Vec<i16>> = (gain < 0.999).then(|| stereo[offset..end].iter().map(|v| (*v as f32 * gain) as i16).collect());
+                    match io.writei(dipped.as_deref().unwrap_or(&stereo[offset..end])) {
                         Ok(frames) => {
                             let first = offset / 2;
+                            played += frames as u64;
                             let mut q = echo2.lock().unwrap();
                             for tri in mono[first..first + frames].chunks(3) {
-                                q.push_back((tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32) as i16);
+                                let v = tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32;
+                                q.push_back((v as f32 * gain) as i16);
                             }
                             while q.len() > 16000 {
                                 q.pop_front();
@@ -987,7 +999,10 @@ pub fn spawn(
                                 if kind == 4 {
                                     let text = get("text").unwrap_or_default();
                                     let words = text.split_whitespace().count();
-                                    if control.ringing.load(Ordering::SeqCst) && words > 0 && words <= 4 {
+                                    if control.ringing.load(Ordering::SeqCst) {
+                                        eprintln!("nspanel-app: voice: heard while the timer rings: '{text}'");
+                                    }
+                                    if control.ringing.load(Ordering::SeqCst) && words > 0 && words <= 5 {
                                         // Ringing timer + a short sentence = stop
                                         // (speech recognition often returns only a
                                         // fragment of a short word); not sent on to the assistant.
@@ -1205,6 +1220,7 @@ pub fn spawn(
                         stop_word = want_stop;
                         engine.set_active(&control.active_wake_words.lock().unwrap(), stop_word);
                     }
+                    RING_LISTEN.store(control.ringing.load(Ordering::SeqCst) && !muted && !aec.ptr.is_null(), Ordering::Relaxed);
                     if control.ringing.load(Ordering::SeqCst) && !muted && !ring_run && !aec.ptr.is_null() {
                         // Ringing timer: listen without a wake word, run after run.
                         ring_run = true;

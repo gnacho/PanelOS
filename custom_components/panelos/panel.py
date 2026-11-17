@@ -16,6 +16,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.components.intent.const import TIMER_DATA
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity import Entity, entity_sources
@@ -517,6 +518,33 @@ class Panel:
         path = event.data.get("url_path") or "lovelace"
         if path in (self.dashboard, None) or (path == "lovelace" and self.dashboard in ("", "lovelace")):
             self.refresh_skip()
+
+    # -- timers ------------------------------------------------------------
+    # The panel's timers are Home Assistant's own (its timer manager, the ones voice starts and stops): started,
+    # paused, extended and cancelled from the panel too, so voice, the panel and any other device see the same.
+
+    def timer_device_id(self) -> str | None:
+        """The panel's voice satellite device: Home Assistant's timers belong to it."""
+        voice = self._voice_entry()
+        if voice is None:
+            return None
+        manager = self.hass.data.get(TIMER_DATA)
+        for device in dr.async_entries_for_config_entry(dr.async_get(self.hass), voice.entry_id):
+            if manager is not None and manager.is_timer_device(device.id):
+                return device.id
+        return None
+
+    def timers_now(self) -> list[dict[str, Any]]:
+        """The timers running on the panel now (for a panel that just connected)."""
+        manager = self.hass.data.get(TIMER_DATA)
+        device_id = self.timer_device_id()
+        if manager is None or device_id is None:
+            return []
+        return [
+            {"id": t.id, "name": t.name or "", "total": t.seconds, "left": t.seconds_left, "active": t.is_active}
+            for t in manager.timers.values()
+            if t.device_id == device_id and not t.conversation_command
+        ]
 
     def _voice_entry(self) -> ConfigEntry | None:
         """The panel's ESPHome entry (voice satellite): same device name."""

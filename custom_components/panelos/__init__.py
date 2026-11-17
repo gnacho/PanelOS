@@ -38,6 +38,7 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
+from homeassistant.components.intent.const import TIMER_DATA
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -153,6 +154,9 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     connection.subscriptions[msg["id"]] = unsubscribe
     connection.send_result(msg["id"])
     send_config()
+    # the timers running on the panel now (Home Assistant's, so the panel shows them after a restart too)
+    if (entry := find_entry(hass, panel_id)) is not None and (panel := getattr(entry, "runtime_data", None)) is not None:
+        connection.send_message(websocket_api.event_message(msg["id"], {"timers": panel.timers_now()}))
     # The critical alerts and status screens active right now.
     if (entry := find_entry(hass, panel_id)) is not None:
         for request in hass.data[DOMAIN]["house"].requests_for(panel_config(entry)["panel_id"]):
@@ -274,6 +278,56 @@ def ws_page_set(hass: HomeAssistant, connection: websocket_api.ActiveConnection,
     connection.send_result(msg["id"])
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "panelos/timer",
+        vol.Optional("panel_id", default=""): str,
+        vol.Required("action"): vol.In(["start", "pause", "resume", "add", "remove", "cancel"]),
+        vol.Optional("timer_id"): vol.All(str, vol.Length(max=64)),
+        vol.Optional("seconds"): vol.All(int, vol.Range(min=1, max=86400)),
+        vol.Optional("name"): vol.All(str, vol.Length(max=60)),
+    }
+)
+@callback
+def ws_timer(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A timer started or changed on the panel: Home Assistant's own timer of the panel's voice device."""
+    panel = _loaded_panel(hass, msg["panel_id"])
+    if panel is None:
+        connection.send_error(msg["id"], "not_found", f"No PanelOS entry for the panel '{msg['panel_id']}'")
+        return
+    if not panel.linked_on(id(connection)):
+        connection.send_error(msg["id"], "not_subscribed", "Subscribe with panelos/subscribe first")
+        return
+    manager = hass.data.get(TIMER_DATA)
+    device_id = panel.timer_device_id()
+    if manager is None or device_id is None:
+        connection.send_error(msg["id"], "not_supported", "The panel's voice device has no timers in Home Assistant")
+        return
+    action = msg["action"]
+    if action == "start":
+        if "seconds" not in msg:
+            connection.send_error(msg["id"], "invalid_format", "seconds missing")
+            return
+        timer_id = manager.start_timer(device_id, None, None, msg["seconds"], hass.config.language, name=msg.get("name") or None)
+        connection.send_result(msg["id"], {"timer_id": timer_id})
+        return
+    timer = manager.timers.get(msg.get("timer_id", ""))
+    if timer is None or timer.device_id != device_id:
+        connection.send_error(msg["id"], "not_found", "No such timer on this panel")
+        return
+    if action == "pause":
+        manager.pause_timer(timer.id)
+    elif action == "resume":
+        manager.unpause_timer(timer.id)
+    elif action == "add":
+        manager.add_time(timer.id, msg.get("seconds", 60))
+    elif action == "remove":
+        manager.remove_time(timer.id, msg.get("seconds", 60))
+    else:
+        manager.cancel_timer(timer.id)
+    connection.send_result(msg["id"])
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register the websocket commands, the actions and the sidebar page's files once."""
     websocket_api.async_register_command(hass, ws_subscribe)
@@ -281,6 +335,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_alive)
     websocket_api.async_register_command(hass, ws_log)
     websocket_api.async_register_command(hass, ws_page_set)
+    websocket_api.async_register_command(hass, ws_timer)
 
     # A panel that stopped saying it is there is offline at once (checked every second).
     gone_before: set[int] = set()
