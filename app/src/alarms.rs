@@ -235,7 +235,8 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
         "alarm.sound" => ui.set_timers_edit_sound(n as i32),
         "alarm.info" => ui.set_timers_edit_info(!ui.get_timers_edit_info()),
         "alarm.label" => {
-            ui.set_timers_kb_layer(0);
+            // an empty label starts with a capital
+            ui.set_timers_kb_layer(if ui.get_timers_edit_label().is_empty() { 1 } else { 0 });
             ui.set_timers_edit_keyboard(true);
         }
         "alarm.key" => {
@@ -243,10 +244,17 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             let layer = ui.get_timers_kb_layer();
             match value {
                 "enter" => ui.set_timers_edit_keyboard(false),
-                "back" => {
-                    label.pop();
+                "back" | "clear" => {
+                    if value == "back" {
+                        label.pop();
+                    } else {
+                        label.clear();
+                    }
+                    // back at the start of the line: a capital again
+                    if label.is_empty() && layer == 0 {
+                        ui.set_timers_kb_layer(1);
+                    }
                 }
-                "clear" => label.clear(),
                 "shift" => ui.set_timers_kb_layer(match layer {
                     0 => 1,
                     1 => 0,
@@ -254,7 +262,7 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                     _ => 2,
                 }),
                 "symbols" => ui.set_timers_kb_layer(if layer >= 2 { 0 } else { 2 }),
-                "layout" => {}
+                "layout" => ui.set_kb_layout(1 - ui.get_kb_layout().clamp(0, 1)),
                 k => {
                     if label.chars().count() < 32 {
                         label.push_str(k);

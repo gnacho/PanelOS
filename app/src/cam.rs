@@ -113,6 +113,56 @@ pub fn soft(src: &SharedPixelBuffer<Rgb8Pixel>) -> SharedPixelBuffer<Rgb8Pixel> 
 }
 
 /// The frame scaled down to `n` pixels across (box filter).
+/// The cover's own colour for the music page (the record, the accents): the strongest hue of a small copy,
+/// weighted by how colourful and how common it is, brought to a lightness that reads on the dark deck. None
+/// for a grey cover.
+pub fn cover_accent(small: &SharedPixelBuffer<Rgb8Pixel>) -> Option<(u8, u8, u8)> {
+    const BINS: usize = 24;
+    let mut weight = [0f32; BINS];
+    let mut sum = [[0f32; 3]; BINS];
+    for p in small.as_slice() {
+        let (r, g, b) = (p.r as f32 / 255.0, p.g as f32 / 255.0, p.b as f32 / 255.0);
+        let max = r.max(g).max(b);
+        let min = r.min(g).min(b);
+        let chroma = max - min;
+        if max < 0.12 || chroma < 0.08 {
+            continue;
+        }
+        let hue = if max == r {
+            ((g - b) / chroma).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / chroma + 2.0
+        } else {
+            (r - g) / chroma + 4.0
+        } / 6.0;
+        let bin = ((hue * BINS as f32) as usize).min(BINS - 1);
+        let w = chroma * chroma * max;
+        weight[bin] += w;
+        sum[bin][0] += r * w;
+        sum[bin][1] += g * w;
+        sum[bin][2] += b * w;
+    }
+    // the best hue with its neighbours (a hue split over two bins still wins)
+    let score = |i: usize| weight[i] + 0.5 * (weight[(i + BINS - 1) % BINS] + weight[(i + 1) % BINS]);
+    let best = (0..BINS).max_by(|&a, &b| score(a).total_cmp(&score(b)))?;
+    let total: f32 = weight.iter().sum();
+    if weight[best] <= 0.0 || total < small.as_slice().len() as f32 * 0.002 {
+        return None;
+    }
+    let (r, g, b) = (sum[best][0] / weight[best], sum[best][1] / weight[best], sum[best][2] / weight[best]);
+    // to HSV, then a saturation and brightness that read as a colour on the dark deck and the record
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let s = if max > 0.0 { (max - min) / max } else { 0.0 };
+    let (s2, v2) = (s.max(0.5), max.clamp(0.62, 0.92));
+    let k = |c: f32| {
+        let t = if max > min { (c - min) / (max - min) } else { 0.0 };   // 0 at the smallest channel, 1 at the largest
+        let c = v2 * (1.0 - s2 * (1.0 - t));
+        (c * 255.0).round().clamp(0.0, 255.0) as u8
+    };
+    Some((k(r), k(g), k(b)))
+}
+
 pub fn shrink(frame: &SharedPixelBuffer<Rgb8Pixel>, n: u32) -> SharedPixelBuffer<Rgb8Pixel> {
     let (w, h) = (frame.width(), frame.height());
     let (nw, nh) = (n.min(w).max(1), ((n * h) / w.max(1)).clamp(1, h.max(1)));

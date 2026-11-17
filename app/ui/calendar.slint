@@ -315,13 +315,13 @@ export component CalendarPage inherits Rectangle {
     if root.look == 0: Text { x: 16px; y: 46px; width: 330px; height: 34px; text: root.title; font-size: 24px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
     if root.look == 0: Text { x: 16px; y: 80px; width: 330px; height: 20px; text: root.sub; font-size: 14px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
     Rectangle {
-        x: root.width - 16px - self.width; y: 10px; height: 32px; width: vn.preferred-width + 66px; border-radius: 16px;
+        x: root.width - 16px - self.width; y: 10px; height: 32px; width: 200px; border-radius: 16px;
         background: root.look == 1 ? #ffffff1f : Theme.dark ? #ffffff1f : #00000012;
         Icon { x: 12px; y: 0; width: 20px; height: parent.height; font-size: 18px; color: (root.look == 1 ? #ffffff : Theme.text).with-alpha(0.9);
             text: root.look == 1 ? "\u{F05D5}" : root.look == 2 ? "\u{F1A30}" : root.look == 3 ? "\u{F0E18}"
                 : root.view == 0 ? "\u{F0C46}" : root.view == 1 ? "\u{F1A30}" : root.view == 2 ? "\u{F1A34}" : root.view == 4 ? "\u{F0B68}" : "\u{F0E18}"; }
-        vn := Text { x: 36px; y: 0; width: self.preferred-width; height: parent.height; font-size: 14px; font-weight: 600; color: root.look == 1 ? #ffffff : Theme.text;
-            vertical-alignment: center;
+        vn := Text { x: 36px; y: 0; width: parent.width - 66px; height: parent.height; font-size: 14px; font-weight: 600; color: root.look == 1 ? #ffffff : Theme.text;
+            vertical-alignment: center; overflow: elide;
             text: root.look == 1 ? Words.line("ui.looks.calendar.1") : root.look == 2 ? Words.line("ui.looks.calendar.2") : root.look == 3 ? Words.line("ui.looks.calendar.3")
                 : root.view == 0 ? "Agenda" : root.view == 1 ? "Day" : root.view == 2 ? "Week" : root.view == 4 ? "3 days" : "Month"; }
         Icon { x: parent.width - 26px; y: 0; width: 18px; height: parent.height; text: "\u{F0140}"; font-size: 18px; color: root.look == 1 ? #ffffffb0 : Theme.muted; }

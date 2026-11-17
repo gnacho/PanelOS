@@ -142,6 +142,9 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "player_links": _player_links(entry),
         # the area of the panel's device ("" when it has none)
         "room": _room(entry),
+        # the speech recognition of the panel's assistant: what is said while a timer rings is checked with it for a
+        # stop word (never sent to the assistant)
+        "stt": _stt(entry),
         **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
 
@@ -157,6 +160,34 @@ def _room(entry: ConfigEntry) -> str:
         if area is not None:
             return area.name
     return ""
+
+
+def _stt(entry: ConfigEntry) -> dict[str, str]:
+    panel = getattr(entry, "runtime_data", None)
+    if panel is None:
+        return {}
+    hass = panel.hass
+    try:
+        from homeassistant.components.assist_pipeline import async_get_pipeline, async_get_pipelines
+    except ImportError:
+        return {}
+    # the pipeline the panel's satellite uses (its Assistant select), else the preferred one
+    pipeline_id = None
+    voice = panel._voice_entry()
+    if voice is not None:
+        for e in er.async_entries_for_config_entry(er.async_get(hass), voice.entry_id):
+            if e.domain == "select" and e.unique_id.endswith("-pipeline"):
+                state = hass.states.get(e.entity_id)
+                if state is not None:
+                    pipeline_id = next((p.id for p in async_get_pipelines(hass) if p.name == state.state), None)
+                break
+    try:
+        pipeline = async_get_pipeline(hass, pipeline_id)
+    except Exception:  # noqa: BLE001 - no pipelines (assist_pipeline not set up)
+        return {}
+    if not pipeline.stt_engine:
+        return {}
+    return {"engine": pipeline.stt_engine, "language": pipeline.stt_language or hass.config.language}
 
 
 def _player_links(entry: ConfigEntry) -> dict[str, str]:

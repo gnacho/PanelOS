@@ -434,9 +434,127 @@ pub enum Sound {
     Stream(Receiver<Vec<i16>>),
 }
 
-/// While the panel listens during a ringing (a spoken "stop"), the looped sound dips to 30 % for 2 s out of every
-/// 5, so the speech recognition hears the voice between the loud parts (the echo reference gets the dipped sound).
-pub static RING_LISTEN: AtomicBool = AtomicBool::new(false);
+/// Speech over a ringing timer: this many dB over what is left of the ring after the echo canceller...
+const RING_SPEECH_DB: f64 = 10.0;
+/// ...for this many 10 ms frames (net) starts a piece of speech...
+const RING_SPEECH_FRAMES: u32 = 6;
+/// ...which ends after this many frames under RING_SPEECH_END dB over the ring, at most RING_SPEECH_MAX frames
+/// long, with RING_PREROLL samples from before its start (the first sound of the word).
+const RING_SPEECH_END: f64 = 6.0;
+const RING_SPEECH_TAIL: u32 = 60;
+const RING_SPEECH_MAX: u32 = 300;
+const RING_PREROLL: usize = 8000;
+
+/// While a timer rings: cuts out what someone says over the ring (the processed microphone signal; the ring's
+/// leftover level is the 40th percentile of the last 2 s), for the speech recognition. The ring itself plays on
+/// unchanged.
+struct RingEar {
+    levels: std::collections::VecDeque<f64>,
+    floor: f64,
+    score: u32,
+    pre: std::collections::VecDeque<i16>,
+    // the piece being cut: samples, frames so far, frames since the last loud one
+    rec: Option<(Vec<i16>, u32, u32)>,
+    pieces: u32,
+    peak: f64,
+    reported: Instant,
+}
+
+impl RingEar {
+    fn new() -> Self {
+        Self {
+            levels: std::collections::VecDeque::new(),
+            floor: 0.0,
+            score: 0,
+            pre: std::collections::VecDeque::new(),
+            rec: None,
+            pieces: 0,
+            peak: f64::MIN,
+            reported: Instant::now(),
+        }
+    }
+
+    /// A finished piece of speech, when one ends in these samples. `room` is the quiet room's level (for the log).
+    fn push(&mut self, samples: &[i16], room: f64) -> Option<Vec<i16>> {
+        let mut done = None;
+        for f in samples.chunks(AEC_FRAME) {
+            let db = SpeechStart::level(f);
+            if let Some((buf, len, quiet)) = self.rec.as_mut() {
+                buf.extend_from_slice(f);
+                *len += 1;
+                *quiet = if db - self.floor > RING_SPEECH_END { 0 } else { *quiet + 1 };
+                if *quiet >= RING_SPEECH_TAIL || *len >= RING_SPEECH_MAX {
+                    done = self.rec.take().map(|(b, _, _)| b);
+                }
+                continue;
+            }
+            self.pre.extend(f.iter().copied());
+            while self.pre.len() > RING_PREROLL {
+                self.pre.pop_front();
+            }
+            self.levels.push_back(db);
+            if self.levels.len() > 200 {
+                self.levels.pop_front();
+            }
+            if self.levels.len() % 10 == 0 || self.levels.len() == 200 {
+                let mut sorted: Vec<f64> = self.levels.iter().copied().collect();
+                sorted.sort_by(|a, b| a.total_cmp(b));
+                self.floor = sorted[sorted.len() * 2 / 5];
+            }
+            if self.levels.len() < 50 {
+                continue;
+            }
+            let over = db - self.floor;
+            self.peak = self.peak.max(over);
+            if over > RING_SPEECH_DB {
+                self.score += 1;
+            } else {
+                self.score = self.score.saturating_sub(1);
+            }
+            if self.score >= RING_SPEECH_FRAMES {
+                self.score = 0;
+                self.pieces += 1;
+                self.rec = Some((self.pre.drain(..).collect(), 0, 0));
+                eprintln!("nspanel-app: voice: speech over the ring ({over:+.1} dB over its echo, {:.0} dB)", self.floor);
+            }
+        }
+        if self.reported.elapsed() > Duration::from_secs(5) {
+            self.reported = Instant::now();
+            eprintln!(
+                "nspanel-app: voice: ring echo {:.0} dB (room {room:.0} dB), loudest {:+.1} dB over it, {} pieces of speech",
+                self.floor, self.peak, self.pieces
+            );
+            self.peak = f64::MIN;
+        }
+        done
+    }
+}
+
+/// A piece of speech heard while a timer rings: to Home Assistant's speech recognition (one at a time), the text
+/// back to the voice loop.
+fn hear_over_ring(samples: Vec<i16>, tx: &mpsc::Sender<String>) {
+    static BUSY: AtomicBool = AtomicBool::new(false);
+    if BUSY.swap(true, Ordering::SeqCst) {
+        eprintln!("nspanel-app: voice: speech over the ring skipped (the last piece is still being recognized)");
+        return;
+    }
+    let tx = tx.clone();
+    std::thread::spawn(move || {
+        let t0 = Instant::now();
+        match crate::stt::recognize(&samples) {
+            Ok(text) => {
+                eprintln!(
+                    "nspanel-app: voice: heard over the ring: '{text}' ({:.1} s of speech, {} ms)",
+                    samples.len() as f32 / 16000.0,
+                    t0.elapsed().as_millis()
+                );
+                let _ = tx.send(text);
+            }
+            Err(e) => eprintln!("nspanel-app: voice: speech over the ring not recognized: {e}"),
+        }
+        BUSY.store(false, Ordering::SeqCst);
+    });
+}
 
 /// Longest sound the panel plays from a file (an answer or announcement).
 const MAX_AUDIO_SECS: usize = 180;
@@ -661,9 +779,6 @@ impl Player {
                 }
                 let stereo: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
                 let mut stopped = false;
-                // the dip of a looped sound while the panel listens (gain moves 10 % per 10 ms: no clicks)
-                let mut played: u64 = 0;
-                let mut gain: f32 = 1.0;
                 // 10 ms at a time; each written piece also goes to the echo
                 // reference (48 kHz → 16 kHz, mean of three samples). A looped
                 // sound starts over until a stop.
@@ -683,17 +798,12 @@ impl Player {
                         break;
                     }
                     let end = (offset + 960).min(stereo.len());
-                    let target = if looped && RING_LISTEN.load(Ordering::Relaxed) && (played / 48000) % 5 >= 3 { 0.3 } else { 1.0 };
-                    gain = if gain < target { (gain + 0.1).min(target) } else { (gain - 0.1).max(target) };
-                    let dipped: Option<Vec<i16>> = (gain < 0.999).then(|| stereo[offset..end].iter().map(|v| (*v as f32 * gain) as i16).collect());
-                    match io.writei(dipped.as_deref().unwrap_or(&stereo[offset..end])) {
+                    match io.writei(&stereo[offset..end]) {
                         Ok(frames) => {
                             let first = offset / 2;
-                            played += frames as u64;
                             let mut q = echo2.lock().unwrap();
                             for tri in mono[first..first + frames].chunks(3) {
-                                let v = tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32;
-                                q.push_back((v as f32 * gain) as i16);
+                                q.push_back((tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32) as i16);
                             }
                             while q.len() > 16000 {
                                 q.pop_front();
@@ -844,6 +954,12 @@ pub fn spawn(
         engine.set_active(&control.active_wake_words.lock().unwrap(), false);
         let mut stop_word = false;
         let mut last_speaking: Option<Instant> = None;
+        // A timer rings: the panel listens for "Stop" (and the wake words) itself, and holds the ring while
+        // someone speaks.
+        let mut ring_listen = false;
+        let mut ring_ear = RingEar::new();
+        // texts of speech heard over a ring (from the speech recognition threads)
+        let (ring_tx, ring_rx) = mpsc::channel::<String>();
         eprintln!(
             "nspanel-app: wake words loaded: {:?}, active {:?}",
             engine.words.iter().map(|w| &w.phrase).collect::<Vec<_>>(),
@@ -1007,6 +1123,7 @@ pub fn spawn(
                                         // (speech recognition often returns only a
                                         // fragment of a short word); not sent on to the assistant.
                                         eprintln!("nspanel-app: voice: '{text}' while the timer rings -> stop");
+                                        control.ringing.store(false, Ordering::SeqCst);
                                         let _ = to_api.send(ToApi::Stop);
                                         player.stop();
                                         ui(VoiceUi::Stopped);
@@ -1189,6 +1306,56 @@ pub fn spawn(
                 state != State::Idle || expecting_tts.is_some() || fetching.load(Ordering::SeqCst),
                 Ordering::Relaxed,
             );
+            // A ringing timer or alarm: "Stop" or a wake word heard by the panel itself stops it at once (in every
+            // state, also while a ringing run streams), and the ring holds its sound while someone speaks.
+            if control.ringing.load(Ordering::SeqCst) && !muted && !aec.ptr.is_null() {
+                if !ring_listen {
+                    ring_listen = true;
+                    ring_ear = RingEar::new();
+                    eprintln!("nspanel-app: voice: listening while the timer rings");
+                    stop_word = true;
+                    engine.set_active(&control.active_wake_words.lock().unwrap(), true);
+                    engine.reset();
+                }
+                if let Some(word) = engine.process(chunk).cloned() {
+                    eprintln!("nspanel-app: voice: '{}' while the timer rings -> stop", word.phrase);
+                    control.ringing.store(false, Ordering::SeqCst);
+                    if state != State::Idle {
+                        let _ = to_api.send(ToApi::Stop);
+                        state = State::Idle;
+                    }
+                    ring_run = false;
+                    follow_up_pending = false;
+                    player.stop();
+                    engine.reset();
+                    ui(VoiceUi::Stopped);
+                }
+                if let Some(piece) = ring_ear.push(chunk, detector.floor) {
+                    hear_over_ring(piece, &ring_tx);
+                }
+                // Development: the follow-up test file is also speech over a ringing timer.
+                if let Ok(bytes) = std::fs::read("/tmp/nspanel-voice-followup.wav") {
+                    let _ = std::fs::remove_file("/tmp/nspanel-voice-followup.wav");
+                    if let Some((16000, 1, data)) = parse_wav(&bytes) {
+                        eprintln!("nspanel-app: voice test (over the ring) with {} bytes", data.len());
+                        hear_over_ring(data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect(), &ring_tx);
+                    }
+                }
+            } else if ring_listen {
+                ring_listen = false;
+                engine.reset();
+            }
+            // what the speech recognition heard over the ring: a stop word stops it; nothing goes to the assistant
+            while let Ok(text) = ring_rx.try_recv() {
+                if crate::stt::is_stop(&text) && control.ringing.load(Ordering::SeqCst) {
+                    eprintln!("nspanel-app: voice: '{text}' while the timer rings -> stop");
+                    control.ringing.store(false, Ordering::SeqCst);
+                    player.stop();
+                    ui(VoiceUi::Stopped);
+                } else if !text.is_empty() {
+                    eprintln!("nspanel-app: voice: '{text}' is not a stop word");
+                }
+            }
             match state {
                 State::Idle => {
                     let speaking =
@@ -1215,28 +1382,16 @@ pub fn spawn(
                     if speaking {
                         last_speaking = Some(Instant::now());
                     }
-                    let want_stop = !aec.ptr.is_null() && last_speaking.is_some_and(|t| t.elapsed() < Duration::from_secs(2));
+                    let want_stop = !aec.ptr.is_null()
+                        && (ring_listen || last_speaking.is_some_and(|t| t.elapsed() < Duration::from_secs(2)));
                     if want_stop != stop_word {
                         stop_word = want_stop;
                         engine.set_active(&control.active_wake_words.lock().unwrap(), stop_word);
                     }
-                    RING_LISTEN.store(control.ringing.load(Ordering::SeqCst) && !muted && !aec.ptr.is_null(), Ordering::Relaxed);
-                    if control.ringing.load(Ordering::SeqCst) && !muted && !ring_run && !aec.ptr.is_null() {
-                        // Ringing timer: listen without a wake word, run after run.
-                        ring_run = true;
+                    if control.ringing.load(Ordering::SeqCst) && !muted && !aec.ptr.is_null() {
+                        // Ringing timer: the ear above listens (no run, nothing for the assistant).
                         follow_up_pending = false;
                         follow_up_run = false;
-                        eprintln!("nspanel-app: voice: listening while the timer rings");
-                        // Development: the follow-up test file is also the speech of a ringing run.
-                        if let Ok(bytes) = std::fs::read("/tmp/nspanel-voice-followup.wav") {
-                            let _ = std::fs::remove_file("/tmp/nspanel-voice-followup.wav");
-                            if let Some((16000, 1, data)) = parse_wav(&bytes) {
-                                test_audio = Some((data.chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect(), 0));
-                            }
-                        }
-                        let _ = to_api.send(ToApi::Start { conversation_id: String::new(), wake_word_phrase: String::new() });
-                        state = State::Starting;
-                        since = Instant::now();
                     } else if follow_up_pending && !speaking {
                         // Follow-up: listen again without a wake word.
                         follow_up_pending = false;

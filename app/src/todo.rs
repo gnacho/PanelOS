@@ -170,6 +170,8 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     // the list takes due dates (Home Assistant's "set due date" feature, 16, or date and time, 32)
     let features = s.states.get(&entities[sel]).and_then(|e| e.attrs.get("supported_features")).and_then(Value::as_u64).unwrap_or(0);
     ui.set_todo_can_due(features & (16 | 32) != 0);
+    // descriptions on items (SET_DESCRIPTION_ON_ITEM)
+    ui.set_todo_can_note(features & 64 != 0);
     ensure_started(ui, s);
     let lists: Vec<TodoList> = entities
         .iter()
@@ -283,18 +285,38 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
         // adding an item: the field with the keyboard (a capital first), due date chips where the list takes one
         "todo.add" => {
             ui.set_todo_draft(SharedString::new());
+            ui.set_todo_note_draft(SharedString::new());
+            ui.set_todo_note_on(false);
             ui.set_todo_due_pick(-1);
             ui.set_todo_kb_layer(1);
             ui.set_todo_adding(true);
         }
         "todo.add-cancel" => ui.set_todo_adding(false),
-        // the list name: the next list (round)
-        "todo.next-list" => {
-            let count = slint::Model::row_count(&ui.get_todo_lists()).max(1);
-            ui.set_todo_sel(((ui.get_todo_sel().max(0) as usize + 1) % count) as i32);
-            ui.set_todo_scroll(0.0);
-            WANTED.lock().unwrap().1 = true;
+        // the list chip (and the list name): the sheet with the lists and the look
+        "todo.picker" => ui.set_todo_picker(true),
+        "todo.picker-close" => ui.set_todo_picker(false),
+        "todo.pick" => {
+            ui.set_todo_picker(false);
+            if n < slint::Model::row_count(&ui.get_todo_lists()) && n as i32 != ui.get_todo_sel() {
+                ui.set_todo_sel(n as i32);
+                ui.set_todo_scroll(0.0);
+                WANTED.lock().unwrap().1 = true;
+                with_state(|s| refresh(ui, s));
+            }
+        }
+        "todo.look" => {
+            ui.set_todo_picker(false);
+            crate::page_set(ui, "todo", Some(n as i32), Value::Null);
             with_state(|s| refresh(ui, s));
+        }
+        // which field the keyboard writes: 0 the item, 1 its description
+        "todo.field" => {
+            let note = n == 1 && ui.get_todo_can_note();
+            ui.set_todo_note_on(note);
+            let empty = if note { ui.get_todo_note_draft().is_empty() } else { ui.get_todo_draft().is_empty() };
+            if empty {
+                ui.set_todo_kb_layer(1);
+            }
         }
         "todo.due" => {
             let pick = ui.get_todo_due_pick();
@@ -313,11 +335,13 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             }
         }
         "todo.key" => {
-            let mut draft = ui.get_todo_draft().to_string();
+            let note_on = ui.get_todo_note_on();
+            let mut draft = if note_on { ui.get_todo_note_draft().to_string() } else { ui.get_todo_draft().to_string() };
             let layer = ui.get_todo_kb_layer();
             match value {
                 "enter" => {
-                    let text = draft.trim().to_string();
+                    let text = if note_on { ui.get_todo_draft().trim().to_string() } else { draft.trim().to_string() };
+                    let note = if note_on { draft.trim().to_string() } else { ui.get_todo_note_draft().trim().to_string() };
                     if !text.is_empty() {
                         let list = WANTED.lock().unwrap().0.clone();
                         let days = match ui.get_todo_due_pick() {
@@ -330,10 +354,13 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                         if let Some(d) = days {
                             data["due_date"] = json!(local_format(now() + d as i64 * 86_400, "%Y-%m-%d"));
                         }
+                        if !note.is_empty() && ui.get_todo_can_note() {
+                            data["description"] = json!(note);
+                        }
                         crate::call("todo", "add_item", &list, data);
                         // shown at once; the list is read again right after
                         ITEMS.with(|i| {
-                            i.borrow_mut().push(Item { uid: String::new(), summary: text, done: false, due: String::new(), note: String::new() })
+                            i.borrow_mut().push(Item { uid: String::new(), summary: text, done: false, due: String::new(), note })
                         });
                         WANTED.lock().unwrap().1 = true;
                     }
@@ -341,10 +368,17 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                     with_state(|s| refresh(ui, s));
                     return;
                 }
-                "back" => {
-                    draft.pop();
+                "back" | "clear" => {
+                    if value == "back" {
+                        draft.pop();
+                    } else {
+                        draft.clear();
+                    }
+                    // back at the start of the line: a capital again
+                    if draft.is_empty() && layer == 0 {
+                        ui.set_todo_kb_layer(1);
+                    }
                 }
-                "clear" => draft.clear(),
                 "shift" => ui.set_todo_kb_layer(match layer {
                     0 => 1,
                     1 => 0,
@@ -352,7 +386,7 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                     _ => 2,
                 }),
                 "symbols" => ui.set_todo_kb_layer(if layer >= 2 { 0 } else { 2 }),
-                "layout" => {}
+                "layout" => ui.set_kb_layout(1 - ui.get_kb_layout().clamp(0, 1)),
                 k => {
                     if draft.chars().count() < 120 {
                         draft.push_str(k);
@@ -363,7 +397,11 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                     }
                 }
             }
-            ui.set_todo_draft(SharedString::from(draft));
+            if note_on {
+                ui.set_todo_note_draft(SharedString::from(draft));
+            } else {
+                ui.set_todo_draft(SharedString::from(draft));
+            }
         }
         _ => eprintln!("nspanel-app: act {what} {value} (not handled)"),
     }

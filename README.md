@@ -19,7 +19,7 @@ PanelOS draws its own interface on the panel's GPU: no browser, no web page, eve
 **A custom page that looks outside.** Your clock, the weather and your widgets sit on a living picture of the sky as it is right now: rain runs down the glass, fog drifts, clouds travel with the wind, lightning flashes, and the sun and the moon stand where they really are. Pick a photo of nature, the countryside or a city, a drawn scene, a quiet line drawing, a synthwave night drive with neon letters and cars on the road, or simply a plain ground in the panel's own colour. Want more than one? Add another custom page with its own background and its own widgets.
 
 **Pages for everything you use, each in looks with character.**
-- **Music**: a clean cover, the cover full screen, a turntable whose arm follows the track, a cassette and half a cassette; pick any player of the house, move the music to another one or play in several rooms at once.
+- **Music**: a clean cover, the cover full screen, a turntable whose arm follows the track and whose record takes the cover's colour, a cassette and half a cassette; pick any player of the house, move the music to another one or play in several rooms at once.
 - **Timers, alarms and a stopwatch**: a plain ring, a kitchen timer, an hourglass, a flip clock or a synthwave sunset; quick starts, your own lengths, alarms for chosen days.
 - **Thermostat**: a dial, a remote control, a wall thermostat with slide switches, or a neon one; room by room.
 - **Cameras**: one big or all of them, and when the doorbell rings the panel wakes with the visitor on screen, and with a lock, hold to open.

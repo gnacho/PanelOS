@@ -173,7 +173,7 @@ export component CameraPage inherits Rectangle {
         property <bool> on-pic: root.view == 0 && root.c.state == 0 && !root.light-veil;
         property <color> ink: self.on-pic || Theme.dark ? #ffffff : #2a2a2e;
         x: root.width - 16px - self.width; y: 10px; height: 32px;
-        width: min(240px, cn.preferred-width + (root.view == 0 && root.n > 1 ? 66px : 48px));
+        width: 200px;
         border-radius: 16px;
         background: self.on-pic ? #ffffff2b : Theme.dark ? #ffffff1f : #00000012;
         border-width: self.on-pic ? 1px : 0px; border-color: #ffffff3d;

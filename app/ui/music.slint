@@ -155,32 +155,46 @@ export component MusicPage inherits Rectangle {
     // turning parts: time since a base set every minute (the speeds make whole turns per minute, so the
     // new base is not seen; a small number stays exact however long the panel runs)
     // The platter's angle in degrees: it spins up to 33 1/3 rpm in 1.2 s (ease-in), coasts down in 2 s
-    // (ease-out) and stays where it stopped (no snap back). Counted from the last start or stop; while it
-    // plays the count moves on by whole minutes (33 whole turns), so the number stays small and exact.
+    // (ease-out) and stays where it stopped (no snap back). A start while it still coasts (or a stop while it
+    // spins up) goes on from the speed it has: each phase starts at the point of its curve with that speed
+    // (spin-x0), so the speed never jumps. Counted from the last start or stop; while it plays the count moves
+    // on by whole minutes (33 whole turns), so the number stays small and exact.
     property <float> spin-a0;
     property <duration> spin-t0;
+    property <float> spin-x0;
     property <bool> spin-on;
     property <bool> coasting;
-    init => { root.spin-on = root.playing; }
+    init => { root.spin-on = root.playing; root.spin-x0 = root.playing ? 1.2 : 2; }
+    pure function up-f(x: float) -> float { return x < 1.2 ? x * x * x / 4.32 : 0.4 + x - 1.2; }
+    pure function down-f(x: float) -> float { return x < 2 ? (1 - (1 - x / 2) * (1 - x / 2) * (1 - x / 2)) * 2 / 3 : 2 / 3; }
     pure function spin-at(dt: float) -> float {
         root.spin-on
-            ? root.spin-a0 + 198 * (dt < 1.2 ? dt * dt * dt / 4.32 : 0.4 + dt - 1.2)
-            : root.spin-a0 + 198 * (dt < 2 ? (1 - (1 - dt / 2) * (1 - dt / 2) * (1 - dt / 2)) * 2 / 3 : 2 / 3)
+            ? root.spin-a0 + 198 * (root.up-f(root.spin-x0 + dt) - root.up-f(root.spin-x0))
+            : root.spin-a0 + 198 * (root.down-f(root.spin-x0 + dt) - root.down-f(root.spin-x0))
+    }
+    // the speed now, 0..1 of 33 1/3 rpm
+    function spin-speed() -> float {
+        let x = root.spin-x0 + (animation-tick() - root.spin-t0) / 1s;
+        return root.spin-on ? (x < 1.2 ? (x / 1.2) * (x / 1.2) : 1) : root.coasting ? (x < 2 ? (1 - x / 2) * (1 - x / 2) : 0) : 0;
     }
     // the clock is read only while the platter turns
-    property <float> spin-deg: root.spin-on || root.coasting ? root.spin-at((animation-tick() - root.spin-t0) / 1s) : root.spin-a0 + 132;
+    property <float> spin-deg: root.spin-on || root.coasting ? root.spin-at((animation-tick() - root.spin-t0) / 1s)
+        : root.spin-a0 + 198 * (2 / 3 - root.down-f(root.spin-x0));
     changed playing => {
+        let u = root.spin-speed();
         root.spin-a0 = Math.mod(root.spin-deg, 360);
         root.spin-t0 = animation-tick();
-        root.coasting = !root.playing;
+        root.spin-x0 = root.playing ? 1.2 * Math.sqrt(u) : 2 * (1 - Math.sqrt(u));
+        root.coasting = !root.playing && u > 0;
         root.spin-on = root.playing;
     }
-    Timer { interval: 2100ms; running: root.coasting; triggered => { root.coasting = false; } }
+    Timer { interval: Math.max(0.1, 2.1 - root.spin-x0) * 1s; running: root.coasting; triggered => { root.coasting = false; } }
     // while it plays, the count starts again every minute from the angle it has (anchored 1.2 s back, so
     // the formula stays in its steady part and nothing moves)
     Timer { interval: 60s; running: root.spin-on; triggered => {
-        if (animation-tick() - root.spin-t0) > 1.5s {
+        if root.spin-x0 + (animation-tick() - root.spin-t0) / 1s > 1.5 {
             root.spin-a0 = Math.mod(root.spin-deg - 79.2, 360);
+            root.spin-x0 = 0;
             root.spin-t0 = animation-tick() - 1200ms;
         }
     } }
@@ -243,6 +257,7 @@ export component MusicPage inherits Rectangle {
     in property <[image]> woods;           // swatches of the wood choices      // cassette: tape left on the supply reel set by the app (rewind); -1 = from the position
     property <bool> light: root.style == 1 && !Theme.dark;
     property <color> acc: root.light ? root.accent.darker(0.35) : root.accent;
+    animate acc { duration: 400ms; easing: ease-in-out; }
     property <color> ink: root.light ? #18181b : #ffffff;
     property <color> soft: root.ink.with-alpha(root.light ? 0.7 : 0.62);
     property <bool> live: root.dur <= 0;
@@ -459,14 +474,14 @@ export component MusicPage inherits Rectangle {
         Path { x: -(1.4px) / 2; y: -(1.4px) / 2; width: 480px + 1.4px; height: 480px + 1.4px; viewbox-width: 480; viewbox-height: 480; stroke: #ffffffb0; stroke-width: 1.4px;
             MoveTo { x: tt.px - 1.2 * tt.uy; y: tt.py + 1.2 * tt.ux; }
             LineTo { x: tt.sx - 24 * tt.hx - 1.2 * tt.uy; y: tt.sy - 24 * tt.hy + 1.2 * tt.ux; } }
-        // headshell (dark) with the cartridge (accent) and a finger lift
+        // headshell (dark) with the cartridge (the brand colour, the same for every record) and a finger lift
         Path { x: -(1px) / 2; y: -(1px) / 2; width: 480px + 1px; height: 480px + 1px; viewbox-width: 480; viewbox-height: 480; fill: #26272b; stroke: #6a6e77; stroke-width: 1px;
             MoveTo { x: tt.sx + 6 * tt.hx - 8 * tt.hy; y: tt.sy + 6 * tt.hy + 8 * tt.hx; }
             LineTo { x: tt.sx + 6 * tt.hx + 8 * tt.hy; y: tt.sy + 6 * tt.hy - 8 * tt.hx; }
             LineTo { x: tt.sx - 26 * tt.hx + 7 * tt.hy; y: tt.sy - 26 * tt.hy - 7 * tt.hx; }
             LineTo { x: tt.sx - 26 * tt.hx - 7 * tt.hy; y: tt.sy - 26 * tt.hy + 7 * tt.hx; }
             Close {} }
-        Path { width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: root.acc;
+        Path { width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: Theme.accent;
             MoveTo { x: tt.sx + 3 * tt.hx - 5 * tt.hy; y: tt.sy + 3 * tt.hy + 5 * tt.hx; }
             LineTo { x: tt.sx + 3 * tt.hx + 5 * tt.hy; y: tt.sy + 3 * tt.hy - 5 * tt.hx; }
             LineTo { x: tt.sx - 13 * tt.hx + 5 * tt.hy; y: tt.sy - 13 * tt.hy - 5 * tt.hx; }
@@ -729,7 +744,7 @@ export component MusicPage inherits Rectangle {
     // speaker chip (top right): tap = choose which player this page shows
     Rectangle {
         x: root.style == 4 ? 336px + (root.width - 336px - self.width) / 2 : root.width - 16px - self.width; y: 10px; height: 32px;
-        width: min(root.style == 4 ? 128px : 200px, sp.preferred-width + 46px);
+        width: root.style == 4 ? 128px : 200px;
         border-radius: 16px; background: root.light ? #0000001a : #ffffff1f;
         Icon { x: 12px; y: 0; width: 20px; height: parent.height; text: "\u{F04C3}"; font-size: 18px; color: root.ink.with-alpha(0.9); }
         sp := Text { x: 36px; y: 0; width: parent.width - 46px; height: parent.height; text: root.player; font-size: 14px; font-weight: 600; color: root.ink; vertical-alignment: center; overflow: elide; }

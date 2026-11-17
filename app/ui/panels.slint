@@ -21,6 +21,7 @@ export struct TimerInfo {
 // One running timer; the chip grows with its text.
 component TimerChip inherits Rectangle {
     in property <TimerInfo> timer;
+    in property <bool> compact;          // the time only (beside a page's own chip)
     // on a coloured or dark page background (1) the chip keeps the dark palette, whatever the theme
     in property <float> on-k;
     property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
@@ -45,8 +46,10 @@ component TimerChip inherits Rectangle {
             color: root.timer.urgent ? root.alert : root.warn;
             animate color { duration: 300ms; easing: ease-in-out; }
         }
-        if root.timer.label != "": Text {
+        if root.timer.label != "" && !root.compact: Text {
             text: root.timer.label;
+            max-width: 72px;
+            overflow: elide;
             font-size: Theme.font-caption;
             color: (#A3A19C).mix(Theme.muted, root.on-k);
             vertical-alignment: center;
@@ -69,10 +72,11 @@ component TimerChip inherits Rectangle {
 export component TimerChips inherits HorizontalLayout {
     in property <[TimerInfo]> timers;
     in property <int> most: 2;           // chips shown before "+N"
+    in property <bool> compact;          // times only
     in property <float> on-k;
     spacing: 6px;
-    if root.timers.length > 0: TimerChip { timer: root.timers[0]; on-k: root.on-k; }
-    if root.timers.length > 1 && root.most > 1: TimerChip { timer: root.timers[1]; on-k: root.on-k; }
+    if root.timers.length > 0: TimerChip { timer: root.timers[0]; compact: root.compact; on-k: root.on-k; }
+    if root.timers.length > 1 && root.most > 1: TimerChip { timer: root.timers[1]; compact: root.compact; on-k: root.on-k; }
     if root.timers.length > root.most: Rectangle {
         height: 26px;
         border-radius: 13px;
@@ -93,7 +97,7 @@ export component TimerChips inherits HorizontalLayout {
 
 // Thin status line at the top of a panel. On the screensaver only the
 // timers and problems show.
-export component StatusBar inherits HorizontalLayout {
+export component StatusBar inherits Rectangle {
     in property <string> hint;           // wake word hint
     in property <bool> mic-muted;
     in property <bool> speaker-muted;    // the panel's volume at 0
@@ -105,9 +109,8 @@ export component StatusBar inherits HorizontalLayout {
     in property <bool> quiet;            // screensaver: no hint, no microphone
     in property <bool> on-color;         // drawn over a coloured panel background
     in property <float> on-k: root.on-color ? 1 : 0;   // the same, mixed while a swipe crosses pages
-    // the page has its own chip at the top right (speaker, room, camera, view): everything of the status line
-    // that sits on the right moves to the left (the bell, the problem mark, the timers as one chip and "+N"),
-    // and the texts give way, so nothing lies on or under the page's chip
+    // the page has its own chip at the top right (speaker, room, camera, view, list): the problem mark and the
+    // timers (as one chip and "+N") move to the left half, and the texts give way, so nothing lies on or under it
     in property <bool> left-chips;
     in property <float> left-k: root.left-chips ? 1 : 0;
     property <color> soft: (#ffffffb3).mix(Theme.faint, root.on-k);
@@ -115,77 +118,64 @@ export component StatusBar inherits HorizontalLayout {
     // the warning and error colours keep the dark palette on a coloured page background
     property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
     property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
+    // the bell has its own place in the middle of the line on every page, the state marks (listening,
+    // microphone off, speaker off, do not disturb, connection problem) line up left of it; the sides never reach
+    // them, and a page's own chip at the top right starts right of the bell
+    property <length> ctr-right: root.width / 2 + 17px;
     height: 32px;
-    spacing: 8px;
-    if root.left-k > 0.001 && root.timers.length > 0: VerticalLayout {
-        alignment: center;
-        opacity: root.left-k;
-        TimerChips { timers: root.timers; most: 1; on-k: root.on-k; }
-    }
-    if root.left-k > 0.001 && root.problem: VerticalLayout {
-        alignment: center;
-        opacity: root.left-k;
-        Icon { text: "\u{F092B}"; font-size: 18px; color: root.warn; }
-    }
-    if root.left-k > 0.001 && root.bell-on: Rectangle {
-        width: 34px;
-        opacity: root.left-k;
-        Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
-        Rectangle {
-            x: 18px; y: (parent.height - 26px) / 2; width: max(15px, ntl.preferred-width + 8px); height: 15px; border-radius: 7.5px;
-            background: Theme.accent;
-            ntl := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+    HorizontalLayout {
+        x: 0; y: 0; width: max(0px, ctr.x - 8px); height: root.height;
+        spacing: 8px;
+        if root.left-k > 0.001 && root.timers.length > 0: VerticalLayout {
+            alignment: center;
+            opacity: root.left-k;
+            TimerChips { timers: root.timers; most: 1; compact: true; on-k: root.on-k; }
         }
-        TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; enabled: root.left-k > 0.5; clicked => { Act.act("notes.open", ""); } }
-    }
-    if root.listening: VerticalLayout {
-        alignment: center;
-        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #2fd27a; }
-    }
-    if root.mic-muted: Icon {
-        text: "\u{F036D}";
-        font-size: 17px;
-        color: root.alert;
-    }
-    if root.speaker-muted: Icon {
-        text: "\u{F075F}";
-        font-size: 17px;
-        color: #f5a524;
-    }
-    if root.dnd: Icon {
-        text: "\u{F009B}";
-        font-size: 17px;
-        color: root.soft;
-    }
-    Text {
-        horizontal-stretch: 1;
-        text: root.mic-muted ? (root.left-k > 0.999 ? "" : "Microphone off") : root.quiet || root.left-k > 0.999 ? "" : root.hint;
-        opacity: 1 - root.left-k;
-        font-size: Theme.font-caption;
-        color: root.mic-muted ? root.alert : root.soft;
-        vertical-alignment: center;
-        overflow: elide;
-    }
-    if root.left-k < 0.999 && root.problem: VerticalLayout {
-        alignment: center;
-        opacity: 1 - root.left-k;
-        Icon { text: "\u{F092B}"; font-size: 18px; color: root.warn; }
-    }
-    if root.left-k < 0.999 && root.bell-on: bell := Rectangle {
-        width: 34px;
-        opacity: 1 - root.left-k;
-        Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
-        Rectangle {
-            x: 18px; y: (parent.height - 26px) / 2; width: max(15px, nt.preferred-width + 8px); height: 15px; border-radius: 7.5px;
-            background: Theme.accent;
-            nt := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+        // the wake word hint, or with the microphone muted its own line (the app picks it)
+        Text {
+            horizontal-stretch: 1;
+            text: (root.quiet && !root.mic-muted) || root.left-k > 0.999 ? "" : root.hint;
+            opacity: 1 - root.left-k;
+            font-size: Theme.font-caption;
+            color: root.mic-muted ? root.alert : root.soft;
+            vertical-alignment: center;
+            overflow: elide;
         }
-        TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; enabled: root.left-k <= 0.5; clicked => { Act.act("notes.open", ""); } }
     }
-    if root.left-k < 0.999: VerticalLayout {
-        alignment: center;
+    ctr := HorizontalLayout {
+        x: root.ctr-right - self.preferred-width; y: 0; width: self.preferred-width; height: root.height;
+        spacing: 6px;
+        if root.listening: VerticalLayout {
+            alignment: center;
+            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #2fd27a; }
+        }
+        if root.mic-muted: Icon { text: "\u{F036D}"; font-size: 17px; color: root.alert; }
+        if root.speaker-muted: Icon { text: "\u{F075F}"; font-size: 17px; color: root.warn; }
+        if root.dnd: Icon { text: "\u{F009B}"; font-size: 17px; color: root.soft; }
+        if root.problem: VerticalLayout {
+            alignment: center;
+            Icon { text: "\u{F092B}"; font-size: 18px; color: root.warn; }
+        }
+        if root.bell-on: Rectangle {
+            width: 34px;
+            Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
+            Rectangle {
+                x: 18px; y: (parent.height - 26px) / 2; width: max(15px, nt.preferred-width + 8px); height: 15px; border-radius: 7.5px;
+                background: Theme.accent;
+                nt := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+            }
+            TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; clicked => { Act.act("notes.open", ""); } }
+        }
+    }
+    HorizontalLayout {
+        x: root.ctr-right + 8px; y: 0; width: root.width - root.ctr-right - 8px; height: root.height;
+        spacing: 8px;
+        alignment: end;
         opacity: 1 - root.left-k;
-        TimerChips { timers: root.timers; on-k: root.on-k; }
+        if root.left-k < 0.999: VerticalLayout {
+            alignment: center;
+            TimerChips { timers: root.timers; most: 1; on-k: root.on-k; }
+        }
     }
 }
 

@@ -40,6 +40,7 @@ mod roam;
 mod settings;
 mod shade;
 mod sounds;
+mod stt;
 mod synth;
 mod texts;
 mod thermo;
@@ -180,12 +181,16 @@ pub struct UiState {
     wake_phrase: String,
     /// The status bar's wake hint: for which wake phrase, and its text.
     wake_hint: (String, String),
+    /// The status line's line while the microphone is muted (picked at each mute).
+    muted_hint: String,
     /// Quick controls: the title picked for this run.
     art_url: Option<String>,
     art_tx: Option<Sender<Option<String>>>,
     art: Option<slint::Image>,
     /// The cover blurred into soft colour (the plain look, the cover behind the cassette).
     art_bg: Option<slint::Image>,
+    /// The cover's own colour (the music page's accent, the record): None for a grey cover or none.
+    art_accent: Option<slint::Color>,
     /// When a layer opened by a show request closes by itself.
     show_until: Option<Instant>,
     /// Split-flap clock: the digits shown before the last change, and when it changed.
@@ -577,6 +582,7 @@ fn update_clock(ui: &AppWindow) {
         // Ringing timer or alarm: its sound loops until stopped, at most a minute.
         match s.ringing {
             Some(started) if started.elapsed() > Duration::from_secs(60) => {
+                eprintln!("nspanel-app: ringing stopped (a minute passed)");
                 s.ringing = None;
                 s.ringing_flag.store(false, Ordering::SeqCst);
                 ui.set_timers_ringing(false);
@@ -698,9 +704,17 @@ fn refresh_pages(ui: &AppWindow) {
         }
         ui.set_show_people(s.panel_config.as_ref().and_then(|c| c.get("show_people")).and_then(Value::as_bool).unwrap_or(true));
         // The wake hint: one of its lines, kept until the wake word changes.
-        let hint = if s.settings.mic_muted || s.wake_phrase.is_empty() {
+        // with the microphone muted one of its own lines instead, a new one each time it gets muted
+        let hint = if s.settings.mic_muted {
+            if s.muted_hint.is_empty() {
+                s.muted_hint = texts::fresh("voice.muted");
+            }
+            s.muted_hint.clone()
+        } else if s.wake_phrase.is_empty() {
+            s.muted_hint.clear();
             String::new()
         } else {
+            s.muted_hint.clear();
             if s.wake_hint.0 != s.wake_phrase {
                 s.wake_hint = (s.wake_phrase.clone(), texts::fresh("voice.wake").replace("{wake}", &s.wake_phrase));
             }
@@ -728,7 +742,8 @@ fn refresh_pages(ui: &AppWindow) {
         if let Some(bg) = &s.art_bg {
             ui.set_music_art_bg(bg.clone());
         }
-        ui.set_music_accent(a);
+        // the music page takes the cover's colour (the record, the accents), else the panel's
+        ui.set_music_accent(if music.has_art { s.art_accent.unwrap_or(a) } else { a });
         if let Some(p) = s.states.get(&player) {
             ui.set_music_album(p.attrs.get("media_album_name").and_then(Value::as_str).unwrap_or("").into());
             ui.set_music_volume(p.attrs.get("volume_level").and_then(Value::as_f64).unwrap_or(0.0) as f32);
@@ -883,6 +898,11 @@ fn rewarm(ui: &AppWindow) {
 fn apply_panel_config(ui: &AppWindow) {
     // copies of the uploaded sounds the settings use: fetched when missing, dropped when unused
     with_state(|s| sounds::keep(&used_sounds(s)));
+    // the panel's speech recognition (stop words while a timer rings)
+    with_state(|s| {
+        let v = s.panel_config.as_ref().and_then(|c| c.get("stt")).cloned().unwrap_or(Value::Null);
+        stt::set_engine(v["engine"].as_str().unwrap_or(""), v["language"].as_str().unwrap_or(""));
+    });
     with_state(|s| {
         if s.screensaver {
             saver_clock(ui, s);
@@ -908,7 +928,11 @@ fn apply_panel_config(ui: &AppWindow) {
         // before the session knew them): a new session
         {
             let subscribed = s.shared.subscribed.lock().unwrap();
-            if !subscribed.is_empty() && extra.iter().any(|e| !e.is_empty() && !subscribed.contains(e)) {
+            // asked once until the new session has subscribed (it clears the flag)
+            if !subscribed.is_empty()
+                && !s.shared.reload_asked.load(Ordering::SeqCst)
+                && extra.iter().any(|e| !e.is_empty() && !subscribed.contains(e))
+            {
                 changed = true;
             }
         }
@@ -928,6 +952,10 @@ fn apply_panel_config(ui: &AppWindow) {
                 s.forecast_daily.clear();
                 changed = true;
             }
+        }
+        // the flag only when the request can reach the session (before the link it is asked again later)
+        if changed && s.commands.is_some() {
+            s.shared.reload_asked.store(true, Ordering::SeqCst);
         }
         changed
     });
@@ -1428,7 +1456,7 @@ fn ring_more(ui: &AppWindow) {
     let label = ui.get_timers_ring_label().to_string();
     let time = ui.get_timers_ring_time().to_string();
     let tone = with_state(|s| s.ring_tone.rsplit_once('|').map(|(v, _)| v.to_string()).unwrap_or_default());
-    stop_ringing(ui);
+    stop_ringing(ui, "more time");
     if alarm {
         with_state(|s| s.snooze = Some((Instant::now() + Duration::from_secs(9 * 60), time, label, tone)));
     } else {
@@ -1436,8 +1464,11 @@ fn ring_more(ui: &AppWindow) {
     }
 }
 
-fn stop_ringing(ui: &AppWindow) {
+fn stop_ringing(ui: &AppWindow, why: &str) {
     with_state(|s| {
+        if s.ringing.is_some() {
+            eprintln!("nspanel-app: ringing stopped ({why})");
+        }
         s.ringing = None;
         s.ringing_flag.store(false, Ordering::SeqCst);
         // its sound stops at once (a sounding critical alert keeps its own)
@@ -1575,7 +1606,7 @@ fn handle_voice_ui(ui: &AppWindow, event: voice::VoiceUi) {
             hide_after(5);
         }
         VoiceUi::Stopped => {
-            stop_ringing(ui);
+            stop_ringing(ui, "voice");
             if ui.get_voice_on() {
                 hide_after(1);
             }
@@ -2082,6 +2113,20 @@ fn handle_event(ui: &AppWindow, event: Event) {
                     );
                 }
             });
+            // the panel's own timers that ran while Home Assistant was away go to it now (voice and the other
+            // devices see them from here on); one it refuses runs on here (TimerRefused)
+            let handed: Vec<(u32, String)> = with_state(|s| {
+                let now = Instant::now();
+                let ids: Vec<String> = s.timers.iter().filter(|(_, t)| t.own && t.active && t.end > now).map(|(id, _)| id.clone()).collect();
+                ids.iter()
+                    .filter_map(|id| s.timers.remove(id))
+                    .map(|t| ((t.end - now).as_secs_f32().round().max(1.0) as u32, t.name))
+                    .collect()
+            });
+            for (seconds, name) in handed {
+                eprintln!("nspanel-app: a timer of the panel ({seconds} s left) goes to Home Assistant");
+                send(Command::Timer { action: "start".into(), timer_id: String::new(), seconds, name });
+            }
             update_clock(ui);
         }
         Event::TimerRefused { seconds, name } => start_local_timer(ui, seconds, name),
@@ -2750,7 +2795,7 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
     platform::note_activity();
     match what {
         "saver.wake" => wake(ui),
-        "timers.stop" => stop_ringing(ui),
+        "timers.stop" => stop_ringing(ui, "tap"),
         "timers.more" => ring_more(ui),
         w if w.starts_with("alarms.") || w.starts_with("alarm.") => alarms::act(ui, w, value),
         w if w.starts_with("timers.") || w.starts_with("watch.") => timers_act(ui, w, value),
@@ -3106,8 +3151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forecast_daily: Vec::new(),
             wake_phrase: phrase,
             wake_hint: Default::default(),
+            muted_hint: String::new(),
             art_url: None,
             art_bg: None,
+            art_accent: None,
             art_tx: None,
             art: None,
             show_until: None,
@@ -3400,6 +3447,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // RGBA in this thread: the renderer takes it without converting. The blurred copy: the cover shrunk
         // to a few pixels and softened (the GPU scales it up smoothly).
         let bg = img.as_ref().map(|b| cam::rgba(&cam::soft(&cam::shrink(b, 18))));
+        let tint = img.as_ref().and_then(|b| cam::cover_accent(&cam::shrink(b, 32)));
         let img = img.map(|b| cam::rgba(&b));
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -3407,6 +3455,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 with_state(|s| {
                     s.art = img.map(slint::Image::from_rgba8);
                     s.art_bg = bg.map(slint::Image::from_rgba8);
+                    s.art_accent = tint.map(|(r, g, b)| slint::Color::from_rgb_u8(r, g, b));
                 });
                 refresh_pages(&ui);
             }

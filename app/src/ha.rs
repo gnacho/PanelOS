@@ -74,6 +74,8 @@ pub struct Shared {
     /// The entities the running session subscribed to (the UI thread asks for a new session when a page needs one
     /// that is missing).
     pub subscribed: std::sync::Mutex<Vec<String>>,
+    /// The UI thread asked for a new session for the pages' entities; the new session clears it.
+    pub reload_asked: std::sync::atomic::AtomicBool,
     /// Weather entity whose forecasts are followed ("" = none).
     pub forecast_entity: std::sync::Mutex<String>,
     /// What the panel's device in Home Assistant shows; filled by the UI
@@ -245,6 +247,7 @@ fn session(
         }
     }
     *shared.subscribed.lock().unwrap() = entities.clone();
+    shared.reload_asked.store(false, std::sync::atomic::Ordering::SeqCst);
     emit(Event::Dashboard(config));
 
     next_id += 1;

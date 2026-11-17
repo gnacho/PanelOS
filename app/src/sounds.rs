@@ -29,6 +29,11 @@ pub fn init(ha_url: String, auth: Arc<Auth>) {
     let _ = HA.set((ha_url, auth));
 }
 
+/// Home Assistant's address and the panel's login (for other short requests, e.g. speech recognition).
+pub fn ha() -> Option<(String, Arc<Auth>)> {
+    HA.get().cloned()
+}
+
 fn lib_path(id: &str) -> PathBuf {
     PathBuf::from(env!("PANELOS_UI_PICTURES")).join("sounds").join(format!("{id}.wav"))
 }

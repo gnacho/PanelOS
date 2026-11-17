@@ -343,6 +343,7 @@ export component TimersPage inherits Rectangle {
     in property <bool> ha-sounds;
     in property <bool> edit-timer;         // the editor sets a new timer (hours, minutes, label)          // sounds picked in Home Assistant reach the panel (the ⓘ shows then)
     in property <int> kb-layer;
+    in property <int> kb-layout;            // letters: 0 Latin, 1 Cyrillic (the globe key)
     in property <color> edit-tint: #ffb21e;
     property <[string]> sounds: ["Rise and Shine", "Up and At 'Em", "Early Bird", "Saved by the Bell", "Old School", "Neon Sunrise"];
 
@@ -920,7 +921,7 @@ export component TimersPage inherits Rectangle {
         Text { x: 20px; y: 162px; width: parent.width - 40px; height: 20px; text: root.edit-timer ? (root.edit-h > 0 ? root.edit-h + " h " : "") + root.edit-m + " min"
                 : root.edit-h + ":" + root.two(root.edit-m) + "  ·  " + root.sounds[min(root.edit-sound, root.sounds.length - 1)];
             font-size: 13px; color: TFg.c.with-alpha(0.50); vertical-alignment: center; overflow: elide; }
-        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; enter-label: "Done"; accent: root.edit-tint;
+        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; layout: root.kb-layout; enter-label: "Done"; accent: root.edit-tint;
             key(k) => { Act.act("alarm.key", k); } }
     }
 

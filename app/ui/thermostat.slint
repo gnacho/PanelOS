@@ -740,7 +740,7 @@ export component ThermostatPage inherits Rectangle {
     Rectangle {
         property <color> ink: root.light-face ? (root.look == 2 ? #4a3f34 : #2a2a2e) : #ffffff;
         x: root.width - 16px - self.width; y: 10px; height: 32px;
-        width: min(240px, dn.preferred-width + 66px);
+        width: 200px;
         border-radius: 16px;
         background: root.look == 3 ? #00000066 : root.light-face ? #00000012 : #ffffff1f;
         border-width: root.look == 3 ? 1px : 0px; border-color: root.grid.mix(#ffffff, 0.3).with-alpha(0.7);
