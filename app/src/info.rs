@@ -31,6 +31,47 @@ thread_local! {
 /// The buttons of an open note: dismiss it in Home Assistant, or just close it.
 const ACTIONS: [&str; 2] = ["Dismiss", "OK"];
 
+/// A notification's content key (title and text): the same notification made again keeps its first time.
+fn seen_key(title: &str, message: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (title, message).hash(&mut h);
+    format!("{:016x}", h.finish())
+}
+
+/// The first time each notification was seen: kept while it is there and a day after it went (a restart of Home
+/// Assistant makes some of them again with a new time).
+fn first_seen(notes: &HashMap<String, Note>) -> HashMap<String, i64> {
+    thread_local!(static SEEN: std::cell::RefCell<Option<serde_json::Map<String, Value>>> = const { std::cell::RefCell::new(None) });
+    SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        let map = seen.get_or_insert_with(|| crate::settings::load_notes_seen().as_object().cloned().unwrap_or_default());
+        let t = now();
+        let mut changed = false;
+        let mut out = HashMap::new();
+        for (id, note) in notes {
+            let key = seen_key(&note.title, &note.message);
+            let entry = map.entry(key).or_insert_with(|| {
+                changed = true;
+                serde_json::json!({ "first": note.created, "last": t })
+            });
+            let first = entry["first"].as_i64().unwrap_or(note.created).min(note.created);
+            if entry["last"].as_i64().unwrap_or(0) + 600 < t {
+                changed = true;
+            }
+            *entry = serde_json::json!({ "first": first, "last": t });
+            out.insert(id.clone(), first);
+        }
+        // forgotten a day after the notification went
+        let before = map.len();
+        map.retain(|_, v| v["last"].as_i64().unwrap_or(0) + 86_400 > t);
+        if changed || map.len() != before {
+            crate::settings::save_notes_seen(&Value::Object(map.clone()));
+        }
+        out
+    })
+}
+
 /// A change of Home Assistant's notifications.
 pub fn update(kind: &str, notes: &Value) {
     let Some(map) = notes.as_object() else { return };
@@ -50,6 +91,13 @@ pub fn update(kind: &str, notes: &Value) {
                 id.clone(),
                 Note { title: text("title"), message: text("message"), created: parse_iso(&text("created_at")).unwrap_or(now()), unread },
             );
+        }
+        // the time each one first came (not Home Assistant's new time after its restart)
+        let first = first_seen(&n);
+        for (id, note) in n.iter_mut() {
+            if let Some(t) = first.get(id) {
+                note.created = *t;
+            }
         }
     });
 }

@@ -14,7 +14,7 @@ import "./fonts/Caveat[wght].ttf";
 
 import { Theme, Act, Clock, Words } from "theme.slint";
 import { PairingScreen, FoundHa, SetupScreen, WifiNet, WifiScreen, WifiPasswordScreen, HiddenNetworkScreen, HaPickScreen, ConnectingScreen, OfflineScreen, Phrases } from "overlays.slint";
-import { Person, TimerInfo, ClockData, ClockFace, StatusBar, PageDots, People, WeatherHour, WeatherDay, WeatherData, WeatherPanel } from "panels.slint";
+import { Person, TimerInfo, ClockData, ClockFace, StatusBar, TimerChips, PageDots, People, WeatherHour, WeatherDay, WeatherData, WeatherPanel } from "panels.slint";
 import { HomeItem, HomeEvent, HomeMusic, HomeGrid } from "home.slint";
 import { PhotoSky, WinRect } from "photo_sky.slint";
 import { FastLane } from "fast_lane.slint";
@@ -1096,6 +1096,12 @@ export component AppWindow inherits Window {
         on-k: root.status-on ? 1 : root.on-k;
         left-chips: root.left-k > 0.5;
         left-k: root.left-k;
+    }
+    // the running timers: their own row under the status line, centred, on every page
+    if root.timers.length > 0: HorizontalLayout {
+        x: 16px; y: 44px; width: root.width - 32px; height: 26px;
+        alignment: center;
+        TimerChips { timers: root.timers; most: 2; on-k: root.status-on ? 1 : root.on-k; }
     }
     property <bool> sheet-open: root.quick-sheet || root.thermo-sheet || root.thermo-picker || root.music-picker || root.cal-detail
         || root.timers-quick || root.todo-picker;

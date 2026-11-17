@@ -444,6 +444,11 @@ const RING_SPEECH_END: f64 = 6.0;
 const RING_SPEECH_TAIL: u32 = 60;
 const RING_SPEECH_MAX: u32 = 300;
 const RING_PREROLL: usize = 8000;
+/// At a ring's start the echo canceller is still learning the new sound for about a second, and its leftover
+/// sounds like speech to the ear and the "Stop" model (measured: a false piece of speech 1 s after every ring
+/// start, once a false "Stop"). Nothing is left unheard because of it: every piece and every "Stop" goes to the
+/// speech recognition, and only a stop word stops the ring; this much audio before a "Stop" goes with it.
+const RING_STOP_AUDIO: usize = 24000;
 
 /// While a timer rings: cuts out what someone says over the ring (the processed microphone signal; the ring's
 /// leftover level is the 40th percentile of the last 2 s), for the speech recognition. The ring itself plays on
@@ -501,10 +506,9 @@ impl RingEar {
                 sorted.sort_by(|a, b| a.total_cmp(b));
                 self.floor = sorted[sorted.len() * 2 / 5];
             }
-            if self.levels.len() < 50 {
-                continue;
-            }
-            let over = db - self.floor;
+            // until it knows the ring's leftover, the quiet room's level
+            let floor = if self.levels.len() < 50 { self.floor.max(room) } else { self.floor };
+            let over = db - floor;
             self.peak = self.peak.max(over);
             if over > RING_SPEECH_DB {
                 self.score += 1;
@@ -515,7 +519,7 @@ impl RingEar {
                 self.score = 0;
                 self.pieces += 1;
                 self.rec = Some((self.pre.drain(..).collect(), 0, 0));
-                eprintln!("nspanel-app: voice: speech over the ring ({over:+.1} dB over its echo, {:.0} dB)", self.floor);
+                eprintln!("nspanel-app: voice: speech over the ring ({over:+.1} dB over its echo, {floor:.0} dB)");
             }
         }
         if self.reported.elapsed() > Duration::from_secs(5) {
@@ -533,9 +537,10 @@ impl RingEar {
 /// A piece of speech heard while a timer rings: to Home Assistant's speech recognition (one at a time), the text
 /// back to the voice loop.
 fn hear_over_ring(samples: Vec<i16>, tx: &mpsc::Sender<String>) {
-    static BUSY: AtomicBool = AtomicBool::new(false);
-    if BUSY.swap(true, Ordering::SeqCst) {
-        eprintln!("nspanel-app: voice: speech over the ring skipped (the last piece is still being recognized)");
+    static BUSY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    if BUSY.fetch_add(1, Ordering::SeqCst) >= 3 {
+        BUSY.fetch_sub(1, Ordering::SeqCst);
+        eprintln!("nspanel-app: voice: speech over the ring skipped (three pieces are being recognized)");
         return;
     }
     let tx = tx.clone();
@@ -552,7 +557,7 @@ fn hear_over_ring(samples: Vec<i16>, tx: &mpsc::Sender<String>) {
             }
             Err(e) => eprintln!("nspanel-app: voice: speech over the ring not recognized: {e}"),
         }
-        BUSY.store(false, Ordering::SeqCst);
+        BUSY.fetch_sub(1, Ordering::SeqCst);
     });
 }
 
@@ -957,6 +962,7 @@ pub fn spawn(
         // A timer rings: the panel listens for "Stop" (and the wake words) itself, and holds the ring while
         // someone speaks.
         let mut ring_listen = false;
+        let mut ring_audio: std::collections::VecDeque<i16> = std::collections::VecDeque::new();
         let mut ring_ear = RingEar::new();
         // texts of speech heard over a ring (from the speech recognition threads)
         let (ring_tx, ring_rx) = mpsc::channel::<String>();
@@ -1306,18 +1312,29 @@ pub fn spawn(
                 state != State::Idle || expecting_tts.is_some() || fetching.load(Ordering::SeqCst),
                 Ordering::Relaxed,
             );
-            // A ringing timer or alarm: "Stop" or a wake word heard by the panel itself stops it at once (in every
-            // state, also while a ringing run streams), and the ring holds its sound while someone speaks.
+            // A ringing timer or alarm: a wake word heard by the panel itself stops it at once; what is said over the
+            // ring and every "Stop" go to the speech recognition, and a stop word stops it (no answer comes).
             if control.ringing.load(Ordering::SeqCst) && !muted && !aec.ptr.is_null() {
                 if !ring_listen {
                     ring_listen = true;
+                    ring_audio.clear();
                     ring_ear = RingEar::new();
                     eprintln!("nspanel-app: voice: listening while the timer rings");
                     stop_word = true;
                     engine.set_active(&control.active_wake_words.lock().unwrap(), true);
                     engine.reset();
                 }
-                if let Some(word) = engine.process(chunk).cloned() {
+                ring_audio.extend(chunk.iter().copied());
+                while ring_audio.len() > RING_STOP_AUDIO {
+                    ring_audio.pop_front();
+                }
+                let heard = engine.process(chunk).cloned();
+                if let Some(word) = heard.as_ref().filter(|w| INTERNAL_WORDS.contains(&w.id.as_str())) {
+                    // "Stop": checked by the speech recognition (the ring's own start can sound like it)
+                    eprintln!("nspanel-app: voice: '{}' heard over the ring: checking it", word.phrase);
+                    hear_over_ring(ring_audio.iter().copied().collect(), &ring_tx);
+                    engine.reset();
+                } else if let Some(word) = heard {
                     eprintln!("nspanel-app: voice: '{}' while the timer rings -> stop", word.phrase);
                     control.ringing.store(false, Ordering::SeqCst);
                     if state != State::Idle {

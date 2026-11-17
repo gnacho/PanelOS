@@ -55,7 +55,7 @@ pub fn is_stop(text: &str) -> bool {
         return false;
     }
     const WORDS: &[&str] = &[
-        "állj", "álljál", "álljon", "stop", "stopp", "elég", "csend", "csendet", "hallgass", "kuss", "enough", "quiet", "silence", "cancel",
+        "állj", "álljál", "álljon", "stop", "stopp", "sztop", "elég", "csend", "csendet", "hallgass", "kuss", "enough", "quiet", "silence", "cancel",
     ];
     const PAIRS: &[(&str, &str)] = &[
         ("kapcsold", "ki"),

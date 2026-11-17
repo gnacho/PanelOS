@@ -219,6 +219,20 @@ pub fn save_panel_config(config: &serde_json::Value) {
     }
 }
 
+/// When the panel first saw each notification (by its title and text): Home Assistant makes some again with a
+/// new time at every start (an invalid config), so the panel shows when it really came.
+pub fn load_notes_seen() -> serde_json::Value {
+    std::fs::read_to_string(beside("notes-seen.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+pub fn save_notes_seen(seen: &serde_json::Value) {
+    let p = beside("notes-seen.json");
+    let tmp = p.with_extension("json.tmp");
+    if std::fs::write(&tmp, seen.to_string()).is_ok() {
+        let _ = std::fs::rename(&tmp, &p);
+    }
+}
+
 impl Settings {
     pub fn load() -> Self {
         std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()

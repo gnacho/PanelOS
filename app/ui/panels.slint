@@ -126,11 +126,6 @@ export component StatusBar inherits Rectangle {
     HorizontalLayout {
         x: 0; y: 0; width: max(0px, ctr.x - 8px); height: root.height;
         spacing: 8px;
-        if root.left-k > 0.001 && root.timers.length > 0: VerticalLayout {
-            alignment: center;
-            opacity: root.left-k;
-            TimerChips { timers: root.timers; most: 1; compact: true; on-k: root.on-k; }
-        }
         // the wake word hint, or with the microphone muted its own line (the app picks it)
         Text {
             horizontal-stretch: 1;
@@ -165,16 +160,6 @@ export component StatusBar inherits Rectangle {
                 nt := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
             }
             TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; clicked => { Act.act("notes.open", ""); } }
-        }
-    }
-    HorizontalLayout {
-        x: root.ctr-right + 8px; y: 0; width: root.width - root.ctr-right - 8px; height: root.height;
-        spacing: 8px;
-        alignment: end;
-        opacity: 1 - root.left-k;
-        if root.left-k < 0.999: VerticalLayout {
-            alignment: center;
-            TimerChips { timers: root.timers; most: 1; on-k: root.on-k; }
         }
     }
 }
