@@ -8,7 +8,7 @@ use serde_json::Value;
 use slint::{Color, Model, ModelRc, SharedString, VecModel};
 
 use crate::ha::EntityState;
-use crate::{ClockData, HomeEvent, HomeItem, HomeMusic, PageSlot, Person, TimerInfo, TimerItem, WeatherData, WeatherDay, WeatherHour};
+use crate::{ClockData, HomeItem, HomeMusic, PageSlot, Person, TimerInfo, TimerItem, WeatherData, WeatherDay, WeatherHour};
 
 // ---------------------------------------------------------------- time helpers
 
@@ -510,11 +510,6 @@ pub fn home_music(states: &HashMap<String, EntityState>, player: &str, art: Opti
         has_art: art.is_some(),
         accent,
     }
-}
-
-/// The next calendar event for the widgets (none until the calendar page is set up).
-pub fn home_event() -> HomeEvent {
-    HomeEvent::default()
 }
 
 // ---------------------------------------------------------------- people

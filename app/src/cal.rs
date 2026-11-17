@@ -164,6 +164,60 @@ fn hm(t: i64) -> String {
     local_format(t, "%H:%M")
 }
 
+/// "YYYY-MM-DD HH:MM:SS" (Home Assistant's local time of a calendar's next event) as epoch seconds.
+fn local_epoch(s: &str) -> Option<i64> {
+    let num = |a: usize, b: usize| s.get(a..b).and_then(|v| v.parse::<i32>().ok());
+    let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
+    let (h, mi, se) = (num(11, 13).unwrap_or(0), num(14, 16).unwrap_or(0), num(17, 19).unwrap_or(0));
+    // SAFETY: mktime on a local struct.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        tm.tm_year = y - 1900;
+        tm.tm_mon = mo - 1;
+        tm.tm_mday = d;
+        tm.tm_hour = h;
+        tm.tm_min = mi;
+        tm.tm_sec = se;
+        tm.tm_isdst = -1;
+        Some(libc::mktime(&mut tm) as i64)
+    }
+}
+
+/// The next (or current) event of the given calendars for the home widgets, from the calendars' own states
+/// (Home Assistant puts each calendar's next event in its attributes), coloured like on the calendar page.
+pub fn next_event(states: &std::collections::HashMap<String, crate::ha::EntityState>, calendars: &[String], t: i64) -> crate::HomeEvent {
+    let mut best: Option<(i64, i64, bool, String, usize)> = None;
+    for (i, id) in calendars.iter().enumerate() {
+        let Some(e) = states.get(id) else { continue };
+        let attr = |k: &str| e.attrs.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let title = attr("message");
+        let (Some(start), Some(end)) = (local_epoch(&attr("start_time")), local_epoch(&attr("end_time"))) else { continue };
+        if title.is_empty() || end <= t {
+            continue;
+        }
+        let all_day = e.attrs.get("all_day").and_then(Value::as_bool).unwrap_or(false);
+        if best.as_ref().is_none_or(|b| start < b.0) {
+            best = Some((start, end, all_day, title, i));
+        }
+    }
+    let Some((start, end, all_day, title, i)) = best else { return crate::HomeEvent::default() };
+    let rel = if start <= t {
+        "now".to_string()
+    } else if midnight(start) == midnight(t) {
+        let d = start - t;
+        let (h, m) = (d / 3600, (d % 3600) / 60);
+        if h > 0 { format!("in {h} h {m} min") } else { format!("in {} min", m.max(1)) }
+    } else if midnight(start) == day_after(t, 1) {
+        "Tomorrow".to_string()
+    } else if start < day_after(t, 7) {
+        local_format(start, "%A")
+    } else {
+        local_format(start, "%-d %B")
+    };
+    let time = if all_day { "All day".to_string() } else { format!("{} – {}", hm(start), hm(end)) };
+    crate::HomeEvent { title: title.into(), time: time.into(), rel: rel.into(), tint: tint(i) }
+}
+
 fn rel(start: i64, end: i64, t: i64) -> String {
     if start <= t && t < end {
         return "now".into();

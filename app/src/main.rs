@@ -652,7 +652,9 @@ fn refresh_pages(ui: &AppWindow) {
             let lays: Vec<HomeLayout> = lays.into_iter().map(|items| HomeLayout { items: ModelRc::new(VecModel::from(items)) }).collect();
             ui.set_home_layouts(ModelRc::new(VecModel::from(lays)));
         }
-        let event = pages::home_event();
+        // the next event of the custom page's calendars (its entities)
+        let calendars: Vec<String> = page_entities(s, "home").into_iter().filter(|e| e.starts_with("calendar.")).collect();
+        let event = cal::next_event(&s.states, &calendars, pages::now());
         if ui.get_home_event() != event {
             ui.set_home_event(event);
         }
