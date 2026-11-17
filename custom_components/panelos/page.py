@@ -28,6 +28,7 @@ import base64
 import binascii
 import hashlib
 import json
+import logging
 import math
 from pathlib import Path
 import re
@@ -83,6 +84,8 @@ from .const import (
 )
 from .house import HOUSE_SCHEMA, House, _tone
 from .panel import KEY_DOMAIN, Panel, find_entry, panel_caps, panel_config
+
+_LOGGER = logging.getLogger(__name__)
 from .resources import async_resource_list
 
 FRONTEND_DIR = Path(__file__).parent / "frontend"
@@ -137,6 +140,8 @@ _HOME_ITEM = vol.Schema(
         vol.Optional("accent", default=""): vol.Any("", vol.All(str, vol.Match(r"^#[0-9a-fA-F]{6}$"))),
         vol.Optional("weight", default=600): vol.All(int, vol.Range(min=300, max=800)),
         vol.Optional("tap", default=True): bool,
+        # neon letters on the synthwave background (each widget its own; without it: the page's old switch)
+        vol.Optional("neon"): bool,
         vol.Optional("opts", default=0): vol.All(int, vol.Range(min=0, max=0xFFFF)),
         # the card behind the widget: -1 = its own (as designed), 0..100 % opacity
         vol.Optional("bg", default=-1): vol.All(int, vol.Range(min=-1, max=100)),
@@ -145,15 +150,11 @@ _HOME_ITEM = vol.Schema(
 
 
 def _home_items(items: Any) -> list[dict[str, Any]]:
+    """Widgets may lie on each other (the later one on top; the page warns to check them on the panel)."""
     items = vol.Schema(vol.All([_HOME_ITEM], vol.Length(max=16)))(items)
-    cells: set[tuple[int, int]] = set()
     for item in items:
         if item["col"] + item["w"] > 4 or item["row"] + item["h"] > 4:
             raise vol.Invalid("a widget is outside the 4 x 4 grid")
-        mine = {(item["col"] + x, item["row"] + y) for x in range(item["w"]) for y in range(item["h"])}
-        if mine & cells:
-            raise vol.Invalid("widgets overlap")
-        cells |= mine
     return items
 
 
@@ -198,6 +199,16 @@ SCREENSAVER_SCHEMA = vol.Schema(
         vol.Optional("from"): _TIME,
         vol.Optional("to"): _TIME,
         vol.Optional("light_entity"): vol.Any("", cv.entity_domain("sensor")),
+        # the clock on the screensaver: face (0..7), its parts, letters, the wandering speed, colour
+        vol.Optional("face"): vol.All(vol.Coerce(int), vol.Range(min=0, max=7)),
+        vol.Optional("seconds"): bool,
+        vol.Optional("date"): bool,
+        vol.Optional("weather"): bool,
+        vol.Optional("next"): bool,
+        vol.Optional("weight"): vol.All(vol.Coerce(int), vol.Range(min=300, max=800)),
+        vol.Optional("width"): vol.All(vol.Coerce(int), vol.Range(min=70, max=130)),
+        vol.Optional("speed"): vol.All(vol.Coerce(int), vol.Range(min=5, max=60)),
+        vol.Optional("colour"): vol.Any("", vol.Match(r"^#[0-9a-fA-F]{6}$")),
     }
 )
 
@@ -274,6 +285,7 @@ async def async_setup_page(hass: HomeAssistant) -> None:
         ws_page_touch_test,
         ws_page_alarms,
         ws_page_ma,
+        ws_page_ma_player,
         ws_screen,
     ):
         websocket_api.async_register_command(hass, command)
@@ -342,6 +354,8 @@ def _page_data(hass: HomeAssistant) -> dict[str, Any]:
                 "web_dashboard": panel.dashboard if panel else "",
                 # the panel's alarms (they live on the panel), None until it reports them
                 "alarms": panel.alarms if panel else None,
+                # alarms set here that the panel has not confirmed yet (they go when it is online)
+                "alarms_pending": panel.pending_alarms if panel else None,
                 "resources": list(panel.resources) if panel else [],
             }
         )
@@ -431,7 +445,8 @@ def ws_page_options(hass: HomeAssistant, connection: websocket_api.ActiveConnect
     {
         vol.Required("type"): "panelos/page/command",
         vol.Required("entry_id"): str,
-        vol.Required("key"): vol.In(list(KEY_DOMAIN)),
+        # the device's settings, and "page": show a page now (while its settings are open on the page)
+        vol.Required("key"): vol.In([*KEY_DOMAIN, "page"]),
         vol.Optional("value"): vol.Any(None, bool, int, float, vol.All(str, vol.Length(max=255))),
     }
 )
@@ -450,13 +465,13 @@ def ws_page_command(hass: HomeAssistant, connection: websocket_api.ActiveConnect
 @websocket_api.websocket_command({vol.Required("type"): "panelos/page/screen", vol.Required("entry_id"): str})
 @websocket_api.async_response
 async def ws_page_screen(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    """A fresh picture of the panel's screen (PNG, base64)."""
+    """A fresh picture of the panel's screen (base64; type image/jpeg from new panels, image/png from older ones)."""
     try:
-        png = await _panel(hass, msg["entry_id"]).async_screenshot()
+        data, mime = await _panel(hass, msg["entry_id"]).async_screenshot()
     except HomeAssistantError as err:
         connection.send_error(msg["id"], "no_picture", str(err))
         return
-    connection.send_result(msg["id"], {"png": base64.b64encode(png).decode()})
+    connection.send_result(msg["id"], {"png": base64.b64encode(data).decode(), "type": mime})
 
 
 @websocket_api.require_admin
@@ -536,18 +551,62 @@ def ws_page_alarms(hass: HomeAssistant, connection: websocket_api.ActiveConnecti
     try:
         alarms = [_ALARM(a) for a in msg["alarms"]]
         panel = _panel(hass, msg["entry_id"])
-        if not panel.connected:
-            raise HomeAssistantError(f"The PanelOS panel '{panel.panel_id}' is not connected; its alarms are kept on it")
     except vol.Invalid as err:
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     except HomeAssistantError as err:
-        connection.send_error(msg["id"], "not_connected", str(err))
+        connection.send_error(msg["id"], "not_found", str(err))
         return
     for a in alarms:
         a["days"] = (a["days"] + [False] * 7)[:7]
-    async_dispatcher_send(hass, SIGNAL_SHOW, panel_config(panel.entry)["panel_id"], {"type": "alarms", "list": alarms})
-    connection.send_result(msg["id"])
+    # kept until the panel reports exactly these alarms (sent now when it is online, else when it comes back)
+    sent = panel.set_pending_alarms(alarms)
+    async_dispatcher_send(hass, SIGNAL_PAGE)
+    connection.send_result(msg["id"], {"sent": sent})
+    # an alarm with music: Music Assistant must know the panel's player; it is added there by itself
+    if any(str(a.get("tone", "")).startswith("ma:") for a in alarms):
+        hass.async_create_task(_async_ma_player(hass, panel), eager_start=False)
+
+
+async def _async_ma_player(hass: HomeAssistant, panel: Panel) -> None:
+    from .ma import async_add  # noqa: PLC0415 - only when an alarm has music
+
+    entity = panel_config(panel.entry)["media_player"]
+    try:
+        status = await async_add(hass, entity)
+    except Exception as err:  # noqa: BLE001 - Music Assistant's own errors (rights, provider missing)
+        _LOGGER.warning("Could not add %s to Music Assistant: %s", entity, err)
+        return
+    if status.get("entity_ma"):
+        # the panel learns which entity plays its music
+        async_dispatcher_send(hass, SIGNAL_CONFIG_UPDATED, panel_config(panel.entry)["panel_id"])
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): "panelos/page/ma_player", vol.Required("entry_id"): str, vol.Optional("add", default=False): bool})
+@websocket_api.async_response
+async def ws_page_ma_player(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Whether Music Assistant knows the panel's player; with add, adds it there."""
+    from .ma import NotAllowed, async_add, async_status  # noqa: PLC0415
+
+    try:
+        panel = _panel(hass, msg["entry_id"])
+    except HomeAssistantError as err:
+        connection.send_error(msg["id"], "not_found", str(err))
+        return
+    entity = panel_config(panel.entry)["media_player"]
+    try:
+        result = await (async_add(hass, entity) if msg["add"] else async_status(hass, entity))
+    except NotAllowed:
+        # the page then shows how to add it in Music Assistant itself
+        connection.send_result(msg["id"], {**(await async_status(hass, entity)), "by_hand": True})
+        return
+    except Exception as err:  # noqa: BLE001 - shown on the page as it is
+        connection.send_error(msg["id"], "music_assistant", str(err))
+        return
+    if msg["add"] and result.get("entity_ma"):
+        async_dispatcher_send(hass, SIGNAL_CONFIG_UPDATED, panel_config(panel.entry)["panel_id"])
+    connection.send_result(msg["id"], result)
 
 
 _MA_KINDS = {"playlist": "Playlist", "radio": "Radio station", "album": "Album", "track": "Track", "artist": "Artist"}
@@ -609,7 +668,13 @@ def ws_page_touch_test(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "panelos/screen", vol.Optional("panel_id", default=""): str, vol.Required("png"): str}
+    {
+        vol.Required("type"): "panelos/screen",
+        vol.Optional("panel_id", default=""): str,
+        # a JPEG from new panels (small: the live preview), a PNG from older ones
+        vol.Exclusive("png", "picture"): str,
+        vol.Exclusive("jpeg", "picture"): str,
+    }
 )
 @callback
 def ws_screen(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
@@ -619,13 +684,15 @@ def ws_screen(hass: HomeAssistant, connection: websocket_api.ActiveConnection, m
     if panel is None or not panel.linked_on(id(connection)):
         connection.send_error(msg["id"], "not_subscribed", "Subscribe with panelos/subscribe first")
         return
+    jpeg = "jpeg" in msg
     try:
-        png = base64.b64decode(msg["png"], validate=True)
+        data = base64.b64decode(msg["jpeg"] if jpeg else msg.get("png", ""), validate=True)
     except (binascii.Error, ValueError):
         connection.send_error(msg["id"], "invalid_format", "Not base64")
         return
-    if len(png) > _PNG_MAX or not png.startswith(b"\x89PNG\r\n\x1a\n"):
-        connection.send_error(msg["id"], "invalid_format", "Not a PNG")
+    ok = data.startswith(b"\xff\xd8\xff") if jpeg else data.startswith(b"\x89PNG\r\n\x1a\n")
+    if len(data) > _PNG_MAX or not ok:
+        connection.send_error(msg["id"], "invalid_format", "Not a JPEG" if jpeg else "Not a PNG")
         return
-    panel.screen_received(png)
+    panel.screen_received(data, "image/jpeg" if jpeg else "image/png")
     connection.send_result(msg["id"])

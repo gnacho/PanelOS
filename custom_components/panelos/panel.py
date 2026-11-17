@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import logging
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -20,6 +21,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.entity import Entity, entity_sources
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.start import async_at_started
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import UNDEFINED
 
 from .const import (
@@ -58,6 +60,7 @@ from .const import (
     SIGNAL_CONFIG_UPDATED,
     SIGNAL_LINKS,
     SIGNAL_PAGE,
+    SIGNAL_SHOW,
 )
 from .resources import async_resource_list
 
@@ -80,6 +83,24 @@ type Factory = Callable[["Panel", str], Entity]
 def links(hass: HomeAssistant) -> dict[int, tuple[str, int, Send]]:
     """Panels following panelos/subscribe: key → (panel id, connection id, send)."""
     return hass.data.setdefault(DOMAIN, {}).setdefault("links", {})
+
+
+# A panel says it is there every second (panelos/alive); a link that has said nothing for this long
+# counts as gone, so both sides know within seconds when the network between them breaks (not less:
+# Home Assistant's own stalls and the Wi-Fi add up to a few seconds now and then).
+ALIVE_TIMEOUT = 8.0
+
+
+def alive(hass: HomeAssistant) -> dict[int, float]:
+    """When each connection's panel last said it is there (connection id → monotonic time). Panels
+    without the keep-alive (older apps) are not in it and count as there while subscribed."""
+    return hass.data.setdefault(DOMAIN, {}).setdefault("alive", {})
+
+
+def link_gone(hass: HomeAssistant, connection_id: int) -> bool:
+    """A link whose panel stopped saying it is there."""
+    seen = alive(hass).get(connection_id)
+    return seen is not None and time.monotonic() - seen > ALIVE_TIMEOUT
 
 
 def find_entry(hass: HomeAssistant, panel_id: str) -> ConfigEntry | None:
@@ -113,8 +134,49 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "popups": popups_config(options.get(CONF_POPUPS)),
         "keep_sounds": _keep_sounds(entry),
         "media_player": _media_player(entry),
+        # the Music Assistant entity of that player (music alarms play through it), "" until it has one
+        "ma_player": _ma_player(entry),
+        # each Music Assistant player and the speaker it plays on: the panel trusts the speaker when they
+        # disagree (Music Assistant can say "playing" long after the speaker stopped)
+        "player_links": _player_links(entry),
         **{key: float(options.get(key, default)) for key, (default, *_rest) in REPORTING.items()},
     }
+
+
+def _player_links(entry: ConfigEntry) -> dict[str, str]:
+    panel = getattr(entry, "runtime_data", None)
+    if panel is None:
+        return {}
+    hass = panel.hass
+    devices = dr.async_get(hass)
+    name_of = {}
+    for d in devices.devices:
+        name_of[d.id] = (d.name_by_user or d.name or "").strip().lower()
+    speakers: dict[str, str] = {}
+    mass: list[tuple[str, str]] = []
+    for e in er.async_get(hass).entities.values():
+        if e.domain != "media_player" or e.disabled or not e.device_id:
+            continue
+        name = name_of.get(e.device_id, "")
+        if not name:
+            continue
+        if e.platform == "music_assistant":
+            mass.append((e.entity_id, name))
+        else:
+            speakers.setdefault(name, e.entity_id)
+    return {ma: speakers[name] for ma, name in mass if name in speakers}
+
+
+def _ma_player(entry: ConfigEntry) -> str:
+    panel = getattr(entry, "runtime_data", None)
+    if panel is None:
+        return ""
+    from .ma import ma_entity  # noqa: PLC0415
+
+    try:
+        return ma_entity(panel.hass, _media_player(entry))
+    except Exception:  # noqa: BLE001 - Music Assistant away or changed: the panel uses its own player
+        return ""
 
 
 def _media_player(entry: ConfigEntry) -> str:
@@ -160,7 +222,24 @@ def screensaver_config(stored: Any) -> dict[str, Any]:
         "from": _time(s.get("from"), DEFAULT_SCREENSAVER["from"]),
         "to": _time(s.get("to"), DEFAULT_SCREENSAVER["to"]),
         "light_entity": s["light_entity"] if isinstance(s.get("light_entity"), str) else "",
+        # the clock on it
+        "face": _int(s.get("face"), 1, 0, 7),
+        "seconds": s.get("seconds", True) is not False,
+        "date": s.get("date", True) is not False,
+        "weather": s.get("weather", True) is not False,
+        "next": s.get("next", True) is not False,
+        "weight": _int(s.get("weight"), 600, 300, 800),
+        "width": _int(s.get("width"), 100, 70, 130),
+        "speed": _int(s.get("speed"), 20, 5, 60),
+        "colour": s["colour"] if isinstance(s.get("colour"), str) else "",
     }
+
+
+def _int(value: Any, default: int, low: int, high: int) -> int:
+    """A whole number within a range, else the default (stored options may be old or hand-made)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return max(low, min(high, int(value)))
 
 
 def dnd_config(stored: Any) -> dict[str, Any]:
@@ -216,6 +295,13 @@ def _alarm(value: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _alarm_key(a: dict[str, Any]) -> tuple:
+    """What makes two alarms the same (as set on the page and as the panel reports it)."""
+    days = [bool(d) for d in (a.get("days") or [])[:7]]
+    return (int(a.get("h", 0)), int(a.get("m", 0)), tuple(days + [False] * (7 - len(days))), str(a.get("label", "")),
+            bool(a.get("on", True)), str(a.get("tone", "auto") or "auto"))
+
+
 def _scalar(value: Any) -> bool:
     return value is None or isinstance(value, (bool, int, float)) or (isinstance(value, str) and len(value) <= _TEXT_MAX)
 
@@ -261,13 +347,22 @@ class Panel:
         self._waiting: dict[str, str] = {}
         self._saved: dict[str, dict[str, Any]] = {}
         self._unsub_waiting: Callable[[], None] | None = None
-        # Pages waiting for a picture of the screen (panelos/page/screen).
-        self._screen_waiters: list[asyncio.Future[bytes]] = []
+        # Pages waiting for a picture of the screen (panelos/page/screen); the newest picture (data,
+        # type, when) and when the last one was handed out and the panel last asked.
+        self._screen_waiters: list[asyncio.Future[tuple[bytes, str]]] = []
+        self._screen_latest: tuple[bytes, str, float] | None = None
+        self._screen_given = 0.0
+        self._screen_asked = 0.0
         # The dashboard the web view shows (the panel reports it) and the
         # card resources it leaves out there (worked out by refresh_skip).
         self.web_dashboard = ""
         # The panel's alarms as it reports them (they live on the panel), None until it does.
         self.alarms: list[dict[str, Any]] | None = None
+        # Alarms set on the PanelOS page that the panel has not confirmed yet: kept (also over a restart)
+        # and sent again until the panel reports exactly them.
+        self.pending_alarms: list[dict[str, Any]] | None = None
+        self._pending_store: Store = Store(hass, 1, f"panelos.pending.{entry.entry_id}")
+        self._pending_sent = 0.0
         self.skip: list[str] = []
         self.resources: list[dict[str, Any]] = []
         self._skip_task: asyncio.Task | None = None
@@ -275,13 +370,49 @@ class Panel:
     def unique_id(self, key: str) -> str:
         return f"{self.panel_id}-{key}"
 
+    # -- changes kept until the panel confirms them ---------------------------------
+
+    async def async_load_pending(self) -> None:
+        data = await self._pending_store.async_load()
+        alarms = data.get("alarms") if isinstance(data, dict) else None
+        self.pending_alarms = alarms if isinstance(alarms, list) else None
+
+    @callback
+    def set_pending_alarms(self, alarms: list[dict[str, Any]]) -> bool:
+        """Keeps the alarms until the panel reports them; sends them now if it is connected (True)."""
+        self.pending_alarms = alarms
+        self._pending_store.async_delay_save(lambda: {"alarms": alarms}, 1)
+        return self._send_pending(force=True)
+
+    @callback
+    def _send_pending(self, force: bool = False) -> bool:
+        if self.pending_alarms is None or not self.connected:
+            return False
+        now = time.monotonic()
+        if not force and now - self._pending_sent < 20:
+            return False
+        self._pending_sent = now
+        async_dispatcher_send(self.hass, SIGNAL_SHOW, self.panel_id, {"type": "alarms", "list": self.pending_alarms})
+        return True
+
+    @callback
+    def _confirm_pending(self, reported: list[dict[str, Any]]) -> None:
+        """The panel reported its alarms: the kept ones are done when they match, else sent again."""
+        if self.pending_alarms is None:
+            return
+        if [_alarm_key(a) for a in reported] == [_alarm_key(a) for a in self.pending_alarms]:
+            self.pending_alarms = None
+            self._pending_store.async_delay_save(lambda: {}, 1)
+        else:
+            self._send_pending()
+
     # -- links -------------------------------------------------------------
 
     def _sends(self, connection_id: int | None = None) -> list[Send]:
         return [
             send
             for pid, cid, send in links(self.hass).values()
-            if (connection_id is None or cid == connection_id) and find_entry(self.hass, pid) is self.entry
+            if (connection_id is None or cid == connection_id) and find_entry(self.hass, pid) is self.entry and not link_gone(self.hass, cid)
         ]
 
     @property
@@ -305,14 +436,20 @@ class Panel:
 
     # -- screen picture ----------------------------------------------------
 
-    async def async_screenshot(self, timeout: float = 8) -> bytes:
-        """A PNG of what the panel shows now (one request serves every waiter)."""
-        future: asyncio.Future[bytes] = self.hass.loop.create_future()
-        first = not self._screen_waiters
+    async def async_screenshot(self, timeout: float = 8) -> tuple[bytes, str]:
+        """A picture of what the panel shows now and its type. The panel streams for a few seconds after
+        each request, so a picture newer than the last one handed out is returned at once."""
+        now = time.monotonic()
+        if now - self._screen_asked > 1.0:
+            self._screen_asked = now
+            self.send_command("screenshot", None)
+        latest = self._screen_latest
+        if latest is not None and latest[2] > self._screen_given and now - latest[2] < 1.0:
+            self._screen_given = latest[2]
+            return latest[0], latest[1]
+        future: asyncio.Future[tuple[bytes, str]] = self.hass.loop.create_future()
         self._screen_waiters.append(future)
         try:
-            if first:
-                self.send_command("screenshot", None)
             async with asyncio.timeout(timeout):
                 return await future
         except TimeoutError as err:
@@ -322,11 +459,15 @@ class Panel:
                 self._screen_waiters.remove(future)
 
     @callback
-    def screen_received(self, png: bytes) -> None:
+    def screen_received(self, data: bytes, mime: str = "image/png") -> None:
+        now = time.monotonic()
+        self._screen_latest = (data, mime, now)
         waiters, self._screen_waiters = self._screen_waiters, []
+        if waiters:
+            self._screen_given = now
         for future in waiters:
             if not future.done():
-                future.set_result(png)
+                future.set_result((data, mime))
 
     # -- setup -------------------------------------------------------------
 
@@ -525,6 +666,13 @@ class Panel:
             if clean != self.alarms:
                 self.alarms = clean
                 changed.add("alarms")
+            pending = self.pending_alarms is not None
+            self._confirm_pending(clean)
+            if pending and self.pending_alarms is None:
+                changed.add("alarms")
+        elif self.pending_alarms is not None:
+            # a report without alarms (an older panel or between): the kept ones go again
+            self._send_pending()
         if isinstance(dashboard := msg.get("dashboard"), str) and dashboard != self.web_dashboard:
             self.web_dashboard = dashboard[:_TEXT_MAX]
             self.refresh_skip()

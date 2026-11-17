@@ -31,6 +31,8 @@ an administrator.
 
 from __future__ import annotations
 
+import time
+from datetime import timedelta
 from typing import Any
 
 import voluptuous as vol
@@ -41,6 +43,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.service import async_register_admin_service
 
 from .const import (
@@ -62,7 +65,7 @@ from .house import House
 from .players import async_register_players_view
 from .sounds import async_register_views
 from .page import async_hide_page, async_setup_page, async_show_page
-from .panel import Panel, find_entry, links, panel_config
+from .panel import Panel, alive, find_entry, link_gone, links, panel_config
 
 type PanelOSConfigEntry = ConfigEntry[Panel]
 
@@ -142,6 +145,7 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         unsub_config()
         unsub_show()
         links(hass).pop(key, None)
+        alive(hass).pop(id(connection), None)
         async_dispatcher_send(hass, SIGNAL_LINKS)
 
     connection.subscriptions[msg["id"]] = unsubscribe
@@ -152,6 +156,51 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         for request in hass.data[DOMAIN]["house"].requests_for(panel_config(entry)["panel_id"]):
             connection.send_message(websocket_api.event_message(msg["id"], {"show": request}))
     async_dispatcher_send(hass, SIGNAL_LINKS)
+
+
+@websocket_api.websocket_command({vol.Required("type"): "panelos/alive", vol.Optional("panel_id", default=""): str})
+@callback
+def ws_alive(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """The panel is there (every second); the answer tells the panel that the integration is too."""
+    gone = link_gone(hass, id(connection))
+    alive(hass)[id(connection)] = time.monotonic()
+    if gone:
+        async_dispatcher_send(hass, SIGNAL_LINKS)
+    connection.send_result(msg["id"])
+
+
+# A development panel's system log (it sends its new lines every second): kept in
+# /config/panelos/logs/<panel id>.log, turned over at 5 MB, three old files kept.
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_KEEP = 3
+
+
+def _append_log(path: str, lines: list[str]) -> None:
+    import os  # noqa: PLC0415
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    if os.path.exists(path) and os.path.getsize(path) > LOG_MAX_BYTES:
+        for i in range(LOG_KEEP - 1, 0, -1):
+            if os.path.exists(f"{path}.{i}"):
+                os.replace(f"{path}.{i}", f"{path}.{i + 1}")
+        os.replace(path, f"{path}.1")
+    with open(path, "a", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "panelos/log",
+        vol.Optional("panel_id", default=""): str,
+        vol.Required("lines"): vol.All([vol.All(str, vol.Length(max=2000))], vol.Length(max=1000)),
+    }
+)
+@websocket_api.async_response
+async def ws_log(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """Lines of a development panel's system log, kept in a file in the config folder."""
+    name = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (msg["panel_id"] or "panel"))[:40]
+    await hass.async_add_executor_job(_append_log, hass.config.path("panelos", "logs", f"{name}.log"), msg["lines"])
+    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command(
@@ -184,6 +233,21 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register the websocket commands, the actions and the sidebar page's files once."""
     websocket_api.async_register_command(hass, ws_subscribe)
     websocket_api.async_register_command(hass, ws_report)
+    websocket_api.async_register_command(hass, ws_alive)
+    websocket_api.async_register_command(hass, ws_log)
+
+    # A panel that stopped saying it is there is offline at once (checked every second).
+    gone_before: set[int] = set()
+
+    @callback
+    def check_alive(_now: Any) -> None:
+        nonlocal gone_before
+        gone = {cid for _, cid, _ in links(hass).values() if link_gone(hass, cid)}
+        if gone != gone_before:
+            gone_before = gone
+            async_dispatcher_send(hass, SIGNAL_LINKS)
+
+    async_track_time_interval(hass, check_alive, timedelta(seconds=1), cancel_on_shutdown=True)
     house = House(hass)
     hass.data.setdefault(DOMAIN, {})["house"] = house
     await house.async_load()
@@ -239,6 +303,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: PanelOSConfigEntry) -> bool:
     """Set up one panel: its device and entities, and its settings."""
     panel = Panel(hass, entry)
+    await panel.async_load_pending()
     entry.runtime_data = panel
     panel.async_setup()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

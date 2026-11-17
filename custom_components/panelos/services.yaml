@@ -64,7 +64,7 @@ show_status:
   fields:
     screen:
       required: true
-      example: status_1
+      example: toilet_occupied
       selector:
         text:
 
@@ -72,7 +72,7 @@ clear_status:
   fields:
     screen:
       required: true
-      example: status_1
+      example: toilet_occupied
       selector:
         text:
 

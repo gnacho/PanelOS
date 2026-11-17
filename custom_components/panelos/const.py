@@ -90,7 +90,7 @@ DEFAULT_DND = {"mode": "off", "from": "22:00", "to": "07:00", "allow": dict.from
 # New notifications: a strip at the top, a card, or only into the list.
 CONF_POPUPS = "popups"
 POPUP_KINDS = ("strip", "card", "off")
-DEFAULT_POPUPS = {"kind": "strip", "sound": True, "seconds": 10}
+DEFAULT_POPUPS = {"kind": "card", "sound": True, "seconds": 10}
 
 # What a panel can do, as it reports it (device report "caps"); until a panel
 # reports them it counts as an NSPanel Pro.

@@ -152,8 +152,16 @@ STATUS_SCHEMA = vol.Schema(
         # entries (panels) it appears on
         vol.Optional("panels", default=list): _ENTRY_IDS,
         vol.Optional("on", default=True): bool,
+        # the screen's name in automations (panelos.show_status / clear_status screen: …); empty = its id
+        vol.Optional("alias", default=""): vol.Any("", _ID),
     }
 )
+
+
+def _unique_aliases(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """No two status screens with the same name in automations (empty names do not count)."""
+    _unique_ids([x for x in items if x.get("alias")], "alias")
+    return items
 
 
 def _unique_ids(items: list[dict[str, Any]], key: str) -> list[dict[str, Any]]:
@@ -170,7 +178,9 @@ HOUSE_SCHEMA = vol.Schema(
         vol.Optional("critical", default=list): vol.All([CRITICAL_SCHEMA], vol.Length(max=64), lambda v: _unique_ids(v, "entity_id")),
         vol.Optional("own_critical", default=list): vol.All([OWN_CRITICAL_SCHEMA], vol.Length(max=32), lambda v: _unique_ids(v, "id")),
         vol.Optional("dismissed", default=list): vol.All([cv.entity_id], vol.Length(max=200)),
-        vol.Optional("status", default=list): vol.All([STATUS_SCHEMA], vol.Length(max=32), lambda v: _unique_ids(v, "id")),
+        vol.Optional("status", default=list): vol.All(
+            [STATUS_SCHEMA], vol.Length(max=32), lambda v: _unique_ids(v, "id"), _unique_aliases
+        ),
         vol.Optional("sounds", default=list): vol.All([SOUND_SCHEMA], vol.Length(max=50), lambda v: _unique_ids(v, "id")),
     }
 )
@@ -513,15 +523,21 @@ class House:
 
     # -- the action and tests ------------------------------------------------------
 
+    def _status_named(self, name: str) -> dict[str, Any] | None:
+        """A status screen by its name in automations (alias) or its id."""
+        return next((s for s in self.data["status"] if s.get("alias") == name), None) or next(
+            (s for s in self.data["status"] if s["id"] == name), None
+        )
+
     @callback
     def show_status(self, status_id: str) -> None:
         """panelos.show_status: a status screen with the "action" trigger comes on."""
-        status = next((s for s in self.data["status"] if s["id"] == status_id), None)
+        status = self._status_named(status_id)
         if status is None:
             raise vol.Invalid(f"No status screen {status_id}")
         if status["trigger"]["kind"] != "service":
             raise vol.Invalid(f"The status screen {status_id} is not started by an action")
-        self._manual[status_id] = self._now()
+        self._manual[status["id"]] = self._now()
         self.evaluate()
 
     @callback
@@ -542,7 +558,8 @@ class House:
 
     @callback
     def clear_status(self, status_id: str) -> None:
-        self._manual.pop(status_id, None)
+        status = self._status_named(status_id)
+        self._manual.pop(status["id"] if status else status_id, None)
         self._after.pop(status_id, None)
         self.evaluate()
 

@@ -10,7 +10,10 @@
 // status screens are shared by every panel. Data and changes go over the
 // websocket commands in page.py (panelos/page/*).
 
-const PICTURE_EVERY_MS = 2500;
+// the live preview: the next picture is asked for this long after the last one arrived (the panel's own
+// pace sets the rate: about 5-10 a second); slower while the browser tab is hidden
+const PICTURE_EVERY_MS = 60;
+const PICTURE_IDLE_MS = 1500;
 const PICTURE_AFTER_CHANGE_MS = 700;
 const ALL_PICTURES_EVERY_MS = 10000;
 const SYNC_FALLBACK_MS = 3000;
@@ -134,6 +137,11 @@ const WIDGETS = {
   7: { name: "Music", icon: "music", min: [1, 1], def: [4, 1], opts: 0, bits: [] },
 };
 const CLOCK_STYLES = ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Split-flap", "In words"];
+// The screensaver's clock faces (the panel's ClockFace styles 0..7).
+// The letter weights the panel draws (clocks, widgets, the screensaver): one slider over these four
+// everywhere, live on the panel while it moves.
+const WEIGHTS = [[300, "Light"], [400, "Regular"], [600, "Semibold"], [800, "Bold"]];
+const SAVER_FACES = ["Big clock", "Huge digits", "Round", "Square", "Minimal", "Numerals", "Wandering", "Split-flap"];
 // The panel's own layout when a weather page has none (as the panel draws it).
 const DEFAULT_ITEMS = [
   { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, opts: 1 },
@@ -141,6 +149,9 @@ const DEFAULT_ITEMS = [
   { kind: 7, col: 0, row: 3, w: 4, h: 1, style: 0, opts: 0 },
 ];
 const ACCENTS = ["#FF4A1C", "#F5F3EE", "#FFB020", "#3CCB7F", "#2E9BFF", "#B06CFF", "#FF5C9A"];
+// Timers: the panel's own colour for the 1st … 6th timer, and the colours to choose from.
+const TIMER_TINTS = ["#ff5a36", "#ffb21e", "#3d9bff", "#2fd27a", "#c86bfa", "#ff4fa0"];
+const TIMER_PALETTE = ["#ff5a36", "#FF4A1C", "#ffb21e", "#ffd319", "#2fd27a", "#01ffc3", "#00e5ff", "#3d9bff", "#8a5cff", "#c86bfa", "#ff4fa0", "#F5F3EE"];
 
 // Status screen kinds (the panel has its own texts and pictures for each).
 const STATUS_CATS = [
@@ -176,9 +187,9 @@ const DND_ITEMS = [
   { id: "calls", name: "Calls and announcements" },
 ];
 const DND_DEFAULT_ALLOW = { alarms: true, timers: true, status: true, ring: true, voice: true, calls: true };
-const DEFAULT_SCREENSAVER = { when: "dark", lux: 3, from: "22:00", to: "06:00", light_entity: "" };
+const DEFAULT_SCREENSAVER = { when: "dark", lux: 3, from: "22:00", to: "06:00", light_entity: "", face: 1, seconds: true, date: true, weather: true, next: true, weight: 600, width: 100, speed: 20, colour: "" };
 const DEFAULT_DND = { mode: "off", from: "22:00", to: "07:00", allow: DND_DEFAULT_ALLOW };
-const DEFAULT_POPUPS = { kind: "strip", sound: true, seconds: 10 };
+const DEFAULT_POPUPS = { kind: "card", sound: true, seconds: 10 };
 
 const SECTIONS = [
   { id: "overview", name: "Overview", icon: "monitor-dashboard" },
@@ -214,8 +225,22 @@ const SENSOR_ICONS = { temperature: "thermometer", humidity: "water-percent", il
 
 // ---------------------------------------------------------------- DOM helpers
 
+// Pictures shown once stay decoded in memory, and a new <img> of one is drawn with it at once: a page
+// drawn again shows its pictures without a blank frame.
+const KEPT_PICTURES = new Map();
+
 function h(tag, attrs, ...children) {
   const node = document.createElement(tag);
+  if (tag === "img") {
+    node.decoding = "sync";
+    const src = attrs?.src;
+    // (the live screen pictures are blob: and data: URLs, new each time: not kept)
+    if (src && !/^(data|blob):/.test(src) && !KEPT_PICTURES.has(src) && KEPT_PICTURES.size < 400) {
+      const keep = new Image();
+      keep.src = src;
+      KEPT_PICTURES.set(src, keep);
+    }
+  }
   if (attrs) {
     for (const [k, v] of Object.entries(attrs)) {
       if (v == null || v === false) continue;
@@ -267,6 +292,10 @@ const mb = (bytes) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` :
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // ---------------------------------------------------------------- look pictures
+// Sheets that background updates leave alone (lists under the finger); and the picker's page of rows.
+const STILL_SHEETS = new Set(["pick", "sound"]);
+const PICK_PAGE = 80;
+
 // Small drawings of the panel's looks (not screenshots): enough to tell them
 // apart; the live preview shows the real thing.
 
@@ -356,7 +385,8 @@ const ART = {
     () => { const [g, d] = grad([[0, "#d05b8e"], [1, "#3f6bc5"]]); const [g2, d2] = grad([[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,.75)"]]); return svgWrap(`${d}${d2}<rect width="120" height="120" fill="url(#${g})"/><rect y="50" width="120" height="70" fill="url(#${g2})"/>${bars(14, 88, [64, 40], "#fff", 9, 4)}`); },
     () => svgWrap(`<rect x="8" y="8" width="104" height="104" rx="6" fill="#4a3020"/><circle cx="54" cy="60" r="40" fill="#141414"/><circle cx="54" cy="60" r="28" fill="none" stroke="#2a2a2a"/><circle cx="54" cy="60" r="11" fill="#e8743b"/><circle cx="54" cy="60" r="1.6" fill="#141414"/><path d="M100 20 L98 70 L74 84" stroke="#c9c9c9" stroke-width="3" fill="none" stroke-linecap="round"/>`, "#2a1c12"),
     () => svgWrap(`<rect x="12" y="28" width="96" height="64" rx="6" fill="#e8e2d4"/><rect x="26" y="42" width="68" height="26" rx="4" fill="#3a3a3a"/><circle cx="42" cy="55" r="9" fill="#f5f3ee"/><circle cx="78" cy="55" r="9" fill="#f5f3ee"/><circle cx="42" cy="55" r="3" fill="#3a3a3a"/><circle cx="78" cy="55" r="3" fill="#3a3a3a"/><path d="M30 92 L36 80 H84 L90 92Z" fill="#d6cfbf"/>`, "#1d1e21"),
-    () => svgWrap(`${bars(14, 20, [70, 44], "#f5f3ee", 9, 4)}<rect x="8" y="64" width="104" height="70" rx="6" fill="#e8e2d4"/><rect x="24" y="78" width="72" height="28" rx="4" fill="#3a3a3a"/><circle cx="42" cy="92" r="9" fill="#f5f3ee"/><circle cx="78" cy="92" r="9" fill="#f5f3ee"/>`, "#1d1e21"),
+    // the half cassette as the panel draws it: a big cassette (label, one reel) cut by the dark player panel on the right
+    () => { const [g, d] = grad([[0, "#b0662e"], [1, "#5a2410"]]); return svgWrap(`${d}<rect width="120" height="120" fill="url(#${g})"/><rect x="5" y="14" width="86" height="98" rx="6" fill="#1f1f22" stroke="#4a4b50" stroke-width="1.2"/><rect x="11" y="19" width="76" height="31" rx="3" fill="#efe7d6"/><circle cx="21" cy="30" r="6" fill="#ff4a1c"/><rect x="31" y="25" width="38" height="5" rx="2.5" fill="#2a2a2e"/><rect x="31" y="34" width="26" height="3" rx="1.5" fill="#7a7468"/><rect x="11" y="41" width="76" height="3" fill="#ff4a1c"/><rect x="11" y="46" width="76" height="1.6" fill="#ff4a1c"/><circle cx="45" cy="78" r="27" fill="#5a3a2a"/><circle cx="45" cy="78" r="12" fill="#f5f3ee"/><circle cx="45" cy="78" r="5" fill="#2a2a2e"/><rect x="84" y="0" width="36" height="120" fill="#202124"/><rect x="90" y="9" width="26" height="7" rx="3.5" fill="#3a3b40"/><rect x="93" y="26" width="20" height="5" rx="2" fill="#f5f3ee"/><circle cx="103" cy="50" r="10" fill="#ff4a1c"/><rect x="100" y="45.5" width="2.2" height="9" fill="#fff"/><rect x="104" y="45.5" width="2.2" height="9" fill="#fff"/><path d="M92 68 v6 l-4 -3z M114 68 v6 l4 -3z" fill="#e8e8ea"/><rect x="90" y="96" width="24" height="2" rx="1" fill="#55565c"/><rect x="90" y="96" width="14" height="2" rx="1" fill="#f5f3ee"/>`, "#1d1e21"); },
   ],
   timers: [
     () => svgWrap(`<circle cx="60" cy="60" r="38" fill="none" stroke="#2a2c30" stroke-width="8"/><circle cx="60" cy="60" r="38" fill="none" stroke="#ff4a1c" stroke-width="8" stroke-dasharray="160 240" transform="rotate(-90 60 60)" stroke-linecap="round"/>${txt(60, 68, 22, "#f5f3ee", "5:00")}`, "#101114"),
@@ -413,6 +443,32 @@ function lookArt(kind, variant, page, plain = null) {
   return svgNode((list[variant] || list[0])());
 }
 
+// The looks as the panel itself draws them: pictures taken on a panel with demo content (looks/<name>-<dark|light>.webp,
+// 224 px), and per browser the panel's own screen whenever it showed a look (newest first, see _captureLook).
+const LIVE_LOOKS_KEY = "panelos-live-looks";
+const LIVE_LOOKS_MAX = 120;
+function readLiveLooks() {
+  try {
+    const v = JSON.parse(window.localStorage.getItem(LIVE_LOOKS_KEY) || "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch (_e) {
+    return {};
+  }
+}
+function saveLiveLooks(all) {
+  const keys = Object.keys(all).sort((a, b) => all[b].t - all[a].t);
+  for (const k of keys.slice(LIVE_LOOKS_MAX)) delete all[k];
+  try {
+    window.localStorage.setItem(LIVE_LOOKS_KEY, JSON.stringify(all));
+  } catch (_e) {
+    // full or blocked: the pictures stay for this visit only
+  }
+}
+// The picture name of a page's look.
+function lookName(kind, variant, page) {
+  return kind === "home" ? `bg-${bgIndex(page)}` : `${kind}-${variant || 0}`;
+}
+
 // The BACKGROUNDS index of a Custom page (options.theme / options.scene).
 function bgIndex(page) {
   const o = (page && page.options) || {};
@@ -467,6 +523,7 @@ button { cursor: pointer; }
 /* shell */
 .app { display: grid; height: 100%; grid-template-columns: 248px minmax(0, 1fr) 392px; grid-template-rows: minmax(0, 1fr); grid-template-areas: "nav main pv"; position: relative; }
 .app.no-preview { grid-template-columns: 248px minmax(0, 1fr); grid-template-areas: "nav main"; }
+:host([pvbig]) .app:not(.no-preview) { grid-template-columns: 248px minmax(0, 1fr) 566px; }
 .nav { grid-area: nav; background: var(--nav); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .top { grid-area: top; display: none; background: var(--ground); border-bottom: 1px solid var(--line); z-index: 5; min-width: 0; }
 .main { grid-area: main; overflow-y: auto; min-width: 0; min-height: 0; overscroll-behavior: contain; }
@@ -566,6 +623,9 @@ button { cursor: pointer; }
 /* bubbles are placed by _placePops() next to their button, in window coordinates, never sized by a parent */
 .row > .control { flex: 0 1 auto; display: flex; align-items: center; gap: 10px; min-width: 0; justify-content: flex-end; flex-wrap: wrap; }
 .row.stack { flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 0 16px; }
+/* rows with long texts (notifications): icon, text and button line up at the top, every row alike */
+.row.atop { align-items: flex-start; }
+.row.atop > .control { padding-top: 1px; flex: none; }
 .row.stack > .control { justify-content: flex-start; width: 100%; }
 :host([size=narrow]) .row:not(.stack):not(.keep) { flex-wrap: wrap; gap: 8px 16px; }
 :host([size=narrow]) .row:not(.stack):not(.keep) > .control { margin-left: auto; }
@@ -654,6 +714,7 @@ button.chip:hover { border-color: var(--signal-line); }
 .look.on .pic { box-shadow: 0 0 0 3px var(--signal); }
 .look.on > span { color: var(--text); font-weight: 600; }
 .look:disabled { opacity: .45; cursor: default; }
+.lookimg { width: 100%; height: 100%; object-fit: cover; display: block; }
 .look .chk { position: absolute; right: 7px; top: 7px; width: 24px; height: 24px; border-radius: 12px; background: var(--signal); color: #101114; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
 .look .chk .mdi { --mdc-icon-size: 16px; }
 .art, .art svg { width: 100%; height: 100%; display: block; }
@@ -737,7 +798,10 @@ button.chip:hover { border-color: var(--signal-line); }
 /* weather page layout editor */
 .editor-wrap { display: flex; justify-content: center; padding: 6px 0 14px; }
 .hcanvas { position: relative; border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--line); touch-action: none; user-select: none; -webkit-user-select: none; flex: none; }
-.hcanvas > .art { position: absolute; inset: 0; }
+.hcanvas > .art { position: absolute; inset: 0; width: 100%; height: 100%; }
+.hcanvas.live .wbox { background: transparent; backdrop-filter: none; outline-style: dashed; }
+.hcanvas.live .wbox > .mdi, .hcanvas.live .wbox > span { opacity: 0; }
+.hcanvas.live .wbox.sel { outline: 2.5px solid var(--signal); }
 .hcanvas .gridline { position: absolute; pointer-events: none; border-color: rgba(255,255,255,.45); border-style: dashed; border-width: 0; }
 .hcanvas.light .gridline { border-color: rgba(16,17,20,.3); }
 .hcanvas.light .wbox { background: rgba(16,17,20,.74); }
@@ -747,6 +811,11 @@ button.chip:hover { border-color: var(--signal-line); }
 .wbox:hover { outline-color: #fff; }
 .wbox.sel { outline: 2.5px solid var(--signal); box-shadow: 0 0 0 4px rgba(255,74,28,.28); z-index: 4; }
 .wbox.bad { outline-color: #ff2a2a; background: rgba(255,0,0,.25); }
+.wbox.over { outline-style: dashed; outline-color: #FFB020; background: rgba(16,17,20,.30); }
+.wbox.over.sel { outline-color: var(--signal); }
+.sw.tslot { display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: rgba(0,0,0,.72); }
+.warnline { display: flex; gap: 8px; align-items: flex-start; margin: 0 0 14px; padding: 10px 12px; border-radius: 12px; background: rgba(255,176,32,.14); color: var(--text); font-size: 13px; line-height: 1.35; }
+.warnline ha-icon { flex: none; --mdc-icon-size: 18px; color: #c27a00; }
 .wbox .rs { position: absolute; right: 0; bottom: 0; width: 30px; height: 30px; cursor: nwse-resize; touch-action: none; }
 .wbox .rs::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 14px; height: 14px; border-right: 3px solid #fff; border-bottom: 3px solid #fff; border-bottom-right-radius: 6px; }
 .wbox.sel .rs::after { border-color: var(--signal); }
@@ -878,6 +947,14 @@ button.chip:hover { border-color: var(--signal-line); }
 .res .size { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 64px; text-align: right; }
 /* sounds */
 .spin { animation: spin 1s linear infinite; }
+/* loading: the PanelOS start-up keying, three dots lighting in turn */
+.pload { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 36px 0 30px; color: var(--muted); font-size: 13px; }
+.pload .d { display: flex; gap: 9px; }
+.pload .d i { width: 10px; height: 10px; border-radius: 50%; background: var(--signal); opacity: .22; animation: pdot 1.2s ease-in-out infinite; }
+.pload .d i:nth-child(2) { animation-delay: .2s; }
+.pload .d i:nth-child(3) { animation-delay: .4s; }
+@keyframes pdot { 0%, 60%, 100% { opacity: .22; transform: scale(.85); } 30% { opacity: 1; transform: scale(1); } }
+.picker-list .more { padding: 12px 14px; color: var(--muted); font-size: 13px; text-align: center; border-top: 1px solid var(--line); }
 .sndctl { display: flex; align-items: center; gap: 8px; min-width: 0; justify-content: flex-end; }
 .sndpick { border: 1px solid transparent; background: var(--raised); border-radius: 12px; padding: 7px 8px 7px 14px; font-size: 14px; color: var(--text); display: inline-flex; align-items: center; gap: 8px; text-align: left; min-width: 0; max-width: 100%; }
 .sndpick:hover { border-color: var(--signal-line); }
@@ -951,6 +1028,8 @@ class PanelOSPage extends HTMLElement {
     this._sync = {};
     this._pics = {};
     this._pic = { timer: null, busy: false, due: 0, allAt: 0 };
+    this._liveLooks = readLiveLooks();
+    this._lookChangedAt = 0;
     this._menu = null;
     this._pending = false;
     this._dragging = false;
@@ -990,7 +1069,10 @@ class PanelOSPage extends HTMLElement {
 
   set hass(hass) {
     const first = !this._hass;
+    const old = this._hass;
     this._hass = hass;
+    // a renamed or moved panel (or a new area) shows its new name at once
+    if (!first && (hass?.devices !== old?.devices || hass?.areas !== old?.areas)) this._requestRender();
     const dark = Boolean(hass?.themes?.darkMode);
     if (dark !== this.hasAttribute("dark")) {
       this.toggleAttribute("dark", dark);
@@ -1048,11 +1130,21 @@ class PanelOSPage extends HTMLElement {
       this._unsub.then((unsub) => unsub()).catch(() => {});
       this._unsub = null;
     }
+    if (this._notesUnsub) {
+      this._notesUnsub.then((unsub) => unsub()).catch(() => {});
+      this._notesUnsub = null;
+    }
   }
 
   _fit() {
     const w = this.clientWidth || window.innerWidth;
     const size = w >= 1160 ? "wide" : w >= 861 ? "medium" : "narrow";
+    // a wide window has room for a half again bigger live picture
+    const big = w >= 1480;
+    if (big !== this.hasAttribute("pvbig")) {
+      this.toggleAttribute("pvbig", big);
+      if (this.getAttribute("size") === size) this._render();
+    }
     if (this.getAttribute("size") === size) {
       if (this._lastH !== this.clientHeight) {
         this._lastH = this.clientHeight;
@@ -1069,6 +1161,40 @@ class PanelOSPage extends HTMLElement {
     this._unsub = this._hass.connection.subscribeMessage((data) => this._receive(data), { type: "panelos/page/subscribe" });
     this._unsub.catch((err) => this._toast(`PanelOS: ${err.message || err}`, null, true));
     this._loadRegistries();
+    // Home Assistant's notifications: the panels show the new ones; the page lists what is there now
+    this._notes = {};
+    this._notesUnsub = this._hass.connection.subscribeMessage((msg) => {
+      if (msg.type === "current") this._notes = { ...(msg.notifications || {}) };
+      else if (msg.type === "removed") for (const id of Object.keys(msg.notifications || {})) delete this._notes[id];
+      else Object.assign(this._notes, msg.notifications || {});
+      this._requestRender();
+    }, { type: "persistent_notification/subscribe" });
+    this._notesUnsub.catch(() => { /* an older Home Assistant: no list */ });
+  }
+
+  // The notifications now, newest first.
+  _noteList() {
+    return Object.values(this._notes || {}).sort((a, b) => String(b.created_at || "").localeCompare(String(a.created_at || "")));
+  }
+
+  // Each notification: its title (or the start of its text), the text, when it came, and a Dismiss button.
+  _notesCard(p) {
+    const list = this._noteList();
+    const ago = (t) => {
+      const m = Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 60000));
+      return !t ? "" : m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m / 60)} h ago` : `${Math.round(m / 1440)} d ago`;
+    };
+    const strip = (s) => String(s || "").replace(/[*_`#>]/g, "").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").trim();
+    return this._card("Notifications", { info: `Home Assistant's notifications. A new one shows on ${this._pname(p)} as it comes (Display → New notifications); here are the ones there now.` },
+      list.length ? h("div", { class: "below" }, list.map((n, k) => {
+        const text = strip(n.message);
+        // with a title: the title and the text under it; without one: the text itself
+        const title = strip(n.title) || text || "Notification";
+        const row = this._row(title, this._btn("Dismiss", () => this._hass.callService("persistent_notification", "dismiss", { notification_id: n.notification_id }), { cls: "small ghost" }),
+          { lead: h("span", { class: "lead" }, icon("bell-outline")), sub: strip(n.title) && text ? [text, h("br"), ago(n.created_at)] : ago(n.created_at), keep: true, cls: "atop" });
+        if (k === 0) row.classList.add("first");
+        return row;
+      })) : h("div", { class: "empty" }, "No notifications."));
   }
 
   async _loadRegistries() {
@@ -1092,6 +1218,14 @@ class PanelOSPage extends HTMLElement {
 
   _receive(data) {
     const first = !this._data;
+    // While a change is on its way, an update sent before it (with the older settings) does not undo it
+    // on the page: the local settings stay until every change has its answer.
+    const flying = this._flying || {};
+    for (const np of data.panels || []) {
+      const old = flying[np.entry_id] > 0 && this._panelById(np.entry_id);
+      if (old) np.settings = old.settings;
+    }
+    if (flying.house > 0 && this._data?.house && data.house) data.house = { ...this._data.house, active: data.house.active };
     this._data = data;
     for (const [id, s] of Object.entries(this._sync)) {
       if (s.state === "wait") this._syncDone(id);
@@ -1235,7 +1369,23 @@ class PanelOSPage extends HTMLElement {
     this._ui.info = null;
     this._ui.sel = null;
     if (before.view !== now.view || before.panel !== now.panel || before.page !== now.page) this._stopSound();
-    if (this._ui.sheet && !this._ui.sheet.keep) this._ui.sheet = null;
+    // a page shown while its settings were open: the panel goes back to its start page on leaving them
+    if (this._pageLive && (now.view !== "page" || now.panel !== this._pageLive.entry)) {
+      const shown = this._panelById(this._pageLive.entry);
+      const failed = this._pageLive.failed;
+      this._pageLive = null;
+      if (shown?.connected && !failed) this._hass.callWS({ type: "panelos/page/command", entry_id: shown.entry_id, key: "page", value: 0 }).catch(() => {});
+    }
+    // the screensaver shown while its settings were changed: the panel comes back on leaving them
+    if (this._saverShown && (now.view !== "display" || now.panel !== this._saverShown)) {
+      const shown = this._panelById(this._saverShown);
+      this._saverShown = null;
+      if (shown?.connected) this._command(shown, "screen", true);
+    }
+    if (this._ui.sheet && !this._ui.sheet.keep) {
+      this._ui.sheet = null;
+      this._discardUntouched();
+    }
     this._render();
     if (before.view !== now.view || before.panel !== now.panel || before.page !== now.page) {
       const main = this.shadowRoot.querySelector(".main");
@@ -1322,9 +1472,13 @@ class PanelOSPage extends HTMLElement {
     const before = clone(p.settings);
     if (optimistic) {
       optimistic(p.settings);
-      this._render();
+      // (not under a finger that is still dragging a slider: drawn once it lets go)
+      if (this._interacting()) this._pending = true;
+      else this._render();
     }
     this._busy([p.entry_id]);
+    const fly = (this._flying = this._flying || {});
+    fly[p.entry_id] = (fly[p.entry_id] || 0) + 1;
     try {
       await this._hass.callWS({ type: "panelos/page/options", entry_id: p.entry_id, options: changes });
       this._settle([p.entry_id], true);
@@ -1337,6 +1491,8 @@ class PanelOSPage extends HTMLElement {
       this._toast(err.message || String(err), null, true);
       this._render();
       return false;
+    } finally {
+      fly[p.entry_id] -= 1;
     }
   }
 
@@ -1357,12 +1513,14 @@ class PanelOSPage extends HTMLElement {
   }
 
   _setPage(p, index, patch, opts) {
+    this._lookChangedAt = Date.now();
     const pages = clone(this._pages(p));
     pages[index] = { ...pages[index], ...patch };
     return this._savePages(p, pages, opts);
   }
 
   _setPageOption(p, index, key, value, opts) {
+    this._lookChangedAt = Date.now();
     const pages = clone(this._pages(p));
     const options = { ...(pages[index].options || {}) };
     if (value === undefined) delete options[key];
@@ -1380,6 +1538,7 @@ class PanelOSPage extends HTMLElement {
   }
 
   async _saveHouse(mutate, { toast = null, undo = null } = {}) {
+    if (this._fresh && !this._fresh.adding) this._fresh.touched = true;
     const house = this._house();
     mutate(house);
     const before = this._data.house;
@@ -1388,6 +1547,8 @@ class PanelOSPage extends HTMLElement {
     this._requestRender();
     const ids = this._panels.map((p) => p.entry_id);
     this._busy(ids);
+    const fly = (this._flying = this._flying || {});
+    fly.house = (fly.house || 0) + 1;
     try {
       await this._hass.callWS({ type: "panelos/page/house", house });
       this._settle(ids, true);
@@ -1399,6 +1560,8 @@ class PanelOSPage extends HTMLElement {
       this._toast(err.message || String(err), null, true);
       this._render();
       return false;
+    } finally {
+      fly.house -= 1;
     }
   }
 
@@ -1424,6 +1587,30 @@ class PanelOSPage extends HTMLElement {
       this._render();
       return false;
     }
+  }
+
+  // While a page's settings are open the panel shows that page (a hidden page cannot be shown): true
+  // when it does. Asked once per page; the panel goes back to its start page when they are left.
+  _livePage(p, i) {
+    const pages = this._pages(p);
+    if (!p?.connected || !pages[i] || (i > 0 && pages[i].hidden)) return false;
+    const at = pages.slice(0, i).filter((x, k) => k === 0 || !x.hidden).length;
+    const key = `${p.entry_id}:${at}`;
+    if (this._pageLive?.key !== key) {
+      this._pageLive = { key, entry: p.entry_id, i, since: Date.now() };
+      this._hass.callWS({ type: "panelos/page/command", entry_id: p.entry_id, key: "page", value: at })
+        .then(() => this._schedulePicture(400), () => { this._pageLive = { key, entry: p.entry_id, failed: true }; });
+    }
+    return !this._pageLive.failed;
+  }
+
+  // The panel shows its screensaver now (while its settings are being changed); it comes back when
+  // the Display page is left.
+  _showSaver(p) {
+    if (!p?.connected) return;
+    if (this._saverShown !== p.entry_id) this._lookChangedAt = Date.now();
+    this._saverShown = p.entry_id;
+    if (p.states?.screen !== false) this._command(p, "screen", false);
   }
 
   async _command(p, key, value) {
@@ -1468,7 +1655,7 @@ class PanelOSPage extends HTMLElement {
     const p = this._cur();
     const targets = all ? this._panels.filter((x) => x.connected) : p && p.connected ? [p] : [];
     if (!targets.length || (all && Date.now() - this._pic.allAt < ALL_PICTURES_EVERY_MS - 100)) {
-      this._schedulePicture(all ? ALL_PICTURES_EVERY_MS - (Date.now() - this._pic.allAt) : PICTURE_EVERY_MS);
+      this._schedulePicture(all ? ALL_PICTURES_EVERY_MS - (Date.now() - this._pic.allAt) : PICTURE_IDLE_MS);
       return;
     }
     this._pic.busy = true;
@@ -1485,7 +1672,7 @@ class PanelOSPage extends HTMLElement {
     try {
       const result = await this._hass.callWS({ type: "panelos/page/screen", entry_id: p.entry_id });
       const bytes = Uint8Array.from(atob(result.png), (c) => c.charCodeAt(0));
-      const url = URL.createObjectURL(new Blob([bytes], { type: "image/png" }));
+      const url = URL.createObjectURL(new Blob([bytes], { type: result.type || "image/png" }));
       const img = new Image();
       await new Promise((resolve) => {
         img.onload = img.onerror = resolve;
@@ -1494,12 +1681,71 @@ class PanelOSPage extends HTMLElement {
       const old = this._pics[p.entry_id];
       const shape = old && (old.w !== img.naturalWidth || old.h !== img.naturalHeight);
       this._pics[p.entry_id] = { url, w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
+      this._captureLook(p, img);
       if (old) setTimeout(() => URL.revokeObjectURL(old.url), 2000);
       if (!old || shape) this._requestRender();
       else this._showPictures(p.entry_id);
     } catch (_err) {
       // keeps the last picture; the next try comes on schedule
     }
+  }
+
+  // The panel's screen as the picture of the look it shows: the open page's look, or the screensaver's clock face
+  // while the screensaver is shown for its settings. Not right after a change (the panel needs a moment) and at most
+  // every 20 s per look.
+  _captureLook(p, img) {
+    const now = Date.now();
+    if (now - this._lookChangedAt < 2500 || !img.naturalWidth) return;
+    let name = null;
+    if (this._saverShown === p.entry_id) {
+      if (p.states?.screen !== false) return;
+      const saver = { ...DEFAULT_SCREENSAVER, ...(this._settings(p).screensaver || {}) };
+      name = `saver-${Number.isInteger(saver.face) ? saver.face : 1}`;
+    } else {
+      const live = this._pageLive;
+      if (!live || live.failed || live.entry !== p.entry_id || live.i == null || now - (live.since || 0) < 2500) return;
+      if (p.states?.screen === false) return;
+      const page = this._pages(p)[live.i];
+      if (!page) return;
+      name = lookName(page.kind, page.variant, page);
+    }
+    const key = `${p.entry_id}|${name}|${this._lookMode(p)}`;
+    const old = this._liveLooks[key];
+    if (old && now - old.t < 20000) return;
+    try {
+      const c = document.createElement("canvas");
+      c.width = c.height = 224;
+      const g = c.getContext("2d");
+      g.imageSmoothingQuality = "high";
+      g.drawImage(img, 0, 0, 224, 224);
+      const u = c.toDataURL("image/webp", 0.82);
+      this._liveLooks[key] = { u, t: now };
+      saveLiveLooks(this._liveLooks);
+      this.shadowRoot.querySelectorAll(`img[data-look="${CSS.escape(key)}"]`).forEach((el) => { el.src = u; });
+    } catch (_err) {
+      // a picture that cannot be read back: the demo picture stays
+    }
+  }
+
+  // Dark or light pictures for this panel: its theme, or with Auto the light in the room (as the panel switches).
+  _lookMode(p) {
+    const t = String(p?.states?.theme || "").toLowerCase();
+    if (t === "dark" || t === "light") return t;
+    const lx = Number(p?.states?.illuminance);
+    return Number.isFinite(lx) && lx > 20 ? "light" : "dark";
+  }
+
+  // A look's picture: the panel's own screen when it showed that look, else the picture taken with demo content,
+  // else the drawing.
+  _lookPic(p, name, fallback) {
+    const mode = this._lookMode(p);
+    const key = `${p?.entry_id}|${name}|${mode}`;
+    const live = this._liveLooks[key];
+    return h("img", {
+      class: "lookimg", alt: "", draggable: "false", "data-look": key, loading: "lazy",
+      src: live ? live.u : `${this._static}/looks/${name}-${mode}.webp`,
+      onerror: (e) => { if (fallback) e.currentTarget.replaceWith(fallback()); },
+    });
   }
 
   _showPictures(id) {
@@ -1612,14 +1858,12 @@ class PanelOSPage extends HTMLElement {
 
     if (!this._data || !this._panels.length) {
       const menu = h("button", { class: "ib", "aria-label": "Home Assistant menu", onclick: () => this._toggleHaMenu() }, icon("menu"));
-      root.replaceChildren(
-        this._styleEl,
+      this._mount(
         h("div", { class: "app no-preview" },
           h("nav", { class: "nav", "aria-label": "PanelOS" }, h("div", { class: "brand", style: brandBg }, h("span", { class: "brand-box" }, h("i", { role: "img", "aria-label": "PanelOS" })))),
           h("header", { class: "top" }, h("div", { class: "top-row" }, this.hasAttribute("ha-narrow") ? menu : null, h("i", { class: "logo", role: "img", "aria-label": "PanelOS" }))),
           h("main", { class: "main" }, h("div", { class: "blank" },
-            !this._data ? "Loading…" : [h("span", null, "No panel is set up yet."), this._btn("Add a panel", () => this._startAdd(), { cls: "primary", icon: "plus" })]))),
-        this._layer, this._toastBox);
+            !this._data ? "Loading…" : [h("span", null, "No panel is set up yet."), this._btn("Add a panel", () => this._startAdd(), { cls: "primary", icon: "plus" })]))));
       this._renderLayer();
       return;
     }
@@ -1669,8 +1913,10 @@ class PanelOSPage extends HTMLElement {
       : null;
 
     const app = h("div", { class: `app${pv ? "" : " no-preview"}` }, nav, top, h("main", { class: "main" }, content), pv, bnav, fab);
-    root.replaceChildren(this._styleEl, app, this._layer, this._toastBox);
-    this._renderLayer();
+    this._mount(app);
+    // a list picker (entities, sounds) is left as it is by background updates: rebuilding it under the
+    // finger made the list jump back to the top and lost taps; it redraws itself when its own content changes
+    if (!this._ui.sheet || !STILL_SHEETS.has(this._ui.sheet.kind)) this._renderLayer();
     const main = root.querySelector(".main");
     if (main && scroll) main.scrollTop = scroll;
     const nsb = root.querySelector(".sheet-body");
@@ -1687,6 +1933,15 @@ class PanelOSPage extends HTMLElement {
       }
     });
     this._afterRender();
+  }
+
+  // The page drawn anew: only its main part is swapped. The sheet layer and the toasts stay where they
+  // are (taken out and put back, an open list inside a sheet would jump back to its top).
+  _mount(app) {
+    const root = this.shadowRoot;
+    const old = [...root.children].find((n) => n.classList.contains("app"));
+    if (old && [this._styleEl, this._layer, this._toastBox].every((n) => n.parentNode === root)) old.replaceWith(app);
+    else root.replaceChildren(this._styleEl, app, this._layer, this._toastBox);
   }
 
   // the header's pattern texture (the brand kit's picture, filling the header)
@@ -1817,13 +2072,28 @@ class PanelOSPage extends HTMLElement {
       icon("chevron-down"));
   }
 
-  _slider(value, min, max, step, onchange, fmt = (v) => String(v), { disabled = false, label = null } = {}) {
+  // The letters' weight: a slider over the four weights (the nearest one to a stored value).
+  _weightSlider(value, onchange) {
+    const at = WEIGHTS.reduce((best, [w], k) => (Math.abs(w - value) < Math.abs(WEIGHTS[best][0] - value) ? k : best), 0);
+    return this._slider(at, 0, WEIGHTS.length - 1, 1, (k) => onchange(WEIGHTS[k][0]), (k) => WEIGHTS[k][1], { label: "Letters", live: true });
+  }
+
+  // live: the value is also sent while the thumb moves (at most every 140 ms), so the panel shows it at once
+  _slider(value, min, max, step, onchange, fmt = (v) => String(v), { disabled = false, label = null, live = false } = {}) {
     const out = h("span", { class: "value" }, fmt(value));
     const fill = (v) => `${((v - min) / (max - min)) * 100}%`;
+    let timer = null;
+    let sent = value;
+    const send = (v) => { if (v !== sent) { sent = v; onchange(v); } };
     const inp = h("input", {
       type: "range", min, max, step, value, disabled, "aria-label": label, style: { "--fill": fill(value) },
-      oninput: (e) => { const v = +e.target.value; out.textContent = fmt(v); e.target.style.setProperty("--fill", fill(v)); },
-      onchange: (e) => onchange(+e.target.value),
+      oninput: (e) => {
+        const v = +e.target.value;
+        out.textContent = fmt(v);
+        e.target.style.setProperty("--fill", fill(v));
+        if (live && !timer) timer = setTimeout(() => { timer = null; send(+inp.value); }, 140);
+      },
+      onchange: (e) => { clearTimeout(timer); timer = null; send(+e.target.value); },
     });
     inp.value = value;
     return h("div", { class: "slider" }, inp, out);
@@ -1837,9 +2107,9 @@ class PanelOSPage extends HTMLElement {
   }
 
   // One entity to choose: its name on a button (long names wrap), the picker on a tap.
-  _entityButton(current, { title, domains, none = null, onPick, p = null, filter = null, back = null }) {
+  _entityButton(current, { title, domains, none = null, onPick, p = null, filter = null, back = null, exclude = null }) {
     const name = current ? this._ename(current) : none || "Choose";
-    return h("button", { class: "btn small pickbtn", "aria-label": `${title}: ${name}`, onclick: () => this._openSheet({ kind: "pick", title, domains, current, none, filter, panel: p?.entry_id, onPick, back }) },
+    return h("button", { class: "btn small pickbtn", "aria-label": `${title}: ${name}`, onclick: () => this._openSheet({ kind: "pick", title, domains, current, none, filter, exclude, panel: p?.entry_id, onPick, back }) },
       current ? icon(this._eicon(current)) : null, h("span", null, name), icon("chevron-down"));
   }
 
@@ -2118,7 +2388,7 @@ class PanelOSPage extends HTMLElement {
 
   _openMenu(anchor, items) {
     this._closeMenu(true);
-    const m = h("div", { class: "menu", role: "menu" }, items.map((it) => (it === "-" ? h("hr") :
+    const m = h("div", { class: "menu", role: "menu" }, items.filter(Boolean).map((it) => (it === "-" ? h("hr") :
       h("button", { role: "menuitem", class: it.danger ? "danger" : "", disabled: Boolean(it.disabled), title: it.title || null, onclick: (e) => { e.stopPropagation(); this._closeMenu(); it.run(); } }, icon(it.icon || "chevron-right"), it.label))));
     this.shadowRoot.append(m);
     const r = anchor.getBoundingClientRect();
@@ -2156,8 +2426,18 @@ class PanelOSPage extends HTMLElement {
   _closeSheet() {
     this._stopSound();
     this._ui.sheet = null;
+    this._discardUntouched();
     this._renderLayer();
     this._flush();
+  }
+
+  // A new critical alert or status screen closed without any change is not kept.
+  _discardUntouched() {
+    const n = this._fresh;
+    this._fresh = null;
+    if (!n || n.touched) return;
+    if (!(this._data?.house?.[n.kind] || []).some((x) => x.id === n.id)) return;
+    this._saveHouse((hs) => { hs[n.kind] = (hs[n.kind] || []).filter((x) => x.id !== n.id); });
   }
 
   _renderLayer() {
@@ -2230,12 +2510,12 @@ class PanelOSPage extends HTMLElement {
   }
 
   _previewBlock(p, { width = null, height = null } = {}) {
-    const colW = width || (this.getAttribute("size") === "wide" ? 348 : 300);
+    const colW = width || (this.getAttribute("size") === "wide" ? (this.hasAttribute("pvbig") ? 522 : 348) : 300);
     const avH = height || Math.max(240, (this.clientHeight || window.innerHeight) - (this.getAttribute("size") === "wide" ? 240 : 330));
     const size = Math.max(180, Math.min(colW, avH));
     return h("div", { class: "pv" },
       h("div", { class: "pv-title" }, h("span", { class: `state${p.connected ? " on" : ""}` }, h("b")), p.connected ? "Live" : "Offline",
-        h("span", { class: "rinfo" }, this._infoBtn("pv", "What the panel's screen shows now, refreshed every few seconds while this page is open. Tap the screen to wake it."))),
+        h("span", { class: "rinfo" }, this._infoBtn("pv", "What the panel's screen shows now, live while this page is open. Tap the screen to wake it."))),
       this._deviceNode(p, size),
       h("div", { class: "pv-acts" },
         this._btn("Wake", () => this._command(p, "screen", true), { cls: "small", icon: "gesture-tap", disabled: !p.connected }),
@@ -2298,6 +2578,7 @@ class PanelOSPage extends HTMLElement {
             ...stat.map((x) => this._row(this._statusName(x), null, { lead: this._stLead(x), sub: this._trigText(x), keep: true })),
           ])
           : h("div", { class: "empty" }, "Nothing is on right now.")),
+      this._notesCard(p),
     ];
   }
 
@@ -2343,7 +2624,7 @@ class PanelOSPage extends HTMLElement {
         const open = () => this._go(`${this._panelPath(p, "pages")}/${i}`);
         return h("div", { class: `prow${page.hidden && i > 0 ? " hidden-page" : ""}`, "data-i": i },
           h("button", { class: `handle${i === 0 ? " fixed" : ""}`, "aria-label": i === 0 ? "The start page stays first" : `Drag to reorder ${t.name}`, onpointerdown: i === 0 ? null : (e) => this._startPageDrag(e, p) }, icon("drag-vertical")),
-          h("div", { class: "pthumb", onclick: open }, lookArt(page.kind, page.variant || 0, page, this._plainMode(p))),
+          h("div", { class: "pthumb", onclick: open }, this._lookPic(p, lookName(page.kind, page.variant, page), () => lookArt(page.kind, page.variant || 0, page, this._plainMode(p)))),
           h("div", { class: "ptxt", onclick: open }, h("b", null, t.name), h("small", null, this._pageSub(p, page, i))),
           i === 0 ? null : this._toggle(!page.hidden, (v) => this._setPage(p, i, { hidden: !v }), { label: `Show ${t.name}` }),
           h("button", { class: "ib", "aria-label": "Page options", "aria-haspopup": "menu", onclick: (e) => { e.stopPropagation(); this._pageMenu(e.currentTarget, p, i); } }, icon("dots-vertical")),
@@ -2387,7 +2668,7 @@ class PanelOSPage extends HTMLElement {
     const saved = out.reduce((sum, r) => sum + (r.size || 0), 0);
     const rows = [this._row("Load only the cards it uses", this._toggle(st.skip_unused, (v) => this._options(p, { skip_unused_resources: v }, { optimistic: (x) => { x.skip_unused = v; } }), { label: "Load only the cards it uses" }), {
       sub: res.length ? `${res.length - out.length} of ${res.length} card resources load${saved ? ` · ${mb(saved)} left out` : ""}` : null,
-      info: "Home Assistant loads every card resource on every dashboard, used or not; on the panel each one costs load time. The panel leaves out the ones the dashboard it shows does not use, worked out again whenever the dashboard changes: a resource counts as used when its name matches a card type or a setting of the dashboard. Switch one on to always load it.",
+      info: "The panel loads only the card resources the dashboard it shows uses, so it opens faster. Switch one on if a card stays empty.",
     })];
     if (res.length) {
       rows.push(h("div", { class: "row stack" }, h("div", { class: "res" }, res.map((r) => {
@@ -2421,7 +2702,8 @@ class PanelOSPage extends HTMLElement {
       this._savePages(p, next);
     };
     this._openMenu(anchor, [
-      { icon: "pencil-outline", label: "Edit", run: () => this._go(`${this._panelPath(p, "pages")}/${i}`) },
+      // (not on the page's own settings: they are open already)
+      this._route().view === "page" ? null : { icon: "pencil-outline", label: "Edit", run: () => this._go(`${this._panelPath(p, "pages")}/${i}`) },
       { icon: "arrow-up", label: "Move up", disabled: i <= 1, run: () => move(-1) },
       { icon: "arrow-down", label: "Move down", disabled: i === 0 || i >= pages.length - 1, run: () => move(1) },
       "-",
@@ -2499,7 +2781,9 @@ class PanelOSPage extends HTMLElement {
       return [];
     }
     const t = PAGE_TYPES[page.kind] || { name: page.kind };
-    const editor = { home: this._editHome, weather: this._editWeather, music: this._editMusic, timers: this._editTimers, thermostat: this._editThermostat, quick: this._editQuick, camera: this._editCamera, calendar: this._editCalendar, todo: this._editTodo, info: this._editInfo }[page.kind];
+    // the panel shows this page while its settings are open (its look and options are seen live)
+    this._livePage(p, i);
+    const editor = { home: this._editHome, weather: this._editWeather, clock: this._editClock, music: this._editMusic, timers: this._editTimers, thermostat: this._editThermostat, quick: this._editQuick, camera: this._editCamera, calendar: this._editCalendar, todo: this._editTodo, info: this._editInfo }[page.kind];
     return [
       h("button", { class: "back", onclick: () => this._go(this._panelPath(p, "pages")) }, icon("chevron-left"), "Pages"),
       this._hero(t.name, [h("span", null, this._pname(p)), h("span", null, `Page ${i + 1} of ${pages.length}`), i === 0 ? h("span", { class: "tag" }, "Start page") : page.hidden ? h("span", { class: "tag" }, "Hidden") : null, this._syncLine(p)],
@@ -2519,7 +2803,7 @@ class PanelOSPage extends HTMLElement {
       const pics = this._has(p, "images");
       const items = BACKGROUNDS.map((b, k) => {
         const ok = pics || b.theme === PLAIN_THEME;
-        return { id: k, name: b.name, pic: svgNode(bgArt(k, this._plainMode(p))), disabled: !ok, why: ok ? null : this._reason(p, "images") };
+        return { id: k, name: b.name, pic: this._lookPic(p, `bg-${k}`, () => svgNode(bgArt(k, this._plainMode(p)))), disabled: !ok, why: ok ? null : this._reason(p, "images") };
       });
       return this._card("Background", { info: "The backgrounds follow the real weather and the time of day. Plain is one colour, the panel's own dark or light ground, as its theme is." },
         this._lookPicker(items, cur, (k) => {
@@ -2530,7 +2814,8 @@ class PanelOSPage extends HTMLElement {
           this._setPage(p, i, { options: next });
         }),
         sw ? this._row("Cars", this._toggle(o.cars !== false, (v) => this._setPageOption(p, i, "cars", v), { label: "Cars" })) : null,
-        sw ? this._row("Neon letters", this._toggle(o.neon !== false, (v) => this._setPageOption(p, i, "neon", v), { label: "Neon letters" })) : null,
+        sw && o.cars !== false ? this._row("Traffic", this._slider(Number.isInteger(o.traffic) ? o.traffic : 0, 0, 2, 1, (v) => this._setPageOption(p, i, "traffic", v), (v) => ["Light", "More", "Busy"][v], { label: "Traffic" }),
+          { info: "How often a new car sets off." }) : null,
         // drawn, line and plain backgrounds: light or dark by the panel's theme, or always one of them
         (Number(o.theme) >= 3 && Number(o.theme) !== 8) ? this._row("Light or dark", this._seg([["panel", "Panel setting"], ["light", "Light"], ["dark", "Dark"]], ["light", "dark"].includes(o.light) ? o.light : "panel",
           (v) => this._setPageOption(p, i, "light", v === "panel" ? undefined : v), { label: "Light or dark" }),
@@ -2542,7 +2827,7 @@ class PanelOSPage extends HTMLElement {
     if (looks.length < 2) return null;
     const items = looks.map((name, v) => {
       const sup = this._lookSupported(p, page.kind, v);
-      return { id: v, name, pic: lookArt(page.kind, v, page), disabled: !sup.ok, why: sup.ok ? null : sup.why };
+      return { id: v, name, pic: this._lookPic(p, lookName(page.kind, v, page), () => lookArt(page.kind, v, page)), disabled: !sup.ok, why: sup.ok ? null : sup.why };
     });
     return this._card("Look", {}, this._lookPicker(items, page.variant || 0, (v) => this._setPage(p, i, { variant: v })));
   }
@@ -2586,6 +2871,19 @@ class PanelOSPage extends HTMLElement {
     return [this._card("Options", {}, this._pageEntityRow(p, i, "Weather from", "weather", "The panel's weather"))];
   }
 
+  // The clock page: the same choices as the screensaver's clock (its face is the page's look).
+  _editClock(p, page, i) {
+    const o = { ...(page.options || {}), face: page.variant || 0 };
+    const set = (patch) => {
+      const pages = clone(this._pages(p));
+      const { face, ...rest } = patch;
+      if (face != null) pages[i].variant = face;
+      pages[i].options = { ...(pages[i].options || {}), ...rest };
+      this._savePages(p, pages);
+    };
+    return [this._card("Options", {}, this._saverClock(o, set, null))];
+  }
+
   _editMusic(p, page, i) {
     const o = page.options || {};
     return [this._card("Options", {},
@@ -2612,8 +2910,28 @@ class PanelOSPage extends HTMLElement {
       (page.variant || 0) === 3 ? this._row("Scene", this._seg(SW_SCENES.map((n, k) => [k, n]), Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", v), { label: "Scene" })) : null,
       this._soundRow("Timer sound", o.sound, { def: TIMER_LOOK_SOUND[page.variant || 0] || TIMER_LOOK_SOUND[0], defNote: "This look's own sound", title: "Timer sound", p },
         (v) => this._setPageOption(p, i, "sound", v), { info: "Each look has its own sound; another one, or your own, can be chosen." }),
-      this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null })),
+      this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null }),
+      o.colourful !== false ? this._timerColours(p, i, o) : null),
     fns.includes("alarm") ? this._alarmsCard(p, i) : null];
+  }
+
+  // Each timer's own colour: the 1st, 2nd … 6th timer running at once (then it starts again). Tap one, then a colour.
+  _timerColours(p, i, o) {
+    const cols = Array.from({ length: 6 }, (_, k) => (Array.isArray(o.colours) && o.colours[k]) || TIMER_TINTS[k]);
+    const slot = this._ui.timerSlot ?? null;
+    const pick = (c) => {
+      const next = [...cols];
+      next[slot] = c;
+      this._setPageOption(p, i, "colours", next.every((x, k) => x === TIMER_TINTS[k]) ? undefined : next);
+    };
+    return h("div", null,
+      this._row("Colours", h("div", { class: "swatches", role: "radiogroup", "aria-label": "Timer colours" }, cols.map((c, k) => h("button", {
+        class: `sw tslot${slot === k ? " on" : ""}`, style: { background: c }, "aria-label": `Timer ${k + 1}`, title: `Timer ${k + 1}`,
+        onclick: () => { this._ui.timerSlot = slot === k ? null : k; this._render(); },
+      }, h("span", null, String(k + 1))))), { info: "The 1st, 2nd … 6th timer running at the same time each take their colour; the 7th starts again with the 1st." }),
+      slot != null ? h("div", { class: "swatches below" }, TIMER_PALETTE.map((c) => h("button", {
+        class: `sw${cols[slot].toLowerCase() === c.toLowerCase() ? " on" : ""}`, style: { background: c }, "aria-label": c, onclick: () => pick(c),
+      }))) : null);
   }
 
   // -- alarms (they live on the panel; the page shows what it reports) ----------------------
@@ -2653,7 +2971,45 @@ class PanelOSPage extends HTMLElement {
             this._saveAlarms(p, list, { toast: v ? `Alarm on for ${this._hhmm(a)}` : "Alarm off" });
           }, { label: `${a.label || "Alarm"} ${this._hhmm(a)}` }));
       }))
-        : h("div", { class: "empty" }, "No alarms yet."));
+        : h("div", { class: "empty" }, "No alarms yet."),
+    alarms && alarms.some((a) => String(a.tone || "").startsWith("ma:")) ? this._maPlayerRow(p) : null);
+  }
+
+  // Music alarms play through Music Assistant: it must know the panel's player. The integration adds it
+  // there by itself when an alarm gets music; this row shows the state and can add it by hand.
+  _maPlayerRow(p) {
+    const st = (this._ui.maPlayer = this._ui.maPlayer || {});
+    const cur = st[p.entry_id];
+    if (cur === undefined) {
+      st[p.entry_id] = null;
+      this._hass.callWS({ type: "panelos/page/ma_player", entry_id: p.entry_id })
+        .then((r) => { st[p.entry_id] = r; this._render(); }, (e) => { st[p.entry_id] = { error: e?.message || String(e) }; this._render(); });
+    }
+    const ask = (add) => {
+      const byHand = Boolean(cur?.by_hand);
+      st[p.entry_id] = null;
+      this._render();
+      this._hass.callWS({ type: "panelos/page/ma_player", entry_id: p.entry_id, add })
+        .then((r) => {
+          st[p.entry_id] = { ...r, by_hand: r.by_hand || (byHand && !r.added) };
+          if (add && r.added) this._toast("Added to Music Assistant");
+          this._render();
+        }, (e) => { st[p.entry_id] = { error: e?.message || String(e) }; this._render(); });
+    };
+    const name = cur?.player_name || "the panel's player";
+    const text = cur == null ? "Checking Music Assistant…"
+      : cur.error ? cur.error
+      : !cur.available ? "Music Assistant is not set up in Home Assistant: alarms with music ring their own sound."
+      : cur.added ? "Music Assistant plays on this panel."
+      : cur.by_hand ? `Add it in Music Assistant: Settings → Providers → Home Assistant MediaPlayers, choose “${name}” among its players and save.`
+      : "Music Assistant does not know this panel's player yet.";
+    const acts = !cur || !cur.available || cur.added || cur.error ? null
+      : cur.by_hand ? h("div", { style: { display: "flex", gap: "8px", flexWrap: "nowrap", flex: "none" } },
+        cur.ma_panel ? this._btn("Open Music Assistant", () => { window.history.pushState(null, "", `/${cur.ma_panel}`); window.dispatchEvent(new CustomEvent("location-changed")); }, { cls: "small primary" }) : null,
+        this._btn("Check again", () => ask(false), { cls: "small ghost" }))
+      : this._btn("Add to Music Assistant", () => ask(true), { cls: "small primary" });
+    return h("div", { class: "group" }, this._row("Music for alarms", acts,
+      { cls: "first", sub: text, stack: Boolean(cur?.by_hand), info: "Alarms with music ask Music Assistant to play on the panel. If it cannot, the alarm rings its own sound after 12 seconds." }));
   }
 
   _editThermostat(p, page, i) {
@@ -2747,13 +3103,25 @@ class PanelOSPage extends HTMLElement {
       kind: w.kind, col: w.col, row: w.row, w: w.w, h: w.h,
       style: w.kind === 0 || w.kind === 7 ? w.style || 0 : 0,
       accent: w.accent || "", weight: w.weight || 600, tap: w.tap !== false, opts: w.opts || 0,
+      ...(Number.isInteger(w.bg) && w.bg >= 0 ? { bg: w.bg } : {}),
+      ...(typeof w.neon === "boolean" ? { neon: w.neon } : {}),
     }));
     return this._setPage(p, i, { options: { ...(page.options || {}), items: clean } }, opts);
   }
 
   _fits(items, self, x, y, w, hh) {
     if (x < 0 || y < 0 || x + w > 4 || y + hh > 4) return false;
-    return !items.some((o, k) => k !== self && x < o.col + o.w && o.col < x + w && y < o.row + o.h && o.row < y + hh);
+    return !this._overlaps(items, self, x, y, w, hh).length;
+  }
+
+  // Inside the 4 x 4 grid (widgets may lie on top of each other).
+  _inGrid(x, y, w, hh) {
+    return x >= 0 && y >= 0 && x + w <= 4 && y + hh <= 4;
+  }
+
+  // The other widgets a place covers (indices).
+  _overlaps(items, self, x, y, w, hh) {
+    return items.map((o, k) => (k !== self && x < o.col + o.w && o.col < x + w && y < o.row + o.h && o.row < y + hh ? k : -1)).filter((k) => k >= 0);
   }
 
   _freeSpot(items, w, hh) {
@@ -2764,7 +3132,7 @@ class PanelOSPage extends HTMLElement {
   _contentWidth() {
     const W = this.clientWidth || window.innerWidth;
     const size = this.getAttribute("size");
-    if (size === "wide") return Math.min(820, W - 248 - 392) - 68;
+    if (size === "wide") return Math.min(820, W - 248 - (this.hasAttribute("pvbig") ? 566 : 392)) - 68;
     if (size === "medium") return Math.min(820, W - 336) - 48;
     return W - 32;
   }
@@ -2772,24 +3140,30 @@ class PanelOSPage extends HTMLElement {
   _editHome(p, page, i) {
     const items = this._items(page);
     const size = Math.max(220, Math.min(400, this._contentWidth() - 46));
-    const cell = size / 4;
+    // the canvas is the panel's whole screen (480 × 480); the widget grid sits in it as on the panel:
+    // from (16, 44), cells 112 × 98
+    const g = { gx: (16 * size) / 480, gy: (44 * size) / 480, cw: (112 * size) / 480, ch: (98 * size) / 480 };
     const sel = this._ui.sel;
     const lightGround = BACKGROUNDS[bgIndex(page)].theme === PLAIN_THEME && this._plainMode(p) === "light";
-    const canvas = h("div", { class: `hcanvas${lightGround ? " light" : ""}`, style: { width: `${size}px`, height: `${size}px` } }, svgNode(bgArt(bgIndex(page), this._plainMode(p))));
-    for (let k = 1; k < 4; k++) {
-      canvas.append(h("i", { class: "gridline", style: { left: `${k * cell}px`, top: 0, bottom: 0, borderLeftWidth: "1px" } }));
-      canvas.append(h("i", { class: "gridline", style: { top: `${k * cell}px`, left: 0, right: 0, borderTopWidth: "1px" } }));
+    // the panel shows this page while its settings are open: the live picture is the background, so
+    // what lies where (and on what) is seen as it really is
+    const live = this._livePage(p, i) && Boolean(this._pics[p.entry_id]);
+    const canvas = h("div", { class: `hcanvas${lightGround ? " light" : ""}${live ? " live" : ""}`, style: { width: `${size}px`, height: `${size}px` } },
+      live ? h("img", { class: "art", src: this._pics[p.entry_id].url, "data-pic": p.entry_id, alt: "", draggable: "false" }) : svgNode(bgArt(bgIndex(page), this._plainMode(p))));
+    for (let k = 0; k <= 4; k++) {
+      canvas.append(h("i", { class: "gridline", style: { left: `${g.gx + k * g.cw}px`, top: `${g.gy}px`, height: `${4 * g.ch}px`, borderLeftWidth: "1px" } }));
+      canvas.append(h("i", { class: "gridline", style: { top: `${g.gy + k * g.ch}px`, left: `${g.gx}px`, width: `${4 * g.cw}px`, borderTopWidth: "1px" } }));
     }
     items.forEach((w, k) => {
       const meta = WIDGETS[w.kind] || WIDGETS[0];
       const label = w.kind === 0 ? `${meta.name} · ${CLOCK_STYLES[w.style || 0] || CLOCK_STYLES[0]}` : meta.name;
       const box = h("div", {
-        class: `wbox${k === sel ? " sel" : ""}`, role: "button", tabindex: "0", "aria-label": label,
-        style: { left: `${w.col * cell + 3}px`, top: `${w.row * cell + 3}px`, width: `${w.w * cell - 6}px`, height: `${w.h * cell - 6}px` },
-        onpointerdown: (e) => this._startWidgetDrag(e, p, i, k, cell, "move"),
+        class: `wbox${k === sel ? " sel" : ""}${this._overlaps(items, k, w.col, w.row, w.w, w.h).length ? " over" : ""}`, role: "button", tabindex: "0", "aria-label": label,
+        style: { left: `${g.gx + w.col * g.cw + 3}px`, top: `${g.gy + w.row * g.ch + 3}px`, width: `${w.w * g.cw - 6}px`, height: `${w.h * g.ch - 6}px` },
+        onpointerdown: (e) => this._startWidgetDrag(e, p, i, k, g, "move"),
         onkeydown: (e) => { if (e.key === "Enter") this._openSheet({ kind: "widget", panel: p.entry_id, page: i, item: k }); },
-      }, icon(meta.icon), w.h * cell > 56 || w.w > 1 ? h("span", null, label) : null,
-      h("div", { class: "rs", onpointerdown: (e) => { e.stopPropagation(); this._startWidgetDrag(e, p, i, k, cell, "size"); } }));
+      }, icon(meta.icon), w.h * g.ch > 56 || w.w > 1 ? h("span", null, label) : null,
+      h("div", { class: "rs", onpointerdown: (e) => { e.stopPropagation(); this._startWidgetDrag(e, p, i, k, g, "size"); } }));
       canvas.append(box);
     });
     canvas.addEventListener("pointerdown", (e) => { if (e.target === canvas || e.target.closest(".art")) { if (this._ui.sel != null) { this._ui.sel = null; this._render(); } } });
@@ -2799,7 +3173,7 @@ class PanelOSPage extends HTMLElement {
     const cals = this._ents(["calendar"], { p });
     return [
       this._card("Layout", {
-        info: "Drag a widget to move it and its corner to resize it; tap it for its settings. Widgets snap to the 4 × 4 grid and cannot overlap. The panel shows the new layout at once.",
+        info: "Drag a widget to move it and its corner to resize it; tap it for its settings. Widgets snap to the 4 × 4 grid and may lie on top of each other (the later one on top): check those on the panel. The panel shows the new layout at once.",
         acts: this._btn("Add a widget", () => this._openSheet({ kind: "addWidget", panel: p.entry_id, page: i }), { cls: "small", icon: "plus" }),
       },
       h("div", { class: "wbar" }, sw
@@ -2808,6 +3182,7 @@ class PanelOSPage extends HTMLElement {
           this._btn("Remove", () => this._removeWidget(p, i, sel), { cls: "small ghost", icon: "delete-outline" })]
         : h("span", { class: "note" }, `${plural(items.length, "widget", "widgets")} · grid 4 × 4`)),
       h("div", { class: "editor-wrap" }, canvas),
+      this._overlapNote(items),
       Array.isArray(page.options?.items) ? null : h("p", { class: "note", style: { margin: "0 0 14px" } }, "The panel's own layout. Any change here saves it for this page.")),
       this._card("Data", { info: "Where the widgets of this page get their data. Without a choice here they use the panel's weather and player." },
         this._pageEntityRow(p, i, "Weather from", "weather", "The panel's weather"),
@@ -2820,6 +3195,16 @@ class PanelOSPage extends HTMLElement {
     ];
   }
 
+  // Widgets that lie on each other: a warning to look at them on the panel.
+  _overlapNote(items) {
+    const pairs = [];
+    items.forEach((w, k) => this._overlaps(items, k, w.col, w.row, w.w, w.h).filter((o) => o > k)
+      .forEach((o) => pairs.push(`${(WIDGETS[w.kind] || WIDGETS[0]).name} and ${(WIDGETS[items[o].kind] || WIDGETS[0]).name}`)));
+    if (!pairs.length) return null;
+    return h("div", { class: "warnline", role: "note" }, icon("alert-outline"),
+      h("span", null, `${pairs.join(", ")} lie on each other. Check on the panel that both read well.`));
+  }
+
   _removeWidget(p, i, k) {
     const items = this._items(this._pages(p)[i]);
     const [gone] = items.splice(k, 1);
@@ -2830,7 +3215,7 @@ class PanelOSPage extends HTMLElement {
     });
   }
 
-  _startWidgetDrag(e, p, i, k, cell, mode) {
+  _startWidgetDrag(e, p, i, k, g, mode) {
     e.preventDefault();
     const items = this._items(this._pages(p)[i]);
     const wd = items[k];
@@ -2846,19 +3231,20 @@ class PanelOSPage extends HTMLElement {
     this._dragging = true;
     const place = (ok) => {
       box.classList.toggle("bad", !ok);
-      Object.assign(box.style, { left: `${nx * cell + 3}px`, top: `${ny * cell + 3}px`, width: `${nw * cell - 6}px`, height: `${nh * cell - 6}px` });
+      Object.assign(box.style, { left: `${g.gx + nx * g.cw + 3}px`, top: `${g.gy + ny * g.ch + 3}px`, width: `${nw * g.cw - 6}px`, height: `${nh * g.ch - 6}px` });
     };
     const move = (ev) => {
       const dx = ev.clientX - sx;
       const dy = ev.clientY - sy;
       if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
-      if (mode === "move") { nx = Math.round(wd.col + dx / cell); ny = Math.round(wd.row + dy / cell); }
-      else { nw = Math.max(min[0], Math.round(wd.w + dx / cell)); nh = Math.max(min[1], Math.round(wd.h + dy / cell)); }
+      if (mode === "move") { nx = Math.round(wd.col + dx / g.cw); ny = Math.round(wd.row + dy / g.ch); }
+      else { nw = Math.max(min[0], Math.round(wd.w + dx / g.cw)); nh = Math.max(min[1], Math.round(wd.h + dy / g.ch)); }
       nx = Math.max(0, Math.min(4 - nw, nx));
       ny = Math.max(0, Math.min(4 - nh, ny));
       nw = Math.min(nw, 4 - nx);
       nh = Math.min(nh, 4 - ny);
-      place(this._fits(items, k, nx, ny, nw, nh));
+      place(this._inGrid(nx, ny, nw, nh));
+      box.classList.toggle("over", this._overlaps(items, k, nx, ny, nw, nh).length > 0);
     };
     const up = () => {
       window.removeEventListener("pointermove", move);
@@ -2867,12 +3253,12 @@ class PanelOSPage extends HTMLElement {
       this._dragging = false;
       this._ui.sel = k;
       if (!moved) { this._render(); return; }
-      if (this._fits(items, k, nx, ny, nw, nh) && (nx !== wd.col || ny !== wd.row || nw !== wd.w || nh !== wd.h)) {
+      if (this._inGrid(nx, ny, nw, nh) && (nx !== wd.col || ny !== wd.row || nw !== wd.w || nh !== wd.h)) {
+        const over = this._overlaps(items, k, nx, ny, nw, nh);
         Object.assign(wd, { col: nx, row: ny, w: nw, h: nh });
-        this._saveItems(p, i, items);
+        this._saveItems(p, i, items, over.length ? { toast: `It lies on ${over.map((o) => (WIDGETS[items[o].kind] || WIDGETS[0]).name).join(" and ")}: check on the panel that both read well` } : {});
       } else {
         this._render();
-        if (!this._fits(items, k, nx, ny, nw, nh)) this._toast("It does not fit there");
       }
     };
     window.addEventListener("pointermove", move);
@@ -2881,6 +3267,28 @@ class PanelOSPage extends HTMLElement {
   }
 
   // -- alerts -----------------------------------------------------------------------
+
+  // "Automation" trigger: the screen's name in automations (editable, readable) and the two actions to use,
+  // each with a copy button.
+  _statusActions(r, set) {
+    const name = r.alias || r.id;
+    const show = `action: panelos.show_status\ndata:\n  screen: ${name}`;
+    const clear = `action: panelos.clear_status\ndata:\n  screen: ${name}`;
+    const copy = (text) => this._btn("Copy", () => {
+      navigator.clipboard?.writeText(text).then(() => this._toast("Copied"), () => this._toast("Select the text and copy it", null, true));
+    }, { cls: "small ghost", icon: "content-copy" });
+    const taken = new Set(((this._data.house || {}).status || []).filter((x) => x.id !== r.id).flatMap((x) => [x.alias, x.id]).filter(Boolean));
+    return h("div", { class: "group" },
+      this._row("Name in automations", this._text(r.alias || "", (v) => {
+        const slug = v.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+        if (slug && taken.has(slug)) { this._toast(`Another screen is already called ${slug}`, null, true); return; }
+        set({ alias: slug });
+      }, { max: 40, label: "Name in automations", cls: "short", placeholder: r.id }),
+        { cls: "first", info: "Your automations turn this screen on and off by this name. Letters, numbers and _ only." }),
+      this._row("Show it", copy(show), { sub: show.replace(/\n/g, "  ").replace(/ {2,}/g, " ") , stack: false }),
+      this._row("Close it", copy(clear), { sub: clear.replace(/\n/g, "  ").replace(/ {2,}/g, " ") }),
+      h("p", { class: "note", style: { margin: "6px 0 0" } }, "Add these actions to an automation or a script (Settings → Automations): the first shows this screen on its panels, the second closes it."));
+  }
 
   _statusName(x) {
     return (x.own || x.cat === "custom") && x.headline ? x.headline : (STATUS_CAT[x.cat] || STATUS_CAT.custom).name;
@@ -2988,9 +3396,11 @@ class PanelOSPage extends HTMLElement {
 
   _newStatus(p) {
     const id = `s${Date.now().toString(36).slice(-5)}${Math.random().toString(36).slice(2, 5)}`;
+    this._fresh = { kind: "status", id, adding: true };
     this._saveHouse((hs) => {
       hs.status.push({ id, cat: "custom", trigger: { kind: "entity", entity: "", op: "on", value: "", after: "" }, own: true, headline: "", line: "", picto: "zip-face", colour: "#0b7285", button: true, button_label: "", countdown: 0, panels: [p.entry_id], on: true });
     });
+    this._fresh.adding = false;
     this._openSheet({ kind: "status", id, panel: p.entry_id, pv: p.entry_id, fresh: true });
   }
 
@@ -3027,7 +3437,7 @@ class PanelOSPage extends HTMLElement {
     return [
       this._hero("Voice", [h("span", null, this._pname(p)), this._syncLine(p)]),
       this._card("On the screen", { info: "While you talk to it, the assistant fills the screen in this look; when it is done, the panel goes back to the page it was on." },
-        this._lookPicker(VOICE_LOOKS.map((name, k) => ({ id: k, name, pic: svgNode(ART.voice[k]()) })), st.voice_look || 0, (v) => this._options(p, { voice_look: v }, { optimistic: (s) => { s.voice_look = v; } }))),
+        this._lookPicker(VOICE_LOOKS.map((name, k) => ({ id: k, name, pic: this._lookPic(p, `voice-${k}`, () => svgNode(ART.voice[k]())) })), st.voice_look || 0, (v) => this._options(p, { voice_look: v }, { optimistic: (s) => { s.voice_look = v; } }))),
       this._card("Voice assistant", { info: "The panel's voice satellite is its own ESPHome device in Home Assistant, shown as connected via this panel. Its settings (assistant, wake word, volume, microphone) are its entities." },
         ents.length ? ents.map((e, k) => this._row(short(e.entity_id), control(e), { cls: k === 0 ? "first" : "", stack: e.entity_id.startsWith("select.") }))
           : h("div", { class: "empty" }, "No voice satellite is connected via this panel yet."),
@@ -3048,7 +3458,12 @@ class PanelOSPage extends HTMLElement {
     const opts = p.select_options || {};
     const light = this._has(p, "light");
     const saver = { ...DEFAULT_SCREENSAVER, ...(this._settings(p).screensaver || {}) };
-    const setSaver = (patch) => this._options(p, { screensaver: patch }, { optimistic: (x) => { x.screensaver = { ...saver, ...patch }; } });
+    const setSaver = (patch) => {
+      const done = this._options(p, { screensaver: patch }, { optimistic: (x) => { x.screensaver = { ...saver, ...patch }; } });
+      // the clock's look: the panel shows its screensaver meanwhile, so the picture here shows what is set
+      if (["face", "seconds", "date", "weather", "next", "weight", "width", "speed", "colour"].some((k) => k in patch)) this._showSaver(p);
+      return done;
+    };
     const never = s.screensaver === "Never";
     const luxFilter = (st) => st.attributes?.device_class === "illuminance";
     const whenInfo = {
@@ -3078,7 +3493,8 @@ class PanelOSPage extends HTMLElement {
         (opts.screensaver || []).length ? this._row("Starts after", this._select(opts.screensaver, s.screensaver, (v) => this._command(p, "screensaver", v), { label: "Screensaver starts after" }), { info: "How long nobody has to touch the panel before the screensaver comes." }) : null,
         never ? null : whenRows,
         never || !styles.length ? null : this._row("Style", null, { stack: true }),
-        never || !styles.length ? null : h("div", { class: "chips below" }, styles.map((x) => this._chipToggle(s.screensaver_style === x, x, () => this._command(p, "screensaver_style", x)))),
+        never || !styles.length ? null : h("div", { class: "chips below" }, styles.map((x) => this._chipToggle(s.screensaver_style === x, x, () => this._command(p, "screensaver_style", x).then(() => this._showSaver(p))))),
+        never || (styles.length && s.screensaver_style !== "Clock") ? null : this._saverClock(saver, setSaver, p),
         never || !light || saver.when !== "dark" ? null : this._more(`saver:${p.entry_id}`, this._row("Light from", this._entityButton(saver.light_entity, { title: "Light from", domains: ["sensor"], filter: luxFilter, none: "This panel's sensor", p, onPick: (v) => setSaver({ light_entity: v }) })))),
       this._has(p, "proximity") ? this._card("Waking", {},
         this._row("Wake when someone comes close", this._toggle(s.proximity_wake, (v) => this._command(p, "proximity_wake", v), { label: "Wake when someone comes close" }))) : null,
@@ -3106,7 +3522,7 @@ class PanelOSPage extends HTMLElement {
         this._row("Panel ID", h("span", { class: "muted wrap" }, st.panel_id || "–")),
         this._row("What it can do", null, { stack: true, sub: p.caps_reported ? "As the panel reports it" : "Not reported yet: treated as an NSPanel Pro" }),
         h("div", { class: "chips below" }, this._caps(p).map((c) => h("span", { class: "chip" }, CAP_NAMES[c] || c)))),
-      this._card("Wi-Fi", { info: "When the panel is idle it checks about every half hour whether an access point of the same network is at least 10 dB stronger, and moves to it. It is never tied to one access point." },
+      this._card("Wi-Fi", { info: "When idle, the panel moves to a clearly stronger access point of the same network." },
         this._row("Signal", h("span", { style: { display: "inline-flex", gap: "10px", alignItems: "center" } }, bars, h("span", { class: "muted num" }, typeof rssi === "number" ? `${rssi} dBm` : "–")))),
       this._card("Sensors", { info: "Every value the panel sends is a row in the recorder's database. The panel sends a sensor only when it has changed by at least this much since the value it sent last. Lower: finer history, more writes." },
         this._more(`sens:${p.entry_id}`, Object.entries(limits).map(([key, lim]) => {
@@ -3177,6 +3593,30 @@ class PanelOSPage extends HTMLElement {
   }
 
   // ================================================================ sheets
+
+  // The screensaver's clock: face, parts, letters (weight, width), wandering speed, colour. Shown only for what the
+  // chosen face has.
+  // p: the screensaver's own settings (faces to pick from); null on the clock page (its Look card is the face).
+  _saverClock(saver, setSaver, p) {
+    const face = Number.isInteger(saver.face) ? saver.face : 1;
+    const digits = [0, 1, 6, 7].includes(face);
+    const wt = saver.weight || 600;
+    const width = saver.width || 100;
+    const tog = (key, label) => this._row(label, this._toggle(saver[key] !== false, (v) => setSaver({ [key]: v }), { label }));
+    return h("div", { class: "sec" }, h("h3", null, "Clock"),
+      p ? this._lookPicker(SAVER_FACES.map((n, k) => ({ id: k, name: n, pic: this._lookPic(p, `saver-${k}`, () => svgNode(ART.clock[k]())) })), face, (k) => setSaver({ face: k })) : null,
+      h("div", { class: "group below" },
+        tog("seconds", face === 7 || face === 0 || face === 6 ? "Breathing colon" : face === 1 ? "Seconds line" : "Second hand"),
+        tog("date", "Date"),
+        tog("weather", "Weather"),
+        tog("next", "Next event"),
+        this._row("Letters", this._weightSlider(wt, (v) => setSaver({ weight: v }))),
+        digits ? this._row("Width", this._seg([[85, "Narrow"], [100, "Normal"], [115, "Wide"]], [85, 100, 115].reduce((a, b) => (Math.abs(b - width) < Math.abs(a - width) ? b : a)), (v) => setSaver({ width: v }), { label: "Width" })) : null,
+        face === 6 ? this._row("Speed", this._slider(saver.speed || 20, 5, 60, 5, (v) => setSaver({ speed: v }), (v) => `${v} px/s`, { label: "Speed" })) : null),
+      h("div", { class: "swatches below" },
+        h("button", { class: `sw panel${!saver.colour ? " on" : ""}`, "aria-label": "The panel's colour", title: "The panel's colour", onclick: () => setSaver({ colour: "" }) }),
+        ACCENTS.map((c) => h("button", { class: `sw${saver.colour === c ? " on" : ""}`, style: { background: c }, "aria-label": c, onclick: () => setSaver({ colour: c }) }))));
+  }
 
   _sheet_preview(sh, p) {
     return this._sheetFrame(this._pname(p), h("div", { style: { display: "flex", justifyContent: "center", paddingTop: "4px" } },
@@ -3274,31 +3714,73 @@ class PanelOSPage extends HTMLElement {
     this._go(`${this._panelPath(p, "pages")}/${pages.length - 1}`);
   }
 
-  // Choose an entity: a search field and the list (the panel's area first).
+  // Choose an entity: a search field and the list (the panel's area first). The list is made once per opening
+  // (after the sheet is on screen, with the loading mark meanwhile), drawn in pages of PICK_PAGE rows as it is
+  // scrolled, and filtered without redrawing the sheet, so the search field keeps its text and the list its place.
   _sheet_pick(sh, p) {
-    const list = this._ents(sh.domains, { p, filter: sh.filter || null }).filter((e) => !(sh.exclude || []).includes(e.id));
-    const pickNone = () => {
+    const choose = (id) => {
       const back = sh.back;
       this._ui.sheet = null;
-      sh.onPick("");
+      sh.onPick(id);
       if (back) this._openSheet(back);
       else this._renderLayer();
     };
-    const box = h("div", { class: "picker-list", style: { maxHeight: "none" } },
-      sh.none ? h("button", { class: !sh.current ? "on" : "", onclick: pickNone }, h("span", { class: "lead" }, icon("minus")), h("span", { class: "t" }, h("span", null, sh.none)), !sh.current ? icon("check") : null) : null,
-      list.length ? list.map((e) => h("button", { class: e.id === sh.current ? "on" : "", "data-name": `${e.name} ${e.id}`.toLowerCase(), onclick: () => {
-        const back = sh.back;
-        this._ui.sheet = null;
-        sh.onPick(e.id);
-        if (back) this._openSheet(back);
+    const box = h("div", { class: "picker-list", style: { maxHeight: "none" } });
+    const row = (e) => h("button", { class: e.id === sh.current ? "on" : "", onclick: () => choose(e.id) },
+      h("span", { class: "lead" }, icon(this._eicon(e.id))),
+      h("span", { class: "t" }, h("span", null, e.name), h("small", null, [this._areaName(e.area), e.id].filter(Boolean).join(" · "))),
+      e.id === sh.current ? icon("check") : null);
+    const matches = () => {
+      const q = (sh.q || "").trim().toLowerCase();
+      return q ? sh.items.filter((e) => e.key.includes(q)) : sh.items;
+    };
+    const more = () => {
+      const all = matches();
+      const from = box.querySelectorAll("button[data-row]").length;
+      const next = all.slice(from, from + PICK_PAGE);
+      box.querySelector(".more")?.remove();
+      for (const e of next) {
+        const b = row(e);
+        b.dataset.row = "1";
+        box.append(b);
+      }
+      if (from + next.length < all.length) box.append(h("div", { class: "more" }, `${all.length - from - next.length} more – scroll or search`));
+    };
+    const fill = () => {
+      box.replaceChildren();
+      if (sh.none && !(sh.q || "").trim()) {
+        box.append(h("button", { class: !sh.current ? "on" : "", onclick: () => choose("") },
+          h("span", { class: "lead" }, icon("minus")), h("span", { class: "t" }, h("span", null, sh.none)), !sh.current ? icon("check") : null));
+      }
+      if (!matches().length) box.append(h("div", { class: "empty" }, sh.items.length ? "Nothing matches." : "Nothing to choose from."));
+      else more();
+    };
+    if (!sh.items) {
+      box.append(h("div", { class: "pload", role: "status" }, h("span", { class: "d" }, h("i"), h("i"), h("i")), "Loading the list…"));
+      // the list is made after the sheet is drawn (the loading mark shows meanwhile)
+      setTimeout(() => {
+        if (this._ui.sheet !== sh) return;
+        sh.items = this._ents(sh.domains, { p, filter: sh.filter || null })
+          .filter((e) => !(sh.exclude || []).includes(e.id))
+          .map((e) => ({ ...e, key: `${e.name} ${e.id} ${this._areaName(e.area)}`.toLowerCase() }));
+        // the current choice comes first, so it is in view
+        const at = sh.items.findIndex((e) => e.id === sh.current);
+        if (at > 0) sh.items.unshift(...sh.items.splice(at, 1));
+        if (box.isConnected) fill();
         else this._renderLayer();
-      } }, h("span", { class: "lead" }, icon(this._eicon(e.id))), h("span", { class: "t" }, h("span", null, e.name), h("small", null, [this._areaName(e.area), e.id].filter(Boolean).join(" · "))), e.id === sh.current ? icon("check") : null))
-        : h("div", { class: "empty" }, "Nothing to choose from."));
-    const search = h("input", { class: "inp", type: "search", placeholder: "Search", "aria-label": "Search", oninput: (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      box.querySelectorAll("[data-name]").forEach((b) => { b.hidden = Boolean(q) && !b.dataset.name.includes(q); });
+      }, 30);
+    } else fill();
+    const search = h("input", { class: "inp", type: "search", placeholder: "Search", "aria-label": "Search", value: sh.q || "", oninput: (e) => {
+      sh.q = e.target.value;
+      if (sh.items) fill();
     } });
-    return this._sheetFrame(sh.title, [search, box], null, { back: sh.back ? () => this._openSheet(sh.back) : null });
+    const frame = this._sheetFrame(sh.title, [search, box], null, { back: sh.back ? () => this._openSheet(sh.back) : null });
+    // the next rows come when the list is scrolled near its end
+    const body = frame.querySelector(".sheet-body");
+    if (body) body.addEventListener("scroll", () => {
+      if (sh.items && body.scrollTop + body.clientHeight > body.scrollHeight - 300 && box.querySelector(".more")) more();
+    }, { passive: true });
+    return frame;
   }
 
   _sheet_addWidget(sh, p) {
@@ -3309,15 +3791,16 @@ class PanelOSPage extends HTMLElement {
       const kind = Number(k);
       const spot = this._freeSpot(items, w.def[0], w.def[1]);
       const small = spot ? null : this._freeSpot(items, w.min[0], w.min[1]);
-      return h("button", { class: "cat-item", disabled: !spot && !small, onclick: () => {
-        const at = spot || small;
+      return h("button", { class: "cat-item", onclick: () => {
+        // no free place: it goes on top of the others at its smallest size (the layout then points it out)
+        const at = spot || small || { x: 0, y: 0 };
         const [ww, hh] = spot ? w.def : w.min;
         const item = { kind, col: at.x, row: at.y, w: ww, h: hh, style: w.style || 0, accent: "", weight: 600, tap: true, opts: w.opts || 0 };
         items.push(item);
         this._ui.sheet = null;
         this._ui.sel = items.length - 1;
         this._saveItems(p, sh.page, items, { toast: `${w.name} added` });
-      } }, h("div", { class: "pic wicon" }, icon(w.icon)), h("b", null, w.name), h("small", null, spot ? `${w.def[0]} × ${w.def[1]}` : small ? "Smaller, to fit" : "No room left on the layout"));
+      } }, h("div", { class: "pic wicon" }, icon(w.icon)), h("b", null, w.name), h("small", null, spot ? `${w.def[0]} × ${w.def[1]}` : small ? "Smaller, to fit" : "On top of the others"));
     })), null, { wide: true });
   }
 
@@ -3328,7 +3811,12 @@ class PanelOSPage extends HTMLElement {
     if (!w) return null;
     const meta = WIDGETS[w.kind] || WIDGETS[0];
     const set = (patch) => { Object.assign(w, patch); this._saveItems(p, sh.page, items); };
-    const bit = (b, label) => this._row(label, this._toggle(Boolean((w.opts || 0) & b), (v) => set({ opts: v ? (w.opts || 0) | b : (w.opts || 0) & ~b }), { label }));
+    // a switch only where it does something on the panel; where the widget's size or style hides it, it says so
+    const bit = (b, label) => {
+      const why = this._bitWhy(w, b);
+      return this._row(label, this._toggle(Boolean((w.opts || 0) & b), (v) => set({ opts: v ? (w.opts || 0) | b : (w.opts || 0) & ~b }), { label }),
+        why ? { sub: why, cls: "dim" } : {});
+    };
     const body = [];
     if (w.kind === 0) body.push(h("div", { class: "sec" }, h("h3", null, "Style"), h("div", { class: "chips" }, CLOCK_STYLES.map((n, k) => this._chipToggle((w.style || 0) === k, n, () => set({ style: k }))))));
     const bits = meta.bits;
@@ -3338,7 +3826,17 @@ class PanelOSPage extends HTMLElement {
         this._row("Long titles", this._seg([[0, "Cut off"], [1, "Scroll"]], scroll ? 1 : 0, (v) => set({ opts: v ? (w.opts || 0) | 1 : (w.opts || 0) & ~1 }), { label: "Long titles" }), { cls: "first" }),
         scroll ? this._row("Scroll speed", this._slider(w.style || 3, 1, 5, 1, (v) => set({ style: v }), (v) => ["", "Slowest", "Slow", "Medium", "Fast", "Fastest"][v], { label: "Scroll speed" })) : null));
     }
-    if (bits.length) body.push(h("div", { class: "group" }, bits.map(([b, label], k) => { const r = bit(b, label); if (k === 0) r.classList.add("first"); return r; })));
+    const shown = bits.filter(([b]) => this._bitWhy(w, b) !== false);
+    if (shown.length) body.push(h("div", { class: "group" }, shown.map(([b, label], k) => { const r = bit(b, label); if (k === 0) r.classList.add("first"); return r; })));
+    // the letters: their weight (every widget with text), and the page's neon on the synthwave background
+    if (w.kind !== 5 && w.kind !== 6) {
+      const wt = w.weight || 600;
+      body.push(h("div", { class: "group" },
+        this._row("Letters", this._weightSlider(wt, (v) => set({ weight: v })), { cls: "first" }),
+        page && bgIndex(page) >= 0 && BACKGROUNDS[bgIndex(page)].theme === 8
+          ? this._row("Neon letters", this._toggle(typeof w.neon === "boolean" ? w.neon : page.options?.neon !== false, (v) => set({ neon: v }), { label: "Neon letters" }))
+          : null));
+    }
     body.push(h("div", { class: "sec" }, h("h3", null, "Colour"), h("div", { class: "swatches" },
       h("button", { class: `sw panel${!w.accent ? " on" : ""}`, "aria-label": "The panel's colour", title: "The panel's colour", onclick: () => set({ accent: "" }) }),
       ACCENTS.map((c) => h("button", { class: `sw${w.accent === c ? " on" : ""}`, style: { background: c }, "aria-label": c, onclick: () => set({ accent: c }) })))));
@@ -3348,12 +3846,31 @@ class PanelOSPage extends HTMLElement {
     const bg = Number.isInteger(w.bg) && w.bg >= 0 ? w.bg : -1;
     body.push(h("div", { class: "group" },
       this._row("Background", this._slider(bg >= 0 ? bg : ownCard, 0, 100, 5, (v) => set({ bg: v }), (v) => (bg < 0 ? `${v} % · Default` : `${v} %`), { label: "Background" }),
-        { cls: "first", info: "How solid the card behind this widget is: 0 % is no card, 100 % a solid one. Text stays readable at every value.",
+        { cls: "first", info: "How solid the card behind this widget is: 0 % is no card, 100 % a solid one.",
           sub: bg >= 0 ? h("button", { class: "linkbtn", onclick: () => set({ bg: -1 }) }, "Back to the default") : null }),
       this._row("Opens its page on a tap", this._toggle(w.tap !== false, (v) => set({ tap: v }), { label: "Opens its page on a tap" }))));
     return this._sheetFrame(meta.name, body, [
       this._btn("Remove", () => { this._ui.sheet = null; this._removeWidget(p, sh.page, sh.item); this._renderLayer(); }, { cls: "ghost danger", icon: "delete-outline" }),
       h("span", { class: "grow" }), this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
+  }
+
+  // Why a widget switch does nothing now: null = it works, a text = what it needs (size, style),
+  // false = never in this style (then it is not offered).
+  _bitWhy(w, b) {
+    const st = w.style || 0;
+    const wide = w.w > w.h * 1.5;
+    if (w.kind === 0) {
+      if (st === 7) return false;
+      if (b === 1) return null;
+      if ([0, 1, 6].includes(st)) return w.h >= 2 ? null : "Shows when the widget is 2 rows high";
+      if (wide) return null;
+      if (b === 2 && (st === 3 || st === 5)) return null;
+      return "Shows when the widget is wider than it is high";
+    }
+    if (w.kind === 1) return w.w >= 2 ? null : "Shows when the widget is 2 columns wide";
+    if (w.kind === 2) return w.h >= 2 || w.w >= 2 ? null : "Shows when the widget is 2 columns wide or 2 rows high";
+    if (w.kind === 4 && b === 2) return w.h >= 2 ? null : "Shows when the widget is 2 rows high";
+    return null;
   }
 
   _sheet_tile(sh, p) {
@@ -3372,17 +3889,15 @@ class PanelOSPage extends HTMLElement {
       return this._setPage(p, sh.page, { entities: nextEnts, options });
     };
     const domains = this._data.tile_domains || ["light", "switch", "cover", "fan", "input_boolean", "scene", "script", "sensor", "climate"];
-    const list = this._ents(domains, { p }).filter((e) => e.id === cur || !ents.includes(e.id));
-    const box = h("div", { class: "picker-list" }, list.map((e) => h("button", { class: e.id === cur ? "on" : "", "data-name": `${e.name} ${e.id}`.toLowerCase(), onclick: () => {
-      const ne = [...ents];
-      const nt = [...tapes];
-      if (cur) { ne[sh.slot] = e.id; if (e.id !== cur) nt[sh.slot] = ""; } else { ne.push(e.id); nt.push(""); sh.slot = ne.length - 1; }
-      save(ne, nt).then(() => this._renderLayer());
-    } }, h("span", { class: "lead" }, icon(this._eicon(e.id))), h("span", { class: "t" }, h("span", null, e.name), h("small", null, [this._areaName(e.area), e.id].filter(Boolean).join(" · "))), e.id === cur ? icon("check") : null)));
-    const search = h("input", { class: "inp", type: "search", placeholder: "Search", "aria-label": "Search", oninput: (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      box.querySelectorAll("[data-name]").forEach((b) => { b.hidden = Boolean(q) && !b.dataset.name.includes(q); });
-    } });
+    // the control is chosen in the common picker (search, loading mark, steady list), then this sheet comes back
+    const choose = this._entityButton(cur || "", { title: cur ? "Control" : "Choose a control", domains, p, back: sh,
+      exclude: ents.filter((e) => e !== cur), onPick: (id) => {
+        if (!id) return;
+        const ne = [...ents];
+        const nt = [...tapes];
+        if (cur) { ne[sh.slot] = id; if (id !== cur) nt[sh.slot] = ""; } else { ne.push(id); nt.push(""); sh.slot = ne.length - 1; }
+        save(ne, nt).then(() => { if (this._ui.sheet === sh) this._renderLayer(); });
+      } });
     const move = (d) => {
       const k = sh.slot;
       const ne = [...ents];
@@ -3393,7 +3908,7 @@ class PanelOSPage extends HTMLElement {
       save(ne, nt);
     };
     return this._sheetFrame(cur ? this._ename(cur) : "New tile", [
-      h("div", { class: "sec" }, h("h3", null, "Controls"), search, box),
+      h("div", { class: "group" }, this._row(cur ? "Control" : "Choose what it controls", choose, { cls: "first" })),
       cur && desk ? h("div", { class: "group" }, this._row("Label", this._text(tapes[sh.slot], (v) => { const nt = [...tapes]; nt[sh.slot] = v.trim().toUpperCase().slice(0, 8); save(ents, nt); }, { max: 8, placeholder: "From the name", label: "Label", cls: "short" }),
         { info: "The label-maker tape under the fader. Empty: the panel makes one from the name.", cls: "first" })) : null,
       cur ? h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
@@ -3463,9 +3978,11 @@ class PanelOSPage extends HTMLElement {
     let n = 1;
     while (ids.has(`alert_${n}`)) n++;
     const id = `alert_${n}`;
+    this._fresh = { kind: "own_critical", id, adding: true };
     this._saveHouse((hs) => {
       hs.own_critical.push({ id, on: true, hold: true, off: [], sound: true, tone: "auto", trigger: { kind: "entity", entity: "", op: "on", value: "" }, headline: "", line: "" });
     });
+    this._fresh.adding = false;
     this._openSheet({ kind: "ownCrit", id, panel: p.entry_id, fresh: true });
   }
 
@@ -3622,8 +4139,9 @@ class PanelOSPage extends HTMLElement {
     const sugg = this._suggestions();
     return this._sheetFrame("Suggested", [
       h("p", { class: "note", style: { margin: 0 } }, "Sensors whose device class is about safety. Only the ones you add count as critical."),
-      h("div", { class: "group" }, sugg.length ? sugg.map((e, k) => this._row(e.name, h("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap" } },
-        this._btn("Not this", () => this._saveHouse((hs) => { hs.dismissed.push(e.id); }), { cls: "small ghost" }),
+      h("div", { class: "group" }, sugg.length ? sugg.map((e, k) => this._row(e.name, h("div", { style: { display: "flex", gap: "6px", flexWrap: "nowrap", flex: "none" } },
+        this._btn("Not this", () => this._saveHouse((hs) => { hs.dismissed.push(e.id); },
+          { toast: `${e.name} is not suggested now`, undo: () => this._saveHouse((hs) => { hs.dismissed = hs.dismissed.filter((x) => x !== e.id); }) }), { cls: "small ghost" }),
         this._btn("Add", () => this._saveHouse((hs) => { hs.critical.push({ entity_id: e.id, on: true, hold: true, off: [] }); }, { toast: `${e.name} is critical now` }), { cls: "small primary", icon: "plus" })),
       { lead: h("span", { class: "lead" }, icon(this._eicon(e.id))), sub: [SAFETY[this._safetyClass(e.id)]?.name, this._areaName(e.area)].filter(Boolean).join(" · "), cls: k === 0 ? "first" : "" }))
         : h("div", { class: "empty", style: { paddingTop: "14px" } }, "Nothing more to suggest.")),
@@ -3661,7 +4179,17 @@ class PanelOSPage extends HTMLElement {
       connectedForPv.length > 1 ? h("div", { class: "sec", style: { alignSelf: "stretch" } }, h("h3", null, "Show now on"), this._radioChips(connectedForPv.map((q) => [q.entry_id, this._pname(q)]), pv.entry_id, (v) => { sh.pv = v; this._renderLayer(); })) : null);
     const form = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px", minWidth: 0 } },
       h("div", { class: "sec" }, h("h3", null, "When"),
-        this._seg([["entity", "A device"], ["after", "After a screen"], ["service", "Automation"]], t.kind, (v) => setT({ kind: v, after: v === "after" ? (others[0] || {}).id || "" : t.after }), { label: "Trigger" }),
+        this._seg([["entity", "A device"], ["after", "After a screen"], ["service", "Automation"]], t.kind, (v) => {
+          setT({ kind: v, after: v === "after" ? (others[0] || {}).id || "" : t.after });
+          // the first time it is started by automations it gets a readable name (e.g. toilet_occupied)
+          if (v === "service" && !r.alias) {
+            const base = this._statusName(r).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 34) || "screen";
+            const used = new Set(((this._data.house || {}).status || []).flatMap((x) => [x.alias, x.id]).filter(Boolean));
+            let alias = base;
+            for (let n = 2; used.has(alias); n++) alias = `${base}_${n}`;
+            set({ alias });
+          }
+        }, { label: "Trigger" }),
         t.kind === "entity" ? h("div", { class: "group" },
           this._row("Device", this._entityButton(t.entity, { title: "Device", domains: trigDomains, p, back,
             onPick: (id) => { const d = id.split(".")[0]; const st = this._hass.states[id]; const num = ["sensor", "number", "input_number"].includes(d) && !Number.isNaN(Number(st?.state)); const bin = ["binary_sensor", "input_boolean", "switch", "light", "fan", "automation"].includes(d); setT({ entity: id, op: num ? "above" : bin ? "on" : "equals", value: num ? String(st.state) : bin ? "" : String(st?.state || "") }); } }), { cls: "first" }),
@@ -3672,7 +4200,7 @@ class PanelOSPage extends HTMLElement {
         t.kind === "after" ? h("div", { class: "group" }, others.length
           ? this._row("Screen", this._radioChips(others.map((x) => [x.id, this._statusName(x)]), t.after, (v) => setT({ after: v })), { cls: "first", stack: true })
           : h("div", { class: "empty", style: { paddingTop: "12px" } }, "Add another status screen first.")) : null,
-        t.kind === "service" ? h("div", { class: "yaml" }, `action: panelos.show_status\ndata:\n  screen: ${r.id}\n\naction: panelos.clear_status\ndata:\n  screen: ${r.id}`) : null),
+        t.kind === "service" ? this._statusActions(r, set) : null),
       h("div", { class: "sec" }, h("h3", null, "Kind"), h("div", { class: "catgrid" }, STATUS_CATS.map((c) => h("button", {
         class: `catbtn${c.id === r.cat ? " on" : ""}`, "aria-pressed": c.id === r.cat ? "true" : "false",
         onclick: () => set({ cat: c.id, colour: c.c, picto: c.pictos[0], own: c.id === "custom" ? true : r.cat === "custom" ? false : r.own, countdown: c.countdown && !r.countdown ? 10 : r.countdown }),

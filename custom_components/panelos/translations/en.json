@@ -45,7 +45,7 @@
           "show_sidebar": "Home Assistant's menu (all dashboards, settings and other pages). Without it the panel stays on the chosen dashboard.",
           "zoom": "How large the dashboard is drawn on the panel; below 100 % more fits on the screen.",
           "loading_screen": "While a dashboard loads, the panel shows its loading screen and reveals the dashboard once it is complete. Off: Home Assistant's own start-up shows instead and the dashboard appears while it loads, sooner but unfinished at first.",
-          "skip_unused_resources": "Home Assistant loads every card resource on every dashboard, used or not; on the panel each one costs load time. With this on, the panel leaves out the ones the dashboard it shows does not need (a resource counts as needed when its name matches a custom card type or a setting of the dashboard), worked out again whenever the dashboard changes.",
+          "skip_unused_resources": "With this on, the panel loads only the card resources the dashboard it shows needs, so it opens faster.",
           "keep_resources": "For a resource the dashboard needs although its name does not match any of its cards."
         }
       },
@@ -144,7 +144,7 @@
       "fields": {
         "screen": {
           "name": "Status screen",
-          "description": "The status screen's ID, as shown on the PanelOS page."
+          "description": "The status screen's name in automations, as shown on the PanelOS page (e.g. toilet_occupied)."
         }
       }
     },
@@ -154,7 +154,7 @@
       "fields": {
         "screen": {
           "name": "Status screen",
-          "description": "The status screen's ID, as shown on the PanelOS page."
+          "description": "The status screen's name in automations, as shown on the PanelOS page (e.g. toilet_occupied)."
         }
       }
     },
