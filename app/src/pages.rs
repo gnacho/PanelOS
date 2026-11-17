@@ -164,12 +164,20 @@ pub fn home_layouts(config: Option<&Value>, accent: Color) -> Vec<Vec<HomeItem>>
         .iter()
         .filter(|p| p.get("kind").and_then(Value::as_str) == Some("home"))
         .skip(1)
-        .filter_map(|p| p.get("options").and_then(|o| o.get("items")).and_then(Value::as_array))
-        .map(|a| items_from(a, accent))
+        .filter_map(|p| {
+            let o = p.get("options")?;
+            Some((o.get("items")?.as_array()?, page_neon(o)))
+        })
+        .map(|(a, neon)| items_from(a, accent, neon))
         .collect()
 }
 
-fn items_from(a: &[Value], accent: Color) -> Vec<HomeItem> {
+/// The page's old neon setting (one switch for every widget): the default of a widget without its own.
+fn page_neon(options: &Value) -> bool {
+    options.get("neon").and_then(Value::as_bool).unwrap_or(true)
+}
+
+fn items_from(a: &[Value], accent: Color, neon: bool) -> Vec<HomeItem> {
     a.iter()
         .map(|i| {
             let n = |k: &str, d: i64| i.get(k).and_then(Value::as_i64).unwrap_or(d) as i32;
@@ -183,6 +191,8 @@ fn items_from(a: &[Value], accent: Color) -> Vec<HomeItem> {
                 accent: i.get("accent").and_then(Value::as_str).and_then(parse_color).unwrap_or(accent),
                 weight: n("weight", 600),
                 tap: i.get("tap").and_then(Value::as_bool).unwrap_or(true),
+                // neon letters on the synthwave background, each widget its own
+                neon: i.get("neon").and_then(Value::as_bool).unwrap_or(neon),
                 opts: n("opts", 0),
                 // the integration's background (-1 = the widget's own card, 0..100 %)
                 card: i.get("bg").and_then(Value::as_i64).filter(|b| (0..=100).contains(b)).map_or(0, |b| b as i32 + 1),
@@ -445,24 +455,24 @@ pub fn weather_data(w: &WeatherInput) -> WeatherData {
 /// the seconds line, the forecast curve and the music widget.
 pub fn home_items(config: Option<&Value>, accent: Color) -> Vec<HomeItem> {
     // the first weather page's own widgets, else the panel's
-    let first = config
+    let options = config
         .and_then(|c| c.get("pages"))
         .and_then(Value::as_array)
         .and_then(|a| a.iter().find(|p| p.get("kind").and_then(Value::as_str) == Some("home")))
-        .and_then(|p| p.get("options"))
-        .and_then(|o| o.get("items"))
-        .and_then(Value::as_array);
+        .and_then(|p| p.get("options"));
+    let neon = options.map(page_neon).unwrap_or(true);
+    let first = options.and_then(|o| o.get("items")).and_then(Value::as_array);
     let from_config: Vec<HomeItem> = first
         .or_else(|| config.and_then(|c| c.get("home_items")).and_then(Value::as_array))
-        .map(|a| items_from(a, accent))
+        .map(|a| items_from(a, accent, neon))
         .unwrap_or_default();
     if !from_config.is_empty() {
         return from_config;
     }
     vec![
-        HomeItem { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, accent, weight: 600, tap: true, opts: 1, card: 0 },
-        HomeItem { kind: 4, col: 0, row: 1, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, opts: 3, card: 0 },
-        HomeItem { kind: 7, col: 0, row: 3, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, opts: 0, card: 0 },
+        HomeItem { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, accent, weight: 600, tap: true, neon: true, opts: 1, card: 0 },
+        HomeItem { kind: 4, col: 0, row: 1, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, neon: true, opts: 3, card: 0 },
+        HomeItem { kind: 7, col: 0, row: 3, w: 4, h: 1, style: 0, accent, weight: 600, tap: true, neon: true, opts: 0, card: 0 },
     ]
 }
 
@@ -554,6 +564,17 @@ impl Timer {
             self.left
         }
     }
+
+    /// The time left with its fraction: the timers page glides from one tick to the next at an even pace
+    /// (whole seconds made the hourglass stop for a tick, then move twice as fast, whenever the once-a-second
+    /// update fell next to a second's edge; on a short timer each second is a visible step).
+    pub fn remaining_exact(&self) -> f32 {
+        if self.active {
+            self.end.saturating_duration_since(std::time::Instant::now()).as_secs_f32()
+        } else {
+            self.left as f32
+        }
+    }
 }
 
 fn mmss(s: u32) -> String {
@@ -571,7 +592,7 @@ pub fn timer_chips(timers: &HashMap<String, Timer>) -> Vec<TimerInfo> {
     list.iter()
         .map(|t| {
             let left = t.remaining();
-            TimerInfo { label: t.name.clone().into(), text: mmss(left).into(), urgent: left < 60 }
+            TimerInfo { label: t.name.clone().into(), text: mmss(left).into(), urgent: left < 60, hours: t.total >= 3600 }
         })
         .collect()
 }
@@ -584,21 +605,35 @@ pub fn ordered_timers(timers: &HashMap<String, Timer>) -> Vec<(&String, &Timer)>
     list
 }
 
-/// Colourful timers: each its own vibrant colour, by order of arrival.
-const TIMER_TINTS: [u32; 6] = [0xff5a36, 0xffb21e, 0x3d9bff, 0x2fd27a, 0xc86bfa, 0xff4fa0];
+/// Colourful timers: each its own vibrant colour, by order of arrival (the integration may set its own).
+pub const TIMER_TINTS: [u32; 6] = [0xff5a36, 0xffb21e, 0x3d9bff, 0x2fd27a, 0xc86bfa, 0xff4fa0];
+
+thread_local! {
+    /// The colours chosen in the integration for the 1st, 2nd, … timer (empty: the panel's own).
+    pub static TIMER_COLOURS: std::cell::RefCell<Vec<Color>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 
 /// The timers page's list.
 pub fn timer_items(timers: &HashMap<String, Timer>, accent: Color, colourful: bool) -> Vec<TimerItem> {
+    let own = TIMER_COLOURS.with(|c| c.borrow().clone());
     ordered_timers(timers)
         .iter()
         .map(|(_, t)| {
-            let c = TIMER_TINTS[(t.seq as usize) % TIMER_TINTS.len()];
+            let k = t.seq as usize;
+            let tint = if !colourful {
+                accent
+            } else if !own.is_empty() {
+                own[k % own.len()]
+            } else {
+                let c = TIMER_TINTS[k % TIMER_TINTS.len()];
+                Color::from_rgb_u8((c >> 16) as u8, (c >> 8) as u8, c as u8)
+            };
             TimerItem {
                 label: t.name.clone().into(),
-                remaining: t.remaining() as f32,
+                remaining: t.remaining_exact(),
                 total: t.total.max(1) as f32,
                 running: t.active,
-                tint: if colourful { Color::from_rgb_u8((c >> 16) as u8, (c >> 8) as u8, c as u8) } else { accent },
+                tint,
             }
         })
         .collect()

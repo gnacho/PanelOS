@@ -17,6 +17,7 @@ mod cam;
 mod camera;
 mod clock;
 mod config;
+mod devlog;
 mod display;
 mod draw;
 mod esphome;
@@ -47,6 +48,7 @@ mod touch;
 mod voice;
 mod web;
 mod webstats;
+mod windows;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -189,8 +191,10 @@ pub struct UiState {
     /// Development: the system screens were set from the dev input; the
     /// connection state does not change them meanwhile.
     dev_screens: bool,
-    /// Do not disturb (quick shade).
-    dnd: bool,
+    /// Do not disturb switched in the quick shade: on or off, and what the integration's setting
+    /// (on, off, schedule) said then. It holds until that changes (the schedule's next turn, or
+    /// another setting from Home Assistant).
+    dnd: Option<(bool, bool)>,
     /// Development: settings from the dev input, kept over Home Assistant's.
     dev_config: Option<Value>,
     /// A temporary page shown (its place in the pager).
@@ -248,11 +252,18 @@ pub fn page_looks(ui: &AppWindow, kind: &str) -> Vec<i32> {
     (0..pages.row_count()).filter_map(|i| pages.row_data(i)).filter(|p| p.kind == kind).map(|p| p.variant).collect()
 }
 
-/// Do not disturb: switched on in the quick shade, or by the integration (on, or on a schedule).
+/// Do not disturb: as the integration sets it (on, or on a schedule), unless switched in the quick
+/// shade since that last changed.
 pub fn dnd_active(s: &UiState) -> bool {
-    if s.dnd {
-        return true;
+    let set = dnd_setting(s);
+    match s.dnd {
+        Some((on, then)) if then == set => on,
+        _ => set,
     }
+}
+
+/// Do not disturb as the integration sets it now (on, off, or the schedule's state now).
+pub fn dnd_setting(s: &UiState) -> bool {
     let cfg = s.panel_config.as_ref().and_then(|c| c.get("dnd"));
     let get = |k: &str| cfg.and_then(|c| c.get(k));
     match get("mode").and_then(Value::as_str).unwrap_or("off") {
@@ -298,7 +309,7 @@ pub fn dnd_allows(s: &UiState, what: &str) -> bool {
 fn popup(ui: &AppWindow, id: &str, title: &str, message: &str) {
     let (kind, sound, seconds, quiet) = with_state(|s| {
         let p = s.panel_config.as_ref().and_then(|c| c.get("popups"));
-        let kind = p.and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("strip").to_string();
+        let kind = p.and_then(|p| p.get("kind")).and_then(Value::as_str).unwrap_or("card").to_string();
         let sound = p.and_then(|p| p.get("sound")).and_then(Value::as_bool).unwrap_or(true);
         let seconds = p.and_then(|p| p.get("seconds")).and_then(Value::as_u64).unwrap_or(10).clamp(3, 120);
         (kind, sound, seconds, dnd_active(s) || s.screensaver || s.alert_strip)
@@ -379,6 +390,10 @@ fn media_entity(s: &UiState) -> String {
 /// Entities the panel follows besides the dashboard's.
 fn extra_entities(s: &UiState) -> Vec<String> {
     let mut out = vec!["sun.sun".to_string(), "zone.home".to_string(), weather_entity(s), media_entity(s)];
+    // the speaker behind a Music Assistant player (to see when it really plays)
+    if let Some(sp) = speaker_of(s, &media_entity(s)) {
+        out.push(sp);
+    }
     out.extend(s.states.keys().filter(|k| k.starts_with("person.")).cloned());
     if let Some(list) = s.panel_config.as_ref().and_then(|c| c.get("entities")).and_then(Value::as_array) {
         out.extend(list.iter().filter_map(Value::as_str).map(str::to_string));
@@ -483,7 +498,10 @@ fn update_clock(ui: &AppWindow) {
         }
         // The music position moves on while a player plays: its own properties;
         // the rest of the widget's data only when it changed.
-        let music = pages::home_music(&s.states, &media_entity(s), s.art.as_ref(), accent(s));
+        let mut music = pages::home_music(&s.states, &media_entity(s), s.art.as_ref(), accent(s));
+        if music.playing && !really_playing(s, &media_entity(s)) {
+            music.playing = false;
+        }
         if music.playing || ui.get_home_music_pos() != music.pos {
             ui.set_music_pos(music.pos);
             ui.set_home_music_pos(music.pos);
@@ -495,6 +513,25 @@ fn update_clock(ui: &AppWindow) {
         }
         // The synthwave scenes in use: their view, colour and the next car.
         synth::tick(ui, s);
+        // city windows lit one by one (drawn city / big city, the first such Custom page)
+        {
+            let w = ui.get_weather();
+            let pages = ui.get_pages();
+            let slot = (0..slint::Model::row_count(&pages)).filter_map(|i| slint::Model::row_data(&pages, i))
+                .find(|p| p.kind == "home" && matches!(if p.theme >= 0 { p.theme } else { w.theme }, 4 | 6));
+            let theme = slot.as_ref().map(|p| if p.theme >= 0 { p.theme } else { w.theme }).unwrap_or(-1);
+            let light = slot.as_ref().is_some_and(|p| p.light == 1 || (p.light == 0 && !ui.global::<Theme>().get_dark()));
+            let hour = local_hour();
+            windows::tick(ui, theme, light, w.mood, w.sun_el, hour);
+        }
+        // do not disturb: the mark in the status line (the schedule turns by the minute)
+        if s.dnd.is_some_and(|(_, then)| then != dnd_setting(s)) {
+            s.dnd = None;
+        }
+        let dnd = dnd_active(s);
+        if ui.get_dnd_on() != dnd {
+            ui.set_dnd_on(dnd);
+        }
         // Alarms: when the minute turns, the ones due ring; the list's "next" line follows.
         let minute = pages::now() / 60;
         if minute != s.alarm_minute {
@@ -580,9 +617,10 @@ fn refresh_pages(ui: &AppWindow) {
         if ui.get_home_fl_cars_on() != cars {
             ui.set_home_fl_cars_on(cars);
         }
-        let neon = page_option(s, "home", "neon").and_then(|v| v.as_bool()).unwrap_or(ui.get_home_fl_neon());
-        if ui.get_home_fl_neon() != neon {
-            ui.set_home_fl_neon(neon);
+        // neon letters: each widget has its own switch now (HomeItem.neon; the page's old switch is only
+        // the default of widgets without one), so the page lets them all glow
+        if !ui.get_home_fl_neon() {
+            ui.set_home_fl_neon(true);
         }
         // Development: weather values forced from the dev input (measurements).
         if let Some(o) = s.dev_wx.as_ref() {
@@ -651,7 +689,10 @@ fn refresh_pages(ui: &AppWindow) {
         }
         // Music page
         let player = media_entity(s);
-        let music = pages::home_music(&s.states, &player, s.art.as_ref(), a);
+        let mut music = pages::home_music(&s.states, &player, s.art.as_ref(), a);
+        if music.playing && !really_playing(s, &player) {
+            music.playing = false;
+        }
         ui.set_music_title(music.title.clone());
         ui.set_music_artist(music.artist.clone());
         ui.set_music_playing(music.playing);
@@ -749,6 +790,26 @@ fn refresh_pages(ui: &AppWindow) {
         if let Some(c) = page_option(s, "timers", "colourful").and_then(|v| v.as_bool()) {
             ui.set_timers_colourful(c);
         }
+        // the clock page: its parts, letters, width, wandering speed and colour (the integration's page options)
+        {
+            let co = |k: &str| page_option(s, "clock", k);
+            let flag = |k: &str| co(k).and_then(|v| v.as_bool()).unwrap_or(true);
+            ui.set_clock_seconds(flag("seconds"));
+            ui.set_clock_date(flag("date"));
+            ui.set_clock_weather(flag("weather"));
+            ui.set_clock_next(flag("next"));
+            ui.set_clock_weight(co("weight").and_then(|v| v.as_i64()).unwrap_or(600) as i32);
+            ui.set_clock_width(co("width").and_then(|v| v.as_i64()).unwrap_or(100) as f32 / 100.0);
+            ui.set_clock_speed(co("speed").and_then(|v| v.as_i64()).unwrap_or(20) as f32);
+            let colour = co("colour").and_then(|v| v.as_str().and_then(pages::parse_color));
+            ui.set_clock_page_accent(colour.unwrap_or_else(|| ui.get_clock_accent()));
+        }
+        // each timer's own colour (1st, 2nd, …), when the integration sets them
+        let own: Vec<slint::Color> = page_option(s, "timers", "colours")
+            .and_then(|v| v.as_array().cloned())
+            .map(|a| a.iter().filter_map(Value::as_str).filter_map(pages::parse_color).collect())
+            .unwrap_or_default();
+        pages::TIMER_COLOURS.with(|c| *c.borrow_mut() = own);
         quick::refresh(ui, s);
         thermo::refresh(ui, s);
         cam::refresh(ui, s);
@@ -800,6 +861,11 @@ fn rewarm(ui: &AppWindow) {
 fn apply_panel_config(ui: &AppWindow) {
     // copies of the uploaded sounds the settings use: fetched when missing, dropped when unused
     with_state(|s| sounds::keep(&used_sounds(s)));
+    with_state(|s| {
+        if s.screensaver {
+            saver_clock(ui, s);
+        }
+    });
     let reload = with_state(|s| {
         let slots = pages::page_slots(s.panel_config.as_ref());
         let current = ui.get_page();
@@ -994,8 +1060,115 @@ pub fn used_sounds(s: &UiState) -> Vec<String> {
 }
 
 /// The panel's own media player entity in Home Assistant (the integration tells it).
+/// The speaker a Music Assistant player plays on (the integration links them by their device).
+fn speaker_of(s: &UiState, player: &str) -> Option<String> {
+    s.panel_config.as_ref()?.get("player_links")?.get(player)?.as_str().map(str::to_string)
+}
+
+/// Whether the music a player reports as playing is really playing: false once its speaker has been
+/// idle (or off) for 30 s while the player still says playing (then the panel shows it paused).
+fn really_playing(s: &UiState, player: &str) -> bool {
+    thread_local!(static QUIET_SINCE: std::cell::RefCell<Option<(String, Instant)>> = const { std::cell::RefCell::new(None) });
+    let Some(sp) = speaker_of(s, player) else { return true };
+    let quiet = s.states.get(&sp).is_some_and(|st| !matches!(st.state.as_str(), "playing" | "buffering" | "unavailable" | "unknown"));
+    QUIET_SINCE.with(|q| {
+        let mut q = q.borrow_mut();
+        if !quiet {
+            *q = None;
+            return true;
+        }
+        match q.as_ref() {
+            Some((who, since)) if *who == sp => since.elapsed() < Duration::from_secs(30),
+            _ => {
+                *q = Some((sp, Instant::now()));
+                true
+            }
+        }
+    })
+}
+
+/// The live preview's stream: while a page asks (until 3 s after its last request), the next picture
+/// is taken as soon as the last one is encoded and on its way, at most 10 a second. One at a time, as
+/// JPEG, encoded off the UI thread.
+fn screen_stream(ui: &AppWindow) {
+    let _ = ui;
+    STREAM_UNTIL_MS.store(unix_ms() + 3000, Ordering::SeqCst);
+    stream_shot();
+}
+
+static STREAM_UNTIL_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Preview pictures written to Home Assistant so far, and how long the last one took to write (the
+/// Home Assistant thread counts them; the stream paces itself by them).
+pub static SCREENS_SENT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SCREEN_SEND_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// When the picture under way was asked for (0: none under way).
+static STREAM_BUSY_SINCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn unix_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+fn stream_shot() {
+    let started = unix_ms();
+    let busy = STREAM_BUSY_SINCE.load(Ordering::SeqCst);
+    // a picture that never came back (2 s) does not stop the stream
+    if busy != 0 && started.saturating_sub(busy) < 2000 {
+        return;
+    }
+    STREAM_BUSY_SINCE.store(started, Ordering::SeqCst);
+    let tx = with_state(|s| s.commands.clone());
+    platform::request_screen(move |w, h, rgb| {
+        std::thread::spawn(move || {
+            // below the UI's own threads: the screen stays smooth while the picture is encoded
+            // SAFETY: setpriority on this thread's own id.
+            unsafe {
+                libc::setpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t, 19);
+            }
+            let before = SCREENS_SENT.load(Ordering::SeqCst);
+            if let (Some(jpeg), Some(tx)) = (panel_device::jpeg_base64(w, h, &rgb), tx) {
+                let _ = tx.send(Command::Screen(jpeg));
+                // the next picture only once this one is out on the network (up to 3 s)
+                let t = std::time::Instant::now();
+                while SCREENS_SENT.load(Ordering::SeqCst) == before && t.elapsed() < Duration::from_secs(3) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            }
+            let spent = unix_ms().saturating_sub(started);
+            #[cfg(feature = "gpu")]
+            if gpu::FRAME_STATS.load(Ordering::Relaxed) {
+                eprintln!("nspanel-app: preview picture in {spent} ms (sent in {} ms)", SCREEN_SEND_MS.load(Ordering::SeqCst));
+            }
+            // at most 5 a second, and never more than half of the link: a picture that took long to
+            // go out (a busy Wi-Fi) leaves as long a pause after it
+            let gap = 200u64.max(2 * SCREEN_SEND_MS.load(Ordering::SeqCst)).min(2000);
+            if spent < gap {
+                std::thread::sleep(Duration::from_millis(gap - spent));
+            }
+            STREAM_BUSY_SINCE.store(0, Ordering::SeqCst);
+            if unix_ms() < STREAM_UNTIL_MS.load(Ordering::SeqCst) {
+                let _ = slint::invoke_from_event_loop(stream_shot);
+            }
+        });
+    });
+}
+
+/// The link to Home Assistant is up (for the Wi-Fi link watch, which runs in its own thread).
+static HA_LINKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The local hour now (0..23).
+fn local_hour() -> u32 {
+    pages::local_format(pages::now(), "%H").parse().unwrap_or(12)
+}
+
 fn media_player_entity(s: &UiState) -> String {
     s.panel_config.as_ref().and_then(|c| c.get("media_player")).and_then(Value::as_str).unwrap_or("").to_string()
+}
+
+/// The panel's player as Music Assistant knows it (the integration adds it there for music alarms);
+/// the panel's own player when Music Assistant has none yet.
+fn ma_player_entity(s: &UiState) -> String {
+    let ma = s.panel_config.as_ref().and_then(|c| c.get("ma_player")).and_then(Value::as_str).unwrap_or("").to_string();
+    if ma.is_empty() { media_player_entity(s) } else { ma }
 }
 
 /// Starts or stops the looping sound: a sounding critical alert first, else a ringing timer or alarm.
@@ -1019,7 +1192,7 @@ fn loop_sound(s: &mut UiState, want: Option<String>) {
     // the music of the alarm before ends with it
     if s.music_asked.take().is_some() || s.looping.as_deref().is_some_and(|k| k.contains(":ma:")) {
         media::halt(media::IDLE);
-        let entity = media_player_entity(s);
+        let entity = ma_player_entity(s);
         if !entity.is_empty() {
             call("media_player", "media_stop", &entity, json!({}));
         }
@@ -1028,7 +1201,7 @@ fn loop_sound(s: &mut UiState, want: Option<String>) {
     if let Some(key) = &want {
         let tone = key.split_once(':').map(|(_, t)| t).unwrap_or(key);
         let (value, default) = tone.rsplit_once('|').unwrap_or((tone, "marimba"));
-        let entity = media_player_entity(s);
+        let entity = ma_player_entity(s);
         match value.strip_prefix("ma:") {
             Some(item) if !entity.is_empty() => {
                 eprintln!("nspanel-app: alarm music {item} on {entity}");
@@ -1653,6 +1826,7 @@ fn start_pairing(ui: &AppWindow) {
 fn handle_event(ui: &AppWindow, event: Event) {
     match event {
         Event::Status { text, connected } => {
+            HA_LINKED.store(connected, Ordering::SeqCst);
             ui.set_connected(connected);
             with_state(|s| {
                 s.connected = connected;
@@ -1756,15 +1930,9 @@ fn handle_event(ui: &AppWindow, event: Event) {
         }
         Event::Show(v) => handle_show(ui, &v),
         Event::Command { key, .. } if key == "screenshot" => {
-            // Encoded off the UI thread (about 50 ms on the panel).
-            let tx = with_state(|s| s.commands.clone());
-            platform::request_screen(move |w, h, rgb| {
-                std::thread::spawn(move || {
-                    if let (Some(png), Some(tx)) = (panel_device::png_base64(w, h, &rgb), tx) {
-                        let _ = tx.send(Command::Screen(png));
-                    }
-                });
-            });
+            // The live preview: each request keeps a short stream going (a picture about every 120 ms
+            // for 3 s), so the page gets the newest picture at once instead of waiting a round trip.
+            screen_stream(ui);
         }
         Event::Command { key, value } => {
             let control = with_state(|s| panel_device::command(&key, &value, &s.device.lock().unwrap()));
@@ -1883,15 +2051,42 @@ fn saver_window(s: &UiState, leaving: bool) -> bool {
 fn start_screensaver(ui: &AppWindow, s: &mut UiState) {
     s.screensaver = true;
     s.saver_auto = false;
-    // the pages are covered now: their animations' clock starts again unseen
-    ui.invoke_reset_clock();
+    // the pages are covered once the screensaver has faded in (0.8 s): their animations' clock starts
+    // again unseen then
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(900), move || {
+        if let Some(ui) = weak.upgrade() {
+            if ui.get_screensaver_on() {
+                ui.invoke_reset_clock();
+            }
+        }
+    });
     s.show_until = None;
     ui.set_set_view(0);
     ui.set_strip_on(false);
     info::pop(ui, None);
-    let style = s.panel_config.as_ref().and_then(|c| c.get("saver_style")).and_then(Value::as_i64).unwrap_or(1) as i32;
-    ui.set_saver_style(style);
+    saver_clock(ui, s);
     ui.set_screensaver_on(true);
+}
+
+/// The screensaver's clock as set on the integration's Display page (also while it shows: a change
+/// there is seen at once).
+fn saver_clock(ui: &AppWindow, s: &UiState) {
+    let cfg = s.panel_config.as_ref().and_then(|c| c.get("screensaver")).cloned().unwrap_or(Value::Null);
+    let num = |k: &str, d: i64| cfg.get(k).and_then(Value::as_i64).unwrap_or(d);
+    let flag = |k: &str| cfg.get(k).and_then(Value::as_bool).unwrap_or(true);
+    let style = cfg.get("face").and_then(Value::as_i64)
+        .or_else(|| s.panel_config.as_ref().and_then(|c| c.get("saver_style")).and_then(Value::as_i64))
+        .unwrap_or(1) as i32;
+    ui.set_saver_style(style);
+    ui.set_saver_weight(num("weight", 600) as i32);
+    ui.set_saver_width(num("width", 100) as f32 / 100.0);
+    ui.set_saver_speed(num("speed", 20) as f32);
+    ui.set_saver_date(flag("date"));
+    ui.set_saver_weather(flag("weather"));
+    ui.set_saver_next(flag("next"));
+    ui.set_saver_seconds(flag("seconds"));
+    ui.set_saver_accent(cfg.get("colour").and_then(Value::as_str).and_then(pages::parse_color).unwrap_or_else(|| accent(s)));
 }
 
 /// Weight of a new once-a-minute reading in its average (about five minutes).
@@ -1923,9 +2118,11 @@ fn report_device(s: &mut UiState) {
     };
     let periodic = s.last_report.elapsed() > Duration::from_secs(60);
     let mut d = s.device.lock().unwrap();
+    // every value Home Assistant shows from here (a change of any one of them alone is sent at once)
     let before = (
-        d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone(),
-        d.proximity_wake, d.screen_on, d.dashboard.clone(), d.presence, d.display_mode.clone(), d.volume,
+        (d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone()),
+        (d.proximity_wake, d.screen_on, d.dashboard.clone(), d.presence, d.display_mode.clone(), d.volume),
+        (d.mic_muted, d.alarms.clone()),
     );
     d.theme = s.settings.theme.clone();
     d.brightness = s.settings.brightness;
@@ -1942,8 +2139,9 @@ fn report_device(s: &mut UiState) {
     d.alarms = serde_json::to_value(&s.settings.alarms).unwrap_or_default();
     d.ready = true;
     let after = (
-        d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone(),
-        d.proximity_wake, d.screen_on, d.dashboard.clone(), d.presence, d.display_mode.clone(), d.volume,
+        (d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone()),
+        (d.proximity_wake, d.screen_on, d.dashboard.clone(), d.presence, d.display_mode.clone(), d.volume),
+        (d.mic_muted, d.alarms.clone()),
     );
     if lux_changed {
         d.lux = s.lux.map(|l| l.round());
@@ -2283,6 +2481,16 @@ fn show_proximity_test(ui: &AppWindow, s: &UiState, raw: f64) {
 fn on_setting(ui: &AppWindow, key: &str, value: &str) {
     let mut reload = false;
     match key {
+        // the integration's page settings are open: the panel shows that page (by its place among the
+        // pages shown), so the picture there shows what is being set
+        "show_page" => {
+            let i = value.parse::<i32>().unwrap_or(-1);
+            if i >= 0 && (i as usize) < ui.get_pages().row_count() && with_state(|s| s.temp_page.is_none()) {
+                wake(ui);
+                ui.set_page(i);
+            }
+            return;
+        }
         "restart_app" => {
             eprintln!("nspanel-app: restart requested (settings / Home Assistant button)");
             std::process::exit(0)
@@ -2327,6 +2535,7 @@ fn on_setting(ui: &AppWindow, key: &str, value: &str) {
             "volume" => {
                 s.settings.volume = value.parse::<u8>().unwrap_or(80).min(100);
                 hw::set_volume(s.settings.volume);
+                ui.set_speaker_muted(s.settings.volume == 0);
                 // Short sound at the new level (also for changes from Home Assistant).
                 s.player.play(voice::Sound::Chime);
             }
@@ -2361,6 +2570,12 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
         w if w.starts_with("alarms.") || w.starts_with("alarm.") => alarms::act(ui, w, value),
         w if w.starts_with("timers.") || w.starts_with("watch.") => timers_act(ui, w, value),
         "voice.close" => ui.set_voice_on(false),
+        // the bell: the notifications page, or the list as a temporary page when the panel has none
+        "notes.open" => {
+            if !go_to_page(ui, "info") {
+                open_temporary_page(ui, "info");
+            }
+        }
         "strip.close" => ui.set_strip_on(false),
         "status.fold" | "strip.open" | "info.crit-silence" => alerts::act(ui, what),
         "set.touch" => start_touch_test(ui),
@@ -2462,6 +2677,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mdns_browser = Arc::new(mdns::Browser::default());
     mdns::spawn(esphome::mdns_service(), mdns_browser.clone());
     let shared = Arc::new(ha::Shared::default());
+    // development install: the system log kept on the data partition and sent to Home Assistant
+    devlog::spawn();
     let dashboard_name = if !settings.dashboard.is_empty() {
         settings.dashboard.clone()
     } else {
@@ -2472,10 +2689,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // first session needs no reload (the integration's settings come with it).
     *shared.extra_entities.lock().unwrap() = vec!["sun.sun".into(), "zone.home".into(), settings.weather_entity.clone()];
     *shared.forecast_entity.lock().unwrap() = settings.weather_entity.clone();
-    let auth = config
-        .as_ref()
-        .ok()
-        .map(|c| Arc::new(Auth::load(&c.ha_url, PathBuf::from(format!("{PERSIST_DIR}/ha_auth.json")))));
+    // NSPANEL_AUTH: another login file (with NSPANEL_CONFIG and NSPANEL_SETTINGS: a second
+    // Home Assistant for tests, the panel's own login untouched).
+    let auth_file = std::env::var("NSPANEL_AUTH").unwrap_or_else(|_| format!("{PERSIST_DIR}/ha_auth.json"));
+    let auth = config.as_ref().ok().map(|c| Arc::new(Auth::load(&c.ha_url, PathBuf::from(&auth_file))));
 
     // Home Assistant client first, the display after: the first screen shows
     // the right time and current states instead of 1970 and empty pages.
@@ -2626,6 +2843,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let wake_words = Arc::new(std::sync::Mutex::new(settings.wake_words.clone()));
     let player = Arc::new(voice::Player::new());
     hw::set_volume(settings.volume);
+    ui.set_speaker_muted(settings.volume == 0);
     let ringing_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
     ui.set_mic_muted(settings.mic_muted);
     ui.set_voice_assistant("".into());
@@ -2706,7 +2924,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             flip_at: None,
             weather_refreshed: Instant::now(),
             dev_screens: false,
-            dnd: false,
+            dnd: None,
             dev_config: None,
             temp_page: None,
             alarm_edit: None,
@@ -2766,7 +2984,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Wi-Fi roam check only while nothing is heard, said or played.
         let speaking = player.busy.clone();
         let ringing = ringing_flag.clone();
-        roam::spawn(move || !voice::busy() && !speaking.load(Ordering::SeqCst) && !ringing.load(Ordering::SeqCst));
+        roam::spawn(
+            move || !voice::busy() && !speaking.load(Ordering::SeqCst) && !ringing.load(Ordering::SeqCst),
+            || HA_LINKED.load(Ordering::SeqCst),
+        );
     }
 
     // UI callbacks
@@ -2891,6 +3112,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(b) = v.get("dark").and_then(Value::as_bool) {
                 ui.global::<Theme>().set_dark(b);
             }
+            if v.get("patrol").and_then(Value::as_bool) == Some(true) {
+                synth::patrol_now();
+            }
+            if let Some(n) = v.get("cars_test").and_then(Value::as_u64) {
+                synth::test_cars(&ui, n as usize);
+            }
             #[cfg(feature = "gpu")]
             if let Some(b) = v.get("frame_stats").and_then(Value::as_bool) {
                 gpu::FRAME_STATS.store(b, Ordering::SeqCst);
@@ -2899,6 +3126,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_voice_heard(a.get(1).and_then(Value::as_str).unwrap_or("").into());
                 ui.set_voice_answer(a.get(2).and_then(Value::as_str).unwrap_or("").into());
                 let st = a.first().and_then(Value::as_i64).unwrap_or(0) as i32;
+                // the look from the integration's settings, as a real voice run takes it
+                voice_view(&ui, st.max(1));
                 ui.set_voice_state(st.max(1));
                 ui.set_voice_on(st > 0);
             }

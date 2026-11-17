@@ -428,6 +428,11 @@ impl GpuWindow {
         let done = Arc::new(AtomicBool::new(false));
         *self.buffers.shown_read.borrow_mut() = Some(done.clone());
         std::thread::spawn(move || {
+            // below the UI's own threads: the screen stays smooth while a picture is taken
+            // SAFETY: setpriority on this thread's own id.
+            unsafe {
+                libc::setpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t, 19);
+            }
             let started = std::time::Instant::now();
             let rgb = read_dmabuf(&fd, width, height, stride);
             drop(fd);

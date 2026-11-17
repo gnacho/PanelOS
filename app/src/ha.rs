@@ -126,6 +126,9 @@ fn send_json(ws: &mut Socket, v: &Value) -> Result<(), String> {
 fn set_timeout(ws: &mut Socket, t: Option<Duration>) {
     if let MaybeTlsStream::Plain(s) = ws.get_mut() {
         let _ = s.set_read_timeout(t);
+        // a send that cannot go out (the network gone, its buffer full) fails instead of waiting for
+        // ever: the link is noticed as lost and made again
+        let _ = s.set_write_timeout(Some(Duration::from_secs(3)));
     }
 }
 
@@ -267,7 +270,10 @@ fn session(
     set_timeout(&mut ws, Some(Duration::from_millis(150)));
     let mut states: HashMap<String, EntityState> = HashMap::new();
     let mut last_rx = Instant::now();
-    let mut ping_sent: Option<Instant> = None;
+    let mut alive_at = Instant::now();
+    let mut alive_id = 0u64;
+    let mut log_at = Instant::now();
+    let mut log_id = 0u64;
     let mut dashboards_request: Option<u64> = None;
     // The panel's device (PanelOS integration): reported once the
     // subscription is accepted, then only what changed.
@@ -292,16 +298,21 @@ fn session(
                 }
                 Command::Screen(png) if report.linked => {
                     next_id += 1;
-                    send_json(&mut ws, &json!({"id": next_id, "type": "panelos/screen", "panel_id": PANEL_ID, "png": png}))?;
+                    let t = Instant::now();
+                    let sent = send_json(&mut ws, &json!({"id": next_id, "type": "panelos/screen", "panel_id": PANEL_ID, "jpeg": png}));
+                    crate::SCREEN_SEND_MS.store(t.elapsed().as_millis() as u64, std::sync::atomic::Ordering::SeqCst);
+                    crate::SCREENS_SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    sent?;
                 }
-                Command::Screen(_) => {}
+                Command::Screen(_) => {
+                    crate::SCREENS_SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
             }
         }
 
         match read_json(&mut ws)? {
             Some(msg) => {
                 last_rx = Instant::now();
-                ping_sent = None;
                 let report_answer = msg["type"] == "result" && report.answered(msg["id"].as_u64().unwrap_or(0));
                 match msg["type"].as_str() {
                     Some("result") if report_answer => {
@@ -373,6 +384,8 @@ fn session(
                         }
                         emit(Event::Dashboards(list));
                     }
+                    // the keep-alive's answer (an older integration without it answers with an error)
+                    Some("result") if msg["id"].as_u64() == Some(alive_id) || msg["id"].as_u64() == Some(log_id) => {}
                     Some("result") if msg["success"] == false => {
                         eprintln!("nspanel-app: request {} failed: {}", msg["id"], msg["error"]);
                     }
@@ -399,16 +412,34 @@ fn session(
             send_json(&mut ws, &json!({"id": panel_id, "type": "panelos/subscribe", "panel_id": PANEL_ID}))?;
         }
 
-        // Keep-alive: Home Assistant answers {"type":"ping"} with a pong. A
-        // vanished server is noticed within about 30 s.
-        if ping_sent.is_none() && last_rx.elapsed() > Duration::from_secs(20) {
+        // Keep-alive, both ways, every second: "panelos/alive" to the integration (which notes it and
+        // answers; an older one answers with an error, which counts the same), or Home Assistant's own
+        // ping before the integration took the subscription. Nothing heard for 8 s: the link is gone
+        // (the status line shows it at once, the offline screen after its usual wait). Not less: Home
+        // Assistant itself stalls now and then (up to 2.3 s measured on a wired client), plus the Wi-Fi.
+        if alive_at.elapsed() >= Duration::from_secs(1) {
             next_id += 1;
-            send_json(&mut ws, &json!({"id": next_id, "type": "ping"}))?;
-            ping_sent = Some(Instant::now());
+            let msg = if report.linked {
+                json!({"id": next_id, "type": "panelos/alive", "panel_id": PANEL_ID})
+            } else {
+                json!({"id": next_id, "type": "ping"})
+            };
+            send_json(&mut ws, &msg)?;
+            alive_at = Instant::now();
+            alive_id = next_id;
         }
-        if let Some(t) = ping_sent {
-            if t.elapsed() > Duration::from_secs(10) {
-                return Err("no answer to ping".into());
+        if last_rx.elapsed() > Duration::from_secs(8) {
+            return Err("nothing from Home Assistant for 8 s".into());
+        }
+        // development install: the new system log lines go along with the keep-alive (the integration
+        // keeps them in a file; lines from a time without a link wait on the panel)
+        if report.linked && log_at.elapsed() >= Duration::from_secs(1) {
+            log_at = Instant::now();
+            let lines = crate::devlog::take(400);
+            if !lines.is_empty() {
+                next_id += 1;
+                send_json(&mut ws, &json!({"id": next_id, "type": "panelos/log", "panel_id": PANEL_ID, "lines": lines}))?;
+                log_id = next_id;
             }
         }
     }

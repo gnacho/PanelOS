@@ -15,11 +15,13 @@ export struct TimerInfo {
     label: string,       // "Pasta", "" if unnamed
     text: string,        // "4:59"
     urgent: bool,        // last minute
+    hours: bool,         // an hour or longer: room for "0:00:00" from the start
 }
 
 // One running timer; the chip grows with its text.
 component TimerChip inherits Rectangle {
     in property <TimerInfo> timer;
+    probe := Text { visible: false; text: root.timer.hours ? "0:00:00" : "00:00"; font-size: Theme.font-caption; font-weight: Theme.weight-strong; }
     // a new chip fades in (200 ms)
     property <bool> came;
     init => { root.came = true; }
@@ -45,11 +47,15 @@ component TimerChip inherits Rectangle {
             color: Theme.muted;
             vertical-alignment: center;
         }
+        // the time keeps one width while it counts down (no jumping of the bar): as wide as "00:00", or
+        // "0:00:00" for a timer of an hour or more
         Text {
             text: root.timer.text;
+            min-width: probe.preferred-width;
             font-size: Theme.font-caption;
             font-weight: Theme.weight-strong;
             color: Theme.text;
+            horizontal-alignment: right;
             vertical-alignment: center;
         }
     }
@@ -85,6 +91,10 @@ export component TimerChips inherits HorizontalLayout {
 export component StatusBar inherits HorizontalLayout {
     in property <string> hint;           // wake word hint
     in property <bool> mic-muted;
+    in property <bool> speaker-muted;    // the panel's volume at 0
+    in property <bool> dnd;              // do not disturb is on
+    in property <bool> listening;        // the assistant is hearing now (after the wake word)
+    in property <int> notes;             // notifications waiting (a bell with the number; a tap opens their list)
     in property <[TimerInfo]> timers;
     in property <bool> problem;          // connection problem
     in property <bool> quiet;            // screensaver: no hint, no microphone
@@ -102,10 +112,24 @@ export component StatusBar inherits HorizontalLayout {
         opacity: root.left-k;
         TimerChips { timers: root.timers; most: 1; }
     }
-    if !root.quiet || root.mic-muted: Icon {
-        text: root.mic-muted ? "\u{F036D}" : "\u{F036C}";
-        font-size: 16px;
-        color: root.mic-muted ? Theme.danger : root.soft;
+    if root.listening: VerticalLayout {
+        alignment: center;
+        Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #2fd27a; }
+    }
+    if root.mic-muted: Icon {
+        text: "\u{F036D}";
+        font-size: 17px;
+        color: Theme.danger;
+    }
+    if root.speaker-muted: Icon {
+        text: "\u{F075F}";
+        font-size: 17px;
+        color: #f5a524;
+    }
+    if root.dnd: Icon {
+        text: "\u{F009B}";
+        font-size: 17px;
+        color: root.soft;
     }
     Text {
         horizontal-stretch: 1;
@@ -119,6 +143,16 @@ export component StatusBar inherits HorizontalLayout {
     if root.problem: VerticalLayout {
         alignment: center;
         Icon { text: "\u{F092B}"; font-size: 18px; color: Theme.warning; }
+    }
+    if root.notes > 0 && !root.quiet: bell := Rectangle {
+        width: 34px;
+        Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
+        Rectangle {
+            x: 18px; y: (parent.height - 26px) / 2; width: max(15px, nt.preferred-width + 8px); height: 15px; border-radius: 7.5px;
+            background: Theme.accent;
+            nt := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; clicked => { Act.act("notes.open", ""); } }
     }
     if root.left-k < 0.999: VerticalLayout {
         alignment: center;
@@ -495,6 +529,7 @@ export component ClockFace inherits Rectangle {
     // Style 6 wanders like the classic bouncing screensaver: straight lines
     // at 45 degrees, bouncing off the edges; only the speed can be set.
     in property <float> wander-speed: 20;    // pixels per second
+    in property <float> width-k: 1;          // the digits narrower (< 1) or wider (> 1), from the screensaver settings
     property <bool> has-next: root.show-next && root.data.next != "";
     property <bool> clock-only: !root.show-date && !root.show-weather && !root.has-next;
     // the colon breathes evenly, once in 2 s
@@ -515,11 +550,15 @@ export component ClockFace inherits Rectangle {
         padding-right: 24px;
         alignment: center;
         spacing: 2px;
-        HorizontalLayout {
-            alignment: root.clock-only ? center : start;
-            Text { text: root.data.hh; font-size: 128px; font-weight: root.weight; color: Theme.text; }
-            Text { text: ":"; font-size: 128px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
-            Text { text: root.data.mm; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+        // wider digits never leave the screen (scaled about the middle: the left margin limits too)
+        Rectangle {
+            transform-scale-x: min(root.width-k, (root.width - 52px) / max(1px, r0.preferred-width), 1 + 28px / ((root.width - 52px) / 2));
+            r0 := HorizontalLayout {
+                alignment: root.clock-only ? center : start;
+                Text { text: root.data.hh; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+                Text { text: ":"; font-size: 128px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
+                Text { text: root.data.mm; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+            }
         }
         if root.show-date: Text { text: root.data.date; font-size: 22px; color: Theme.muted; }
         if root.show-weather: HorizontalLayout {
@@ -551,11 +590,14 @@ export component ClockFace inherits Rectangle {
         y: root.top;
         height: root.height - root.top - root.bottom;
         alignment: center;
-        HorizontalLayout {
-            alignment: center;
-            Text { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; }
-            Text { text: ":"; font-size: 176px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
-            Text { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+        Rectangle {
+            transform-scale-x: min(root.width-k, (root.width - 24px) / max(1px, r1.preferred-width));
+            r1 := HorizontalLayout {
+                alignment: center;
+                Text { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+                Text { text: ":"; font-size: 176px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
+                Text { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+            }
         }
         if root.show-seconds: HorizontalLayout {
             alignment: center;
@@ -661,9 +703,12 @@ export component ClockFace inherits Rectangle {
         height: root.height - root.top - root.bottom;
         alignment: center;
         spacing: 16px;
-        FlipClock {
-            data: root.data; weight: root.weight; accent: root.accent; colon: root.colon;
-            card-height: root.clock-only ? 170px : 150px;
+        Rectangle {
+            transform-scale-x: min(root.width-k, (root.width - 24px) / max(1px, r7.preferred-width));
+            r7 := FlipClock {
+                data: root.data; weight: root.weight; accent: root.accent; colon: root.colon;
+                card-height: root.clock-only ? 170px : 150px;
+            }
         }
         if root.show-date || root.show-weather: InfoLine { data: root.data; show-date: root.show-date; show-weather: root.show-weather; size: 19px; }
         if root.has-next: NextLine { data: root.data; accent: root.accent; }
@@ -696,11 +741,14 @@ export component ClockFace inherits Rectangle {
         width: root.wander-w;
         height: root.wander-h;
         alignment: center;
-        HorizontalLayout {
-            alignment: center;
-            Text { text: root.data.hh; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
-            Text { text: ":"; font-size: 84px; font-weight: root.weight; color: root.accent.with-alpha(0.85); opacity: root.colon; }
-            Text { text: root.data.mm; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+        Rectangle {
+            transform-scale-x: min(root.width-k, root.wander-w / max(1px, r6.preferred-width));
+            r6 := HorizontalLayout {
+                alignment: center;
+                Text { text: root.data.hh; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+                Text { text: ":"; font-size: 84px; font-weight: root.weight; color: root.accent.with-alpha(0.85); opacity: root.colon; }
+                Text { text: root.data.mm; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+            }
         }
         if root.show-date || root.show-weather: InfoLine { data: root.data; show-date: root.show-date; show-weather: root.show-weather; size: 16px; color: Theme.faint; }
         if root.has-next: NextLine { padding-top: 4px; data: root.data; accent: root.accent.with-alpha(0.8); size: 14px; }

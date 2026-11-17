@@ -7,7 +7,7 @@
 - First start on the panel: Home Assistant found on the network (mDNS) or its address typed on a keypad.
 - Announced over mDNS like any ESPHome device, so Home Assistant discovers the panel (inside one network segment).
 - Outages: the panel keeps trying for good, shows what it waits for, and comes back by itself; no 1970 time on the screen.
-- Wi-Fi: while idle, about every 30 minutes, the panel moves to an access point of the same network that is at least 10 dB stronger; it is never tied to one access point.
+- Wi-Fi: while idle, about every 30 minutes, the panel moves to an access point of the same network that is at least 10 dB stronger.
 
 ## Look and feel
 

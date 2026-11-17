@@ -104,6 +104,16 @@ pub fn states(s: &DeviceState) -> Map<String, Value> {
     m
 }
 
+/// A picture of the screen as JPEG in base64, for the PanelOS page's live preview (small enough to send
+/// several a second).
+pub fn jpeg_base64(width: u32, height: u32, rgb: &[u8]) -> Option<String> {
+    let mut out = Vec::with_capacity(64 * 1024);
+    // (quality 65: about a third smaller than 78, still sharp at the page's preview size)
+    let encoder = jpeg_encoder::Encoder::new(&mut out, 65);
+    encoder.encode(rgb, width as u16, height as u16, jpeg_encoder::ColorType::Rgb).ok()?;
+    Some(base64(&out))
+}
+
 /// A picture of the screen as PNG in base64, for the PanelOS page.
 pub fn png_base64(width: u32, height: u32, rgb: &[u8]) -> Option<String> {
     let mut png = Vec::new();
@@ -153,6 +163,8 @@ pub fn command(key: &str, value: &Value, s: &DeviceState) -> Option<Control> {
         "brightness" => value.as_f64().and_then(|v| setting("brightness", format!("{}", v.round().clamp(1.0, 100.0) as i32))),
         "auto_brightness" | "proximity_wake" => value.as_bool().and_then(|v| setting(key, v.to_string())),
         "restart_app" | "reboot" => setting(key, String::new()),
+        // (the place of a page among the pages shown)
+        "page" => value.as_u64().and_then(|i| setting("show_page", i.to_string())),
         _ => None,
     }
 }

@@ -8,7 +8,7 @@
 // so every stroked Path here gets a box one stroke width larger to keep its coordinates exact.
 // Images are drawn at their exact size (the renderer scales without filtering). Coloured shapes are a
 // white mask (colorize = the colour) with a grey + alpha shading layer on top.
-import { Theme, Act } from "theme.slint";
+import { Theme, Act, Clock } from "theme.slint";
 import { Icon, GlowText } from "widgets.slint";
 import { FlapCard } from "panels.slint";
 import { Keyboard } from "overlays.slint";
@@ -34,7 +34,7 @@ export struct AlarmItem {
 // one comes when it is gone)
 export struct SwCar {
     line: float,        // which floor line (0 = the middle one, negative = left)
-    kind: int,          // 0 wedge with a rear wing, 1 flat tail with four round lights, 2 rounded fastback
+    kind: int,          // 0 wedge, 1 flat tail with four round lights, 2 rounded fastback, 3 louvre, 4 winged, 5 patrol (police)
     tint: color,        // its colour (random, vivid)
     born: float,        // the scene clock (seconds) when it appeared
     dur: float,         // seconds from below the front edge to the horizon
@@ -228,6 +228,10 @@ export component SynthScene inherits Rectangle {
         Seg { stroke: #ffffffb3; stroke-width: 1.4px; x1: star.hx - 40; y1: star.hy - 11; x2: star.hx; y2: star.hy; }
         Rectangle { x: (star.hx - 1.5) * 1px; y: (star.hy - 1.5) * 1px; width: 3px; height: 3px; border-radius: 1.5px; background: #ffffff; }
     }
+    // the car kinds' layers (paint takes the car's colour; the patrol car's paint is empty: its livery is fixed)
+    property <[image]> car-paint: [@image-url("timers/sw/pcar-0-paint.png"), @image-url("timers/sw/pcar-1-paint.png"), @image-url("timers/sw/pcar-2-paint.png"), @image-url("timers/sw/pcar-3-paint.png"), @image-url("timers/sw/pcar-4-paint.png"), @image-url("timers/sw/pcar-5-paint.png")];
+    property <[image]> car-shade: [@image-url("timers/sw/pcar-0-shade.png"), @image-url("timers/sw/pcar-1-shade.png"), @image-url("timers/sw/pcar-2-shade.png"), @image-url("timers/sw/pcar-3-shade.png"), @image-url("timers/sw/pcar-4-shade.png"), @image-url("timers/sw/pcar-5-shade.png")];
+    property <[image]> car-fixed: [@image-url("timers/sw/pcar-0-fixed.png"), @image-url("timers/sw/pcar-1-fixed.png"), @image-url("timers/sw/pcar-2-fixed.png"), @image-url("timers/sw/pcar-3-fixed.png"), @image-url("timers/sw/pcar-4-fixed.png"), @image-url("timers/sw/pcar-5-fixed.png")];
     // pixel cars pulling away along a floor line, big near, smaller towards the horizon (far ones first)
     for c in root.cars: car := Rectangle {
         // depth: 0.46 = still under the bottom edge … 1 = tyres on the edge, 176 px wide … 60 = 3 px, gone
@@ -242,14 +246,23 @@ export component SynthScene inherits Rectangle {
         property <float> fade: max(0, min(1, (1 - min(1, self.age / max(1, c.dur))) / 0.06));
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
             opacity: car.fade;
-            source: c.kind == 0 ? @image-url("timers/sw/pcar-0-paint.png") : c.kind == 1 ? @image-url("timers/sw/pcar-1-paint.png") : @image-url("timers/sw/pcar-2-paint.png");
+            source: root.car-paint[c.kind];
             colorize: c.tint; }
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
             opacity: car.fade;
-            source: c.kind == 0 ? @image-url("timers/sw/pcar-0-shade.png") : c.kind == 1 ? @image-url("timers/sw/pcar-1-shade.png") : @image-url("timers/sw/pcar-2-shade.png"); }
+            source: root.car-shade[c.kind]; }
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
             opacity: car.fade;
-            source: c.kind == 0 ? @image-url("timers/sw/pcar-0-fixed.png") : c.kind == 1 ? @image-url("timers/sw/pcar-1-fixed.png") : @image-url("timers/sw/pcar-2-fixed.png"); }
+            source: root.car-fixed[c.kind]; }
+        // the patrol car's light bar: red flashes twice (on 70 ms, off 60, on 70, off 120), then blue the same
+        property <float> fp: Math.mod(car.age, 0.64);
+        // (the overlays stay; only their opacity flashes)
+        if c.kind == 5 && car.d < 59.9: Image {
+            x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
+            opacity: car.fp < 0.07 || (car.fp >= 0.13 && car.fp < 0.20) ? car.fade : 0; source: @image-url("timers/sw/pcar-5-flash-red.png"); }
+        if c.kind == 5 && car.d < 59.9: Image {
+            x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
+            opacity: (car.fp >= 0.32 && car.fp < 0.39) || (car.fp >= 0.45 && car.fp < 0.52) ? car.fade : 0; source: @image-url("timers/sw/pcar-5-flash-blue.png"); }
         // a little pixel smoke from the rear tyres, drifting towards the viewer
         if car.sm > 0: Rectangle {
             for p in 6: Rectangle {
@@ -459,15 +472,62 @@ export component TimersPage inherits Rectangle {
         property <length> x0: 54px;
         property <length> y0: root.vis + max(0px, (380px - root.vis - 244px) / 2);
         property <bool> flowing: root.cur.running && root.fr > 0.002 && root.fr < 0.998;
+        // the sand: 48 levels true to the time left (47 = full top), the next level fading in by the fraction,
+        // the time left gliding between the app's whole seconds; the stream falls while it runs
+        property <[image]> masks: [@image-url("timers/hg/sand-mask-00.png"), @image-url("timers/hg/sand-mask-01.png"), @image-url("timers/hg/sand-mask-02.png"), @image-url("timers/hg/sand-mask-03.png"), @image-url("timers/hg/sand-mask-04.png"), @image-url("timers/hg/sand-mask-05.png"), @image-url("timers/hg/sand-mask-06.png"), @image-url("timers/hg/sand-mask-07.png"), @image-url("timers/hg/sand-mask-08.png"), @image-url("timers/hg/sand-mask-09.png"), @image-url("timers/hg/sand-mask-10.png"), @image-url("timers/hg/sand-mask-11.png"), @image-url("timers/hg/sand-mask-12.png"), @image-url("timers/hg/sand-mask-13.png"), @image-url("timers/hg/sand-mask-14.png"), @image-url("timers/hg/sand-mask-15.png"), @image-url("timers/hg/sand-mask-16.png"), @image-url("timers/hg/sand-mask-17.png"), @image-url("timers/hg/sand-mask-18.png"), @image-url("timers/hg/sand-mask-19.png"), @image-url("timers/hg/sand-mask-20.png"), @image-url("timers/hg/sand-mask-21.png"), @image-url("timers/hg/sand-mask-22.png"), @image-url("timers/hg/sand-mask-23.png"), @image-url("timers/hg/sand-mask-24.png"), @image-url("timers/hg/sand-mask-25.png"), @image-url("timers/hg/sand-mask-26.png"), @image-url("timers/hg/sand-mask-27.png"), @image-url("timers/hg/sand-mask-28.png"), @image-url("timers/hg/sand-mask-29.png"), @image-url("timers/hg/sand-mask-30.png"), @image-url("timers/hg/sand-mask-31.png"), @image-url("timers/hg/sand-mask-32.png"), @image-url("timers/hg/sand-mask-33.png"), @image-url("timers/hg/sand-mask-34.png"), @image-url("timers/hg/sand-mask-35.png"), @image-url("timers/hg/sand-mask-36.png"), @image-url("timers/hg/sand-mask-37.png"), @image-url("timers/hg/sand-mask-38.png"), @image-url("timers/hg/sand-mask-39.png"), @image-url("timers/hg/sand-mask-40.png"), @image-url("timers/hg/sand-mask-41.png"), @image-url("timers/hg/sand-mask-42.png"), @image-url("timers/hg/sand-mask-43.png"), @image-url("timers/hg/sand-mask-44.png"), @image-url("timers/hg/sand-mask-45.png"), @image-url("timers/hg/sand-mask-46.png"), @image-url("timers/hg/sand-mask-47.png")];
+        property <[image]> shades: [@image-url("timers/hg/sand-shade-00.png"), @image-url("timers/hg/sand-shade-01.png"), @image-url("timers/hg/sand-shade-02.png"), @image-url("timers/hg/sand-shade-03.png"), @image-url("timers/hg/sand-shade-04.png"), @image-url("timers/hg/sand-shade-05.png"), @image-url("timers/hg/sand-shade-06.png"), @image-url("timers/hg/sand-shade-07.png"), @image-url("timers/hg/sand-shade-08.png"), @image-url("timers/hg/sand-shade-09.png"), @image-url("timers/hg/sand-shade-10.png"), @image-url("timers/hg/sand-shade-11.png"), @image-url("timers/hg/sand-shade-12.png"), @image-url("timers/hg/sand-shade-13.png"), @image-url("timers/hg/sand-shade-14.png"), @image-url("timers/hg/sand-shade-15.png"), @image-url("timers/hg/sand-shade-16.png"), @image-url("timers/hg/sand-shade-17.png"), @image-url("timers/hg/sand-shade-18.png"), @image-url("timers/hg/sand-shade-19.png"), @image-url("timers/hg/sand-shade-20.png"), @image-url("timers/hg/sand-shade-21.png"), @image-url("timers/hg/sand-shade-22.png"), @image-url("timers/hg/sand-shade-23.png"), @image-url("timers/hg/sand-shade-24.png"), @image-url("timers/hg/sand-shade-25.png"), @image-url("timers/hg/sand-shade-26.png"), @image-url("timers/hg/sand-shade-27.png"), @image-url("timers/hg/sand-shade-28.png"), @image-url("timers/hg/sand-shade-29.png"), @image-url("timers/hg/sand-shade-30.png"), @image-url("timers/hg/sand-shade-31.png"), @image-url("timers/hg/sand-shade-32.png"), @image-url("timers/hg/sand-shade-33.png"), @image-url("timers/hg/sand-shade-34.png"), @image-url("timers/hg/sand-shade-35.png"), @image-url("timers/hg/sand-shade-36.png"), @image-url("timers/hg/sand-shade-37.png"), @image-url("timers/hg/sand-shade-38.png"), @image-url("timers/hg/sand-shade-39.png"), @image-url("timers/hg/sand-shade-40.png"), @image-url("timers/hg/sand-shade-41.png"), @image-url("timers/hg/sand-shade-42.png"), @image-url("timers/hg/sand-shade-43.png"), @image-url("timers/hg/sand-shade-44.png"), @image-url("timers/hg/sand-shade-45.png"), @image-url("timers/hg/sand-shade-46.png"), @image-url("timers/hg/sand-shade-47.png")];
+        property <[float]> peaks: [146.6, 147.58, 148.56, 149.52, 150.47, 151.41, 152.35, 153.28, 154.21, 155.13, 156.04, 156.96, 157.87, 158.78, 159.69, 160.6, 161.51, 162.43, 163.36, 164.29, 165.23, 166.17, 167.13, 168.09, 169.07, 170.05, 171.05, 172.07, 173.1, 174.15, 175.21, 176.3, 177.41, 178.54, 179.7, 180.88, 182.1, 183.36, 184.68, 186.08, 187.58, 189.18, 190.92, 192.82, 194.89, 197.32, 200.76, 214.0];
+        property <[image]> stream-masks: [@image-url("timers/hg/stream-mask-0.png"), @image-url("timers/hg/stream-mask-1.png"), @image-url("timers/hg/stream-mask-2.png"), @image-url("timers/hg/stream-mask-3.png")];
+        property <[image]> stream-shades: [@image-url("timers/hg/stream-shade-0.png"), @image-url("timers/hg/stream-shade-1.png"), @image-url("timers/hg/stream-shade-2.png"), @image-url("timers/hg/stream-shade-3.png")];
+        property <float> frs: root.fr;
+        animate frs { duration: 1000ms; easing: linear; }
+        property <float> lf: Math.max(0, Math.min(47, hg.frs * 47));
+        // The level and the tint are plain properties, set only when they really change. The renderer draws a
+        // coloured picture once and keeps it while its source and colour stay; bound to the gliding amount (or to
+        // the timer row, new every second) they counted as changed each frame and the sand was coloured again
+        // every frame (measured: 32 instead of 60 frames a second while it ran).
+        property <int> li;
+        property <color> tint-now: root.cur.tint;
+        property <color> tint;
+        init => {
+            hg.li = Math.min(46, Math.floor(hg.lf));
+            hg.tint = hg.tint-now;
+        }
+        changed lf => {
+            if Math.min(46, Math.floor(hg.lf)) != hg.li {
+                hg.li = Math.min(46, Math.floor(hg.lf));
+            }
+        }
+        changed tint-now => {
+            if hg.tint != hg.tint-now {
+                hg.tint = hg.tint-now;
+            }
+        }
+        property <float> lk: Math.max(0, Math.min(1, hg.lf - hg.li));
+        property <float> peak: hg.peaks[hg.li] + (hg.peaks[hg.li + 1] - hg.peaks[hg.li]) * hg.lk;
+        // the stream's four frames follow each other every 83 ms, each fading into the next (no steps)
+        property <float> sp: hg.flowing ? (animation-tick() - Clock.base) / 1ms / 83 : 0;
+        property <int> si: Math.mod(Math.floor(hg.sp), 4);
+        property <float> sk: hg.sp - Math.floor(hg.sp);
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/floor-shadow.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/post-back.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/glass-back.png"); }
-        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: root.hg-sand-mask; colorize: root.cur.tint; }
-        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: root.hg-sand-shade; }
+        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.masks[hg.li]; colorize: hg.tint; }
+        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.shades[hg.li]; }
+        // (the next level stays in place and only fades: with a short timer the level changes several
+        // times a second, and making and dropping these layers each time made the sand stutter)
+        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.masks[hg.li + 1]; colorize: hg.tint; opacity: hg.lk; }
+        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.shades[hg.li + 1]; opacity: hg.lk; }
         if hg.flowing: Rectangle {
-            x: hg.x0 + 84px; y: hg.y0 + 118px; width: 5px; height: max(0px, (root.hg-peak - 118) * 1px + 1px); clip: true;
-            Image { x: 0; y: 0; width: 5px; height: 98px; source: root.hg-stream-mask; colorize: root.cur.tint; }
-            Image { x: 0; y: 0; width: 5px; height: 98px; source: root.hg-stream-shade; }
+            x: hg.x0 + 84px; y: hg.y0 + 118px; width: 5px; height: max(0px, (hg.peak - 118) * 1px + 1px); clip: true;
+            // each stream frame is a picture of its own (coloured once); only their opacity moves: frame si
+            // fully, the next one fading in over it (frame 0 once more after frame 3)
+            for k in 5: Rectangle {
+                x: 0; y: 0; width: 5px; height: 98px;
+                property <float> w: k == hg.si ? 1 : (k == hg.si + 1 ? hg.sk : 0);
+                Image { x: 0; y: 0; width: 5px; height: 98px; source: hg.stream-masks[Math.mod(k, 4)]; colorize: hg.tint; opacity: parent.w; }
+                Image { x: 0; y: 0; width: 5px; height: 98px; source: hg.stream-shades[Math.mod(k, 4)]; opacity: parent.w; }
+            }
         }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/glass-front.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/frame.png"); }

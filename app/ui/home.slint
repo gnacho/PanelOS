@@ -17,6 +17,7 @@ export struct HomeItem {
     accent: color,  // the app fills in the panel accent when the widget has none of its own
     weight: int,    // font weight (300 .. 800), the app fills in the panel weight
     tap: bool,      // a tap opens the widget's view (fixed per kind, see tap-text in HomeGrid); off: no tap action
+    neon: bool,     // neon letters on the synthwave background (each widget its own; the scene must be synthwave)
     opts: int,      // switches (bits) per kind:
                     //   clock: 1 seconds, 2 date, 4 weather, 8 next event
                     //   date: 1 year, 2 week number; weather: 1 condition, 2 high / low, 4 rain chance, 8 feels like
@@ -98,8 +99,9 @@ component ClockW inherits Rectangle {
 
     // 0 digital, 1 big digits with a seconds line
     if root.st == 0 || root.st == 1: dg := VerticalLayout {
-        property <length> fs: min((root.width - 16px) / 2.75, root.st == 1 ? (root.it.h >= 2 ? 150px : root.it.w >= 4 ? 78px : 58px)
-            : root.it.h >= 2 ? (root.info ? 118px : 136px) : root.it.w >= 4 ? 72px : root.it.w >= 2 ? 60px : 34px);
+        property <int> lines: root.it.h >= 2 ? (root.info ? 1 : 0) + (root.show-next ? 1 : 0) : 0;
+        property <length> fs: min((root.width - 16px) / 2.75, root.st == 1 ? (root.it.h >= 2 ? 150px - self.lines * 26px : root.it.w >= 4 ? 78px : 58px)
+            : root.it.h >= 2 ? 136px - self.lines * 18px : root.it.w >= 4 ? 72px : root.it.w >= 2 ? 60px : 34px);
         alignment: center;
         spacing: 0;
         HorizontalLayout {
@@ -118,13 +120,19 @@ component ClockW inherits Rectangle {
                 if root.seconds < 0.25: Rectangle { x: 0; border-radius: 1.5px; background: root.it.accent; opacity: 1 - root.seconds * 4; }
             }
         }
-        if root.st == 0 && root.it.h >= 2 && root.info: HorizontalLayout {
+        if root.it.h >= 2 && root.info: HorizontalLayout {
             alignment: center;
             spacing: 8px;
             if root.show-date: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.date; font-size: 20px; color: root.ink.with-alpha(0.85); }
             if root.show-date && root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: "·"; font-size: 20px; color: root.ink.with-alpha(0.50); }
             if root.show-wx: GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 22px; color: root.ink.with-alpha(0.85); }
             if root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 20px; color: root.ink.with-alpha(0.85); }
+        }
+        if root.it.h >= 2 && root.show-next: HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            Icon { text: "\u{F00ED}"; font-size: 17px; color: root.it.accent; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.event.rel + " · " + root.event.title; font-size: 16px; color: root.ink.with-alpha(0.80); overflow: elide; }
         }
     }
 
@@ -170,7 +178,7 @@ component ClockW inherits Rectangle {
 
     // 6 split-flap cards
     if root.st == 6: fg := VerticalLayout {
-        property <length> chh: min(150px, root.height - 22px - (root.it.h >= 2 && root.info ? 34px : 0px), (root.width - 52px) / 2.508);
+        property <length> chh: min(150px, root.height - 22px - (root.it.h >= 2 && root.info ? 34px : 0px) - (root.it.h >= 2 && root.show-next ? 30px : 0px), (root.width - 52px) / 2.508);
         alignment: center;
         spacing: 10px;
         FlipClock {
@@ -184,6 +192,12 @@ component ClockW inherits Rectangle {
             if root.show-date && root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: "·"; font-size: 19px; color: root.ink.with-alpha(0.50); }
             if root.show-wx: GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 21px; color: root.ink.with-alpha(0.85); }
             if root.show-wx: GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 19px; color: root.ink.with-alpha(0.85); }
+        }
+        if root.it.h >= 2 && root.show-next: HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            Icon { text: "\u{F00ED}"; font-size: 17px; color: root.it.accent; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.event.rel + " · " + root.event.title; font-size: 16px; color: root.ink.with-alpha(0.80); overflow: elide; }
         }
     }
 
@@ -265,9 +279,10 @@ component WeatherW inherits Rectangle {
     in property <bool> neon;
     in property <color> glow;
     pure function on(bit: int) -> bool { Math.mod(Math.floor(root.it.opts / bit), 2) == 1 }
+    property <string> sep: root.it.w >= 4 && root.it.h >= 2 ? "   ·   " : " · ";
     property <string> extra: (root.on(2) ? root.data.high-low : "")
-        + (root.on(2) && root.on(4) ? "   ·   " : "") + (root.on(4) ? root.data.precip + " rain" : "")
-        + ((root.on(2) || root.on(4)) && root.on(8) ? "   ·   " : "") + (root.on(8) ? root.data.feels : "");
+        + (root.on(2) && root.on(4) ? root.sep : "") + (root.on(4) ? root.data.precip + " rain" : "")
+        + ((root.on(2) || root.on(4)) && root.on(8) ? root.sep : "") + (root.on(8) ? root.data.feels : "");
     if root.it.h >= 2: VerticalLayout {
         alignment: center;
         spacing: 2px;
@@ -289,7 +304,7 @@ component WeatherW inherits Rectangle {
         VerticalLayout {
             alignment: center;
             if root.on(1): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 18px; color: root.ink; overflow: elide; }
-            if root.on(2): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.high-low; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
+            if root.extra != "": GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.extra; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
         }
     }
     if root.it.h < 2 && root.it.w >= 2 && root.it.w < 4: HorizontalLayout {
@@ -299,8 +314,9 @@ component WeatherW inherits Rectangle {
         GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 44px; color: root.ink; }
         VerticalLayout {
             alignment: center;
-            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 40px; font-weight: root.it.weight; color: root.ink; }
+            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: root.on(1) && root.extra != "" ? 34px : 40px; font-weight: root.it.weight; color: root.ink; }
             if root.on(1): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 14px; color: root.ink.with-alpha(0.80); overflow: elide; }
+            if root.extra != "": GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.extra; font-size: 12px; color: root.ink.with-alpha(0.75); overflow: elide; }
         }
     }
     if root.it.w < 2: VerticalLayout {
@@ -329,7 +345,7 @@ component EventW inherits Rectangle {
         if root.it.w < 4: VerticalLayout {
             x: 26px; width: parent.width - 34px;
             alignment: center;
-            Text { text: root.event.rel; font-size: 13px; color: root.ink.with-alpha(0.80); overflow: elide; }
+            Text { text: root.event.rel + (root.on(1) && root.event.time != "" ? " · " + root.event.time : ""); font-size: 13px; color: root.ink.with-alpha(0.80); overflow: elide; }
             Text { text: root.event.title; font-size: 19px; font-weight: root.it.weight; color: root.ink; overflow: elide; }
         }
     }
@@ -740,7 +756,7 @@ export component HomeGrid inherits Rectangle {
             width: parent.width; height: parent.height;
             it: it; data: root.data; clock: root.clock; event: root.event; halo: root.halo; music: root.music; ink: root.ink;
             seconds: root.seconds; music-pos: root.music-pos;
-            neon: root.neon; glow: root.glow;
+            neon: root.neon && it.neon; glow: root.glow;
             weekday-long: root.weekday-long; day-month: root.day-month; year: root.year; week: root.week;
         }
         if root.editing: EditFrame { width: parent.width; height: parent.height; up: cell.up; selected: i == root.selected; accent: root.accent; }
@@ -811,18 +827,18 @@ export component HomeGrid inherits Rectangle {
     }
 
     // ------------------------------------------------------------------ widget picker (live previews)
-    property <HomeItem> pv-analog: { kind: 0, w: 2, h: 2, style: 2, accent: root.accent, weight: 600, opts: 1 };
-    property <HomeItem> pv-digital: { kind: 0, w: 2, h: 1, style: 0, accent: root.accent, weight: 600, opts: 1 };
-    property <HomeItem> pv-flip: { kind: 0, w: 2, h: 1, style: 6, accent: root.accent, weight: 700, opts: 1 };
-    property <HomeItem> pv-weather: { kind: 2, w: 2, h: 1, accent: root.accent, weight: 600, opts: 1 };
-    property <HomeItem> pv-date: { kind: 1, w: 2, h: 1, accent: root.accent, weight: 600, opts: 0 };
-    property <HomeItem> pv-event: { kind: 3, w: 4, h: 1, accent: root.accent, weight: 600, opts: 3 };
-    property <HomeItem> pv-curve: { kind: 4, w: 4, h: 1, accent: root.accent, weight: 600, opts: 1 };
-    property <HomeItem> pv-hourly: { kind: 5, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0 };
-    property <HomeItem> pv-daily: { kind: 6, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0 };
-    property <HomeItem> pv-music1: { kind: 7, w: 1, h: 1, accent: root.accent, weight: 600, opts: 0 };
-    property <HomeItem> pv-music3: { kind: 7, w: 3, h: 1, accent: root.accent, weight: 600, opts: 0 };
-    property <HomeItem> pv-music4: { kind: 7, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0 };
+    property <HomeItem> pv-analog: { kind: 0, w: 2, h: 2, style: 2, accent: root.accent, weight: 600, opts: 1, neon: true };
+    property <HomeItem> pv-digital: { kind: 0, w: 2, h: 1, style: 0, accent: root.accent, weight: 600, opts: 1, neon: true };
+    property <HomeItem> pv-flip: { kind: 0, w: 2, h: 1, style: 6, accent: root.accent, weight: 700, opts: 1, neon: true };
+    property <HomeItem> pv-weather: { kind: 2, w: 2, h: 1, accent: root.accent, weight: 600, opts: 1, neon: true };
+    property <HomeItem> pv-date: { kind: 1, w: 2, h: 1, accent: root.accent, weight: 600, opts: 0, neon: true };
+    property <HomeItem> pv-event: { kind: 3, w: 4, h: 1, accent: root.accent, weight: 600, opts: 3, neon: true };
+    property <HomeItem> pv-curve: { kind: 4, w: 4, h: 1, accent: root.accent, weight: 600, opts: 1, neon: true };
+    property <HomeItem> pv-hourly: { kind: 5, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0, neon: true };
+    property <HomeItem> pv-daily: { kind: 6, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0, neon: true };
+    property <HomeItem> pv-music1: { kind: 7, w: 1, h: 1, accent: root.accent, weight: 600, opts: 0, neon: true };
+    property <HomeItem> pv-music3: { kind: 7, w: 3, h: 1, accent: root.accent, weight: 600, opts: 0, neon: true };
+    property <HomeItem> pv-music4: { kind: 7, w: 4, h: 1, accent: root.accent, weight: 600, opts: 0, neon: true };
     // the picker fades in (240 ms) and out (200 ms) instead of popping
     property <float> picker-k: root.picker ? 1 : 0;
     animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
@@ -895,7 +911,7 @@ export component HomeGrid inherits Rectangle {
     if root.settings >= 0: HomeWidget {
         x: (root.width - root.cur.w * root.cw) / 2; y: 54px; width: root.cur.w * root.cw; height: root.prev-rows * root.ch;
         it: root.cur; data: root.data; clock: root.clock; event: root.event; halo: root.halo; music: root.music;
-        neon: root.neon; glow: root.glow;
+        neon: root.neon && root.cur.neon; glow: root.glow;
         weekday-long: root.weekday-long; day-month: root.day-month; year: root.year; week: root.week;
     }
     if root.settings >= 0: sheet := Rectangle {

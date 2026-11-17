@@ -10,6 +10,51 @@ use crate::{AppWindow, SwCar};
 
 const SCENES: [&str; 4] = ["sunset", "city", "beach", "stars"];
 
+/// The cars' neon colours, around the colour wheel: hot pink, neon red, sunset orange, sun yellow,
+/// mint, cyan, electric blue, ultraviolet, violet, magenta, and chrome white.
+const CAR_TINTS: [u32; 11] = [0xff2a6d, 0xff3b3b, 0xff8b3d, 0xffd319, 0x01ffc3, 0x00e5ff, 0x4d7cff, 0x8a5cff, 0xc86bfa, 0xff3df0, 0xeef0ff];
+/// Colours too close to tell apart at a glance (by index into CAR_TINTS).
+const CAR_TINT_NEAR: [(usize, usize); 7] = [(0, 1), (1, 2), (4, 5), (6, 7), (7, 8), (8, 9), (9, 0)];
+/// How many of the last cars a colour (or one close to it) must not repeat within.
+const CAR_TINT_GAP: usize = 5;
+
+/// The next car's colour: never the colour of one of the last five cars or one close to it (so never
+/// two alike on the screen either). Of the colours left, only one that still leaves a colour for the car
+/// after it (with these colours that is always possible, so the rule always holds; the colour used
+/// longest ago is only a safety net).
+fn next_tint() -> usize {
+    thread_local!(static RECENT: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) });
+    let near = |a: usize, b: usize| a == b || CAR_TINT_NEAR.iter().any(|&(x, y)| (x, y) == (a, b) || (y, x) == (a, b));
+    RECENT.with(|r| {
+        let mut recent = r.borrow_mut();
+        // cars ago this colour (or a close one) was last used; usize::MAX = not lately
+        let ago = |t: usize, list: &[usize]| list.iter().rev().position(|&u| near(t, u)).unwrap_or(usize::MAX);
+        let free = |list: &[usize]| -> Vec<usize> { (0..CAR_TINTS.len()).filter(|&t| ago(t, list) >= CAR_TINT_GAP).collect() };
+        let mut options = free(&recent);
+        let keeps_room: Vec<usize> = options
+            .iter()
+            .copied()
+            .filter(|&c| {
+                let mut then = recent.clone();
+                then.push(c);
+                !free(&then).is_empty()
+            })
+            .collect();
+        if !keeps_room.is_empty() {
+            options = keeps_room;
+        }
+        let pick = if options.is_empty() {
+            (0..CAR_TINTS.len()).max_by_key(|&t| ago(t, &recent)).unwrap_or(0)
+        } else {
+            options[(random() % options.len() as u64) as usize]
+        };
+        recent.push(pick);
+        let extra = recent.len().saturating_sub(CAR_TINT_GAP * 2);
+        recent.drain(..extra);
+        pick
+    })
+}
+
 fn random() -> u64 {
     use std::cell::Cell;
     thread_local!(static SEED: Cell<u64> = Cell::new(
@@ -35,6 +80,126 @@ fn grid(scene: usize, view: &str) -> Color {
         std::path::Path::new(env!("PANELOS_UI_PICTURES")).join("home/fl/colours.json")
     ).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null));
     TABLE.with(|t| colour(t[SCENES[scene]][view][0].as_str().unwrap_or("#ff2bd6")))
+}
+
+/// A car's trip to the horizon (seconds): a random length in this range, so the speeds vary.
+const CAR_TRIP: (f32, f32) = (8.0, 18.0);
+
+/// A car's depth at a share of its trip (as the scene draws it: 0.46 under the front edge … 60).
+fn car_depth(share: f32) -> f32 {
+    0.46 * (60.0f32 / 0.46).powf(share.clamp(0.0, 1.0))
+}
+
+/// Whether a car on `line`, starting at `born` with a trip of `dur`, never touches `other`: either it
+/// never reaches it, or where it passes it their lanes are far enough apart at that depth (the widest
+/// car body is 46 of its 48 sprite pixels, 176 px wide at depth 1; lanes are 43.8 / d + 2.2 apart; 10 %
+/// to spare).
+fn clear_of(line: f32, born: f32, dur: f32, other: &SwCar) -> bool {
+    // the same share of the trip = the same depth: when (if ever) the new car comes level
+    if dur >= other.dur {
+        return born >= other.born;
+    }
+    let t = (born * other.dur - other.born * dur) / (other.dur - dur);
+    let share = (t - other.born) / other.dur;
+    if share > 1.0 || t < born {
+        return true;
+    }
+    let d = car_depth(share);
+    let apart = (line - other.line).abs() * (43.8 / d + 2.2);
+    apart >= 1.1 * (46.0 * 176.0 / 48.0) / d
+}
+
+/// The trip for a new car on `line`: the wanted one when it touches no car on the road, else just
+/// slower (1 s more) than each car it would touch; None when that is longer than the longest trip.
+fn fitting_trip(line: f32, now: f32, want: f32, alive: &[SwCar]) -> Option<f32> {
+    let mut dur = want;
+    for _ in 0..4 {
+        match alive.iter().find(|c| !clear_of(line, now, dur, c)) {
+            Some(c) => dur = dur.max(c.dur - (now - c.born) + 1.0),
+            None => return (dur <= CAR_TRIP.1).then_some(dur),
+        }
+    }
+    alive.iter().all(|c| clear_of(line, now, dur, c)).then_some(dur).filter(|d| *d <= CAR_TRIP.1)
+}
+
+/// How far behind the car it follows the patrol car starts, as a share of their trip (owner 2026-11-16:
+/// 0.3-0.6 s was too close; 0.7-1.1 s still overlapped near the viewer). From 15 % on, the patrol car's
+/// roof stays below the car ahead, so it never covers it; with the same trip it keeps this distance.
+const PATROL_BEHIND: (f32, f32) = (0.15, 0.18);
+
+/// The patrol car's kind (black and white with a light bar; never an ordinary car).
+const PATROL: i32 = 5;
+
+/// A synthwave scene is on the screen now (the page shown, not under the screensaver).
+fn on_screen(ui: &AppWindow, s: &crate::UiState) -> bool {
+    if s.screensaver {
+        return false;
+    }
+    let pages = ui.get_pages();
+    let Some(p) = slint::Model::row_data(&pages, ui.get_page().max(0) as usize) else { return false };
+    let theme = if p.theme >= 0 { p.theme } else { ui.get_weather().theme };
+    (p.kind == "home" && theme == 8) || (p.kind == "timers" && p.variant == 3) || (p.kind == "thermostat" && p.variant == 3)
+}
+
+thread_local! {
+    /// The patrol car's clock: seconds a synthwave scene was on screen since the last one, and when
+    /// the next one is due (a random 20-30 minutes of that).
+    static PATROL_CLOCK: std::cell::Cell<(f32, f32)> = const { std::cell::Cell::new((0.0, -1.0)) };
+}
+
+/// Counts a second of synthwave on screen (called once a second); true when the patrol car is due.
+fn patrol_clock(shown: bool) -> bool {
+    PATROL_CLOCK.with(|c| {
+        let (mut on, mut due) = c.get();
+        if due < 0.0 {
+            due = 1200.0 + (random() % 601) as f32;
+        }
+        if shown && on < due {
+            on += 1.0;
+        }
+        c.set((on, due));
+        on >= due
+    })
+}
+
+/// Development (load test): `n` cars on the road at once, spread out from near to far, the last one
+/// the patrol car just behind the one before it on a neighbouring line. With more cars than lines two
+/// may share a line (at different depths).
+pub fn test_cars(ui: &AppWindow, n: usize) {
+    let n = n.clamp(1, 20);
+    let now = ui.get_scene_t();
+    let lanes = [-2.0f32, 2.0, -1.0, 1.0, 0.0];
+    let mut cars: Vec<SwCar> = Vec::new();
+    for k in 0..n {
+        let dur = 14.0;
+        if k == n - 1 && k > 0 {
+            let lead = cars[k - 1].clone();
+            let line = if lead.line < 2.0 { lead.line + 1.0 } else { lead.line - 1.0 };
+            cars.push(SwCar { line, kind: PATROL, tint: Color::from_rgb_u8(255, 255, 255), born: lead.born + lead.dur * PATROL_BEHIND.0, dur: lead.dur });
+            break;
+        }
+        let t = CAR_TINTS[next_tint()];
+        cars.push(SwCar {
+            line: lanes[k % lanes.len()],
+            kind: (random() % PATROL as u64) as i32,
+            tint: Color::from_rgb_u8((t >> 16) as u8, (t >> 8) as u8, t as u8),
+            // the first is the farthest: born earliest
+            born: now - (n - 1 - k) as f32 * 1.1,
+            dur,
+        });
+    }
+    cars.sort_by(|a, b| a.born.total_cmp(&b.born));
+    set_cars(ui, cars);
+}
+
+/// Development: the patrol car is due now (it joins the next ordinary car).
+pub fn patrol_now() {
+    PATROL_CLOCK.with(|c| c.set((1.0, 0.0)));
+}
+
+/// The patrol car set off: the next one comes after another 20-30 minutes of synthwave on screen.
+fn patrol_went() {
+    PATROL_CLOCK.with(|c| c.set((0.0, 1200.0 + (random() % 601) as f32)));
 }
 
 /// The scene clock's step (seconds): a whole number of the scenes' 40 s loops.
@@ -112,9 +277,11 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
         // (several steps at once when no scene ran for a long time)
         let shift = (st / SCENE_WRAP_S).floor() * SCENE_WRAP_S;
         ui.set_scene_base(ui.get_scene_base() + shift as i64 * 1000);
-        if let Some(mut c) = slint::Model::row_data(&cars, 0) {
-            c.born -= shift;
-            slint::Model::set_row_data(&cars, 0, c);
+        for i in 0..slint::Model::row_count(&cars) {
+            if let Some(mut c) = slint::Model::row_data(&cars, i) {
+                c.born -= shift;
+                slint::Model::set_row_data(&cars, i, c);
+            }
         }
         ui.set_palm_gust_at(ui.get_palm_gust_at() - shift);
     }
@@ -131,25 +298,103 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
         ui.set_palm_calm_before(ui.get_palm_calm());
         ui.set_palm_calm(0.6 + (random() % 20) as f32 / 100.0);
     }
-    // One car at a time: a new one when the last is gone (random line, never
-    // the same one twice, random kind and vivid colour, 10–30 s to the horizon).
+    // The cars: each on its own line (never two on one), random kind and vivid colour, a random 8–18 s
+    // to the horizon, so their speeds differ. A faster one may overtake a slower one only where the two
+    // never touch (see clear_of); else it is made a little slower. The traffic setting (the
+    // integration's synthwave page) only sets how often a new one starts: light = one at a time (a new
+    // one when the last is gone), more = up to 2, busy = up to 3, a new one once the newest is a third /
+    // a fifth of its way.
+    let traffic = crate::page_option(s, "home", "traffic").and_then(|v| v.as_u64()).unwrap_or(0).min(2) as usize;
     let now = ui.get_scene_t();
-    let last = slint::Model::row_data(&cars, 0);
-    if last.as_ref().is_none_or(|c| now - c.born > c.dur + 0.5) {
-        let old_line = last.map(|c| c.line).unwrap_or(9.0);
+    let all: Vec<SwCar> = (0..slint::Model::row_count(&cars)).filter_map(|i| slint::Model::row_data(&cars, i)).collect();
+    let alive: Vec<SwCar> = all.iter().filter(|c| now - c.born <= c.dur + 0.5).cloned().collect();
+    // the patrol car rides along with another one: the traffic rules count the ordinary cars
+    let ordinary: Vec<&SwCar> = alive.iter().filter(|c| c.kind != PATROL).collect();
+    let most = [1usize, 2, 3][traffic];
+    let gap = [1.0f32, 0.34, 0.2][traffic];
+    let newest = ordinary.iter().max_by(|a, b| a.born.total_cmp(&b.born));
+    let room = ordinary.len() < most && newest.is_none_or(|c| traffic > 0 && (now - c.born) / c.dur >= gap);
+    let patrol_due = patrol_clock(on_screen(ui, s));
+    let mut changed = alive.len() != all.len();
+    let mut next = alive.clone();
+    if room {
+        let last_line = all.iter().max_by(|a, b| a.born.total_cmp(&b.born)).map(|c| c.line).unwrap_or(9.0);
         let lines = [-2.0f32, -1.0, 0.0, 1.0, 2.0];
-        let choices: Vec<f32> = lines.iter().copied().filter(|l| *l != old_line).collect();
-        let tints = [0xff2a6d, 0xffd319, 0x00e5ff, 0xc86bfa, 0x01ffc3, 0xff8b3d];
-        let t = tints[(random() % tints.len() as u64) as usize];
-        let car = SwCar {
-            line: choices[(random() % choices.len() as u64) as usize],
-            kind: (random() % 3) as i32,
-            tint: Color::from_rgb_u8((t >> 16) as u8, (t >> 8) as u8, t as u8),
-            born: now,
-            dur: 10.0 + (random() % 2000) as f32 / 100.0,
-        };
-        let model = ModelRc::new(VecModel::from(vec![car]));
+        let choices: Vec<f32> = lines.iter().copied().filter(|l| *l != last_line && !alive.iter().any(|c| c.line == *l)).collect();
+        // a random trip; a faster car may overtake a slower one only where the two would not touch
+        // (lanes far enough apart at the depth where it passes); otherwise it is made just slower than
+        // that one, and when that would need a trip over the longest, it waits
+        let line = if choices.is_empty() { 9.0 } else { choices[(random() % choices.len() as u64) as usize] };
+        let want = CAR_TRIP.0 + (random() % 1001) as f32 / 1000.0 * (CAR_TRIP.1 - CAR_TRIP.0);
+        let trip = fitting_trip(line, now, want, &alive);
+        if let (false, Some(dur)) = (choices.is_empty(), trip) {
+            let t = CAR_TINTS[next_tint()];
+            // at most two cars of one shape at a time (the patrol car never comes as an ordinary one)
+            let kinds: Vec<i32> = (0..PATROL).filter(|k| alive.iter().filter(|c| c.kind == *k).count() < 2).collect();
+            next.push(SwCar {
+                line,
+                kind: kinds[(random() % kinds.len() as u64) as usize],
+                tint: Color::from_rgb_u8((t >> 16) as u8, (t >> 8) as u8, t as u8),
+                born: now,
+                dur,
+            });
+            // the patrol car, when due: just behind this one (15-18 % of their trip later, the same trip, so
+            // the same pace) on a neighbouring free line; never two at once
+            if patrol_due && !alive.iter().any(|c| c.kind == PATROL) {
+                let born = now + dur * (PATROL_BEHIND.0 + (random() % 101) as f32 / 100.0 * (PATROL_BEHIND.1 - PATROL_BEHIND.0));
+                // a free neighbouring line where, at the leader's pace, it touches no other car
+                let side: Vec<f32> = [line - 1.0, line + 1.0]
+                    .into_iter()
+                    .filter(|l| l.abs() <= 2.0 && !alive.iter().any(|c| c.line == *l))
+                    .filter(|l| alive.iter().all(|c| clear_of(*l, born, dur, c)))
+                    .collect();
+                if !side.is_empty() {
+                    next.push(SwCar {
+                        line: side[(random() % side.len() as u64) as usize],
+                        kind: PATROL,
+                        tint: Color::from_rgb_u8(255, 255, 255),
+                        born,
+                        dur,
+                    });
+                    patrol_went();
+                }
+            }
+            changed = true;
+        }
+    }
+    if changed {
+        // far ones first (the newest is the nearest: drawn last, on top)
+        next.sort_by(|a, b| a.born.total_cmp(&b.born));
+        set_cars(ui, next);
+    }
+}
+
+/// The cars on the road, far ones first. Row by row in the one shared model: a car that leaves or
+/// comes only takes or adds its own row, so the scene does not build every car anew (a whole new
+/// model cost a 30-80 ms frame each time one car left).
+fn set_cars(ui: &AppWindow, next: Vec<SwCar>) {
+    use slint::Model;
+    let cars = ui.get_home_fl_cars();
+    let Some(vec) = cars.as_any().downcast_ref::<VecModel<SwCar>>() else {
+        let model = ModelRc::new(VecModel::from(next));
         ui.set_home_fl_cars(model.clone());
         ui.set_timers_sw_cars(model);
+        return;
+    };
+    // the cars that went (by their birth: each car has its own), then the new ones in their place
+    let mut i = 0;
+    while i < vec.row_count() {
+        let keep = vec.row_data(i).is_some_and(|c| next.iter().any(|n| n.born == c.born && n.line == c.line));
+        if keep {
+            i += 1;
+        } else {
+            vec.remove(i);
+        }
+    }
+    for (k, c) in next.into_iter().enumerate() {
+        let here = vec.row_data(k).is_some_and(|r| r.born == c.born && r.line == c.line);
+        if !here {
+            vec.insert(k.min(vec.row_count()), c);
+        }
     }
 }

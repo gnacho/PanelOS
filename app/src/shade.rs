@@ -42,8 +42,9 @@ pub fn fill(ui: &AppWindow) {
         let mic_on = !s.settings.mic_muted;
         ui.set_set_mic_on(mic_on);
         ui.set_set_mic_state(if mic_on { state(0, "Listening") } else { state(1, "Muted") });
-        ui.set_set_dnd(s.dnd);
-        ui.set_set_dnd_state(if s.dnd { state(3, "On") } else { state(2, "Off") });
+        let dnd = crate::dnd_active(s);
+        ui.set_set_dnd(dnd);
+        ui.set_set_dnd_state(if dnd { state(3, "On") } else { state(2, "Off") });
         ui.set_set_sleep_state(state(4, "Now"));
         ui.set_set_theme_state(
             match s.settings.theme.as_str() {
@@ -192,7 +193,11 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             fill(ui);
         }
         "set.dnd" => {
-            with_state(|s| s.dnd = !s.dnd);
+            with_state(|s| {
+                let on = !crate::dnd_active(s);
+                s.dnd = Some((on, crate::dnd_setting(s)));
+                ui.set_dnd_on(on);
+            });
             fill(ui);
         }
         "set.sleep" => {

@@ -22,30 +22,32 @@ export global Clock {
 
 export global Theme {
     in-out property <bool> dark: true;
+    // the palette between light (0) and dark (1): the app's theme switch eases it over 0.4 s, every colour with it
+    in-out property <float> k: 1;
 
     // PanelOS palette: Night is the panel's own screen, Paper the light ground, Graphite the dark surfaces,
     // Ink the text on light, Paper the text on dark, Signal the accent (brand guidelines, November 2026).
-    out property <color> background: dark ? #000000 : #F5F3EE;
-    out property <color> surface: dark ? #121314 : #ffffff;
-    out property <color> surface-raised: dark ? #1d1f21 : #EBE8E1;
-    out property <color> surface-pressed: dark ? #2a2c2f : #DEDAD1;
-    out property <color> outline: dark ? #24262a : #DAD6CD;
+    out property <color> background: (#000000).mix(#F5F3EE, k);
+    out property <color> surface: (#121314).mix(#ffffff, k);
+    out property <color> surface-raised: (#1d1f21).mix(#EBE8E1, k);
+    out property <color> surface-pressed: (#2a2c2f).mix(#DEDAD1, k);
+    out property <color> outline: (#24262a).mix(#DAD6CD, k);
 
     // Text
-    out property <color> text: dark ? #F5F3EE : #101114;
-    out property <color> muted: dark ? #A3A19C : #5F5E5A;
-    out property <color> faint: dark ? #6B6A67 : #9A978F;
+    out property <color> text: (#F5F3EE).mix(#101114, k);
+    out property <color> muted: (#A3A19C).mix(#5F5E5A, k);
+    out property <color> faint: (#6B6A67).mix(#9A978F, k);
 
     // Brand and states: Signal is both the mark's dots and the interface accent.
     out property <color> brand: #FF4A1C;
     in-out property <color> accent: #FF4A1C;
     out property <color> accent-pressed: accent.darker(0.2);
     out property <color> on-accent: #ffffff;
-    out property <color> warning: dark ? #f5a524 : #b26a00;
-    out property <color> success: dark ? #34c77b : #138a4e;
-    out property <color> danger: dark ? #ff5a5f : #d0222a;
+    out property <color> warning: (#f5a524).mix(#b26a00, k);
+    out property <color> success: (#34c77b).mix(#138a4e, k);
+    out property <color> danger: (#ff5a5f).mix(#d0222a, k);
 
-    out property <color> scrim: dark ? #000000c0 : #00000070;
+    out property <color> scrim: (#000000c0).mix(#00000070, k);
 
     // Type scale
     out property <length> font-display: 84px;
@@ -79,12 +81,12 @@ export global Theme {
 
     // Earlier names, used by the screens not redesigned yet.
     out property <color> card: surface;
-    out property <color> card-on: dark ? #1d1f21 : #ffffff;
+    out property <color> card-on: (#1d1f21).mix(#ffffff, k);
     out property <color> card-pressed: surface-pressed;
     out property <color> button: surface-raised;
     out property <color> button-pressed: surface-pressed;
-    out property <color> sheet: dark ? #121314 : #FBFAF7;
-    out property <color> badge-off: dark ? #F5F3EE12 : #1011140d;
-    out property <color> chip: dark ? #1d1f21 : #ffffff;
-    out property <color> chip-border: dark ? #1d1f21 : #DAD6CD;
+    out property <color> sheet: (#121314).mix(#FBFAF7, k);
+    out property <color> badge-off: (#F5F3EE12).mix(#1011140d, k);
+    out property <color> chip: (#1d1f21).mix(#ffffff, k);
+    out property <color> chip-border: (#1d1f21).mix(#DAD6CD, k);
 }

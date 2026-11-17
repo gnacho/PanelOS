@@ -21,6 +21,11 @@ use_gpu() {
 case "$1" in
 start)
 	[ -x "$IMAGE_APP" ] || [ -x "$GPU_APP" ] || exit 0
+	# Already running: a second supervisor would start a second app, the two would fight over the
+	# display and both keep ending within seconds (and the GPU app would be switched off).
+	if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+		exit 0
+	fi
 	(
 		fails=0
 		while true; do

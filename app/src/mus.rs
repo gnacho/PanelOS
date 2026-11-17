@@ -69,21 +69,33 @@ fn open(ui: &AppWindow) {
             .and_then(|e| e["attributes"]["group_members"].as_array())
             .map(|g| g.iter().filter_map(Value::as_str).map(str::to_string).collect())
             .unwrap_or_default();
+        // what a player has on: its track while it plays or is paused (idle with the track kept counts as paused)
+        let track = |e: &Value| -> (String, bool) {
+            let a = &e["attributes"];
+            let state = e["state"].as_str().unwrap_or("");
+            let shows = matches!(state, "playing" | "paused" | "buffering") || (state == "idle" && a["media_title"].as_str().is_some_and(|t| !t.is_empty()));
+            let now = match (a["media_title"].as_str(), a["media_artist"].as_str()) {
+                (Some(t), Some(ar)) if shows && !t.is_empty() => format!("{t} · {ar}"),
+                (Some(t), _) if shows && !t.is_empty() => t.to_string(),
+                _ => String::new(),
+            };
+            (now, state == "playing")
+        };
+        // the group's music (the shown player leads it): its members show it too
+        let lead = list.iter().find(|e| e["entity_id"] == active.as_str()).map(|e| track(e)).unwrap_or_default();
         let rows: Vec<(String, String, String, bool, bool, String)> = list
             .iter()
             .map(|e| {
                 let id = e["entity_id"].as_str().unwrap_or("").to_string();
                 let a = &e["attributes"];
                 let name = a["friendly_name"].as_str().unwrap_or(&id).to_string();
-                let state = e["state"].as_str().unwrap_or("");
-                let playing = state == "playing";
-                let now = match (a["media_title"].as_str(), a["media_artist"].as_str()) {
-                    (Some(t), Some(ar)) if matches!(state, "playing" | "paused") => format!("{t} · {ar}"),
-                    (Some(t), None) if matches!(state, "playing" | "paused") => t.to_string(),
-                    _ => String::new(),
-                };
+                let grouped = group.iter().any(|g| *g == e["entity_id"]);
+                let (mut now, mut playing) = track(e);
+                if now.is_empty() && grouped && id != active {
+                    (now, playing) = lead.clone();
+                }
                 let icon = if a["device_class"] == "tv" { "television" } else { "speaker" };
-                (id, name, icon.to_string(), playing, group.iter().any(|g| *g == e["entity_id"]), now)
+                (id, name, icon.to_string(), playing, grouped, now)
             })
             .collect();
         let _ = slint::invoke_from_event_loop(move || {

@@ -137,6 +137,10 @@ start_wifi() {
 		exit 0
 	fi
 	ip link set wlan0 up
+	# Power save stays off, always: the panel runs on mains, and with it on the
+	# RTL8723DS (rtw88) missed beacons and answered in 0.25-3 s instead of a few
+	# ms. (The app keeps it off too, should a reconnect switch it on again.)
+	iw dev wlan0 set power_save off 2>/dev/null
 	# Connections, disconnections and access point changes go to the system
 	# log (-s), when this wpa_supplicant build has syslog support.
 	syslog=""

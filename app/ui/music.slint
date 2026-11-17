@@ -833,8 +833,12 @@ export component MusicPage inherits Rectangle {
             Icon { text: "\u{F0156}"; font-size: 20px; color: #ffffffcc; }
             TouchArea { clicked => { Act.act("music.picker-close", ""); } }
         }
+        // the players scroll when they do not all fit
+        Flickable {
+            x: 0; y: 64px; width: parent.width; height: parent.height - 64px;
+            viewport-height: max(self.height, root.players.length * 52px + 16px);
         for p[i] in root.players: Rectangle {
-            x: 12px; y: 64px + i * 52px; width: parent.width - 24px; height: 48px; border-radius: 14px;
+            x: 12px; y: i * 52px; width: parent.width - 24px; height: 48px; border-radius: 14px;
             background: p.active ? root.acc.with-alpha(0.18) : transparent;
             TouchArea { clicked => { Act.act("music.show", i); } }
             Icon { x: 10px; y: 0; width: 28px; height: parent.height; text: p.icon; font-size: 22px; color: p.active || p.grouped ? #ffffff : #ffffffb3; }
@@ -863,6 +867,7 @@ export component MusicPage inherits Rectangle {
                 Icon { text: p.active || p.grouped ? "\u{F012C}" : "\u{F0415}"; font-size: 20px; color: #ffffff; }
                 TouchArea { enabled: !p.active; clicked => { Act.act("music.group", i); } }
             }
+        }
         }
     }
 }
