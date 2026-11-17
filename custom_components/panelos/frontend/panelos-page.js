@@ -715,6 +715,9 @@ button.chip:hover { border-color: var(--signal-line); }
 .look.on > span { color: var(--text); font-weight: 600; }
 .look:disabled { opacity: .45; cursor: default; }
 .lookimg { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lookimg.contain { object-fit: contain; }
+.looks.wide .look { width: 150px; }
+.looks.wide .look .pic { width: 150px; height: 74px; }
 .look .chk { position: absolute; right: 7px; top: 7px; width: 24px; height: 24px; border-radius: 12px; background: var(--signal); color: #101114; display: grid; place-items: center; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
 .look .chk .mdi { --mdc-icon-size: 16px; }
 .art, .art svg { width: 100%; height: 100%; display: block; }
@@ -1597,7 +1600,7 @@ class PanelOSPage extends HTMLElement {
     const at = pages.slice(0, i).filter((x, k) => k === 0 || !x.hidden).length;
     const key = `${p.entry_id}:${at}`;
     if (this._pageLive?.key !== key) {
-      this._pageLive = { key, entry: p.entry_id, i, since: Date.now() };
+      this._pageLive = { key, entry: p.entry_id, i, at, since: Date.now(), sent: Date.now() };
       this._hass.callWS({ type: "panelos/page/command", entry_id: p.entry_id, key: "page", value: at })
         .then(() => this._schedulePicture(400), () => { this._pageLive = { key, entry: p.entry_id, failed: true }; });
     }
@@ -1682,6 +1685,7 @@ class PanelOSPage extends HTMLElement {
       const shape = old && (old.w !== img.naturalWidth || old.h !== img.naturalHeight);
       this._pics[p.entry_id] = { url, w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
       this._captureLook(p, img);
+      this._keepPageLive(p);
       if (old) setTimeout(() => URL.revokeObjectURL(old.url), 2000);
       if (!old || shape) this._requestRender();
       else this._showPictures(p.entry_id);
@@ -1706,7 +1710,7 @@ class PanelOSPage extends HTMLElement {
       if (!live || live.failed || live.entry !== p.entry_id || live.i == null || now - (live.since || 0) < 2500) return;
       if (p.states?.screen === false) return;
       const page = this._pages(p)[live.i];
-      if (!page) return;
+      if (!page || !this._liveWorthy(p, page)) return;
       name = lookName(page.kind, page.variant, page);
     }
     const key = `${p.entry_id}|${name}|${this._lookMode(p)}`;
@@ -1727,6 +1731,28 @@ class PanelOSPage extends HTMLElement {
     }
   }
 
+  // While a page's settings are open the panel keeps showing that page: asked again every 15 s (its screensaver
+  // would come after its own timeout, and a page swiped away on the panel comes back).
+  _keepPageLive(p) {
+    const live = this._pageLive;
+    if (!live || live.failed || live.entry !== p.entry_id || Date.now() - live.sent < 15000) return;
+    live.sent = Date.now();
+    this._hass.callWS({ type: "panelos/page/command", entry_id: p.entry_id, key: "page", value: live.at }).catch(() => {});
+  }
+
+  // Whether the panel's screen shows a look well enough to stand for it: not the timers page (without a running
+  // timer it shows its start buttons), the music page only with a track, the notifications only when there are some.
+  _liveWorthy(p, page) {
+    if (page.kind === "timers") return false;
+    if (page.kind === "music") {
+      const id = page.options?.player || this._settings(p).media_player_entity;
+      const st = id && this._hass?.states?.[id];
+      return Boolean(st && ["playing", "paused"].includes(st.state) && st.attributes?.media_title);
+    }
+    if (page.kind === "info") return this._noteList().length > 0;
+    return true;
+  }
+
   // Dark or light pictures for this panel: its theme, or with Auto the light in the room (as the panel switches).
   _lookMode(p) {
     const t = String(p?.states?.theme || "").toLowerCase();
@@ -1737,12 +1763,12 @@ class PanelOSPage extends HTMLElement {
 
   // A look's picture: the panel's own screen when it showed that look, else the picture taken with demo content,
   // else the drawing.
-  _lookPic(p, name, fallback) {
+  _lookPic(p, name, fallback, { fit = "cover" } = {}) {
     const mode = this._lookMode(p);
     const key = `${p?.entry_id}|${name}|${mode}`;
-    const live = this._liveLooks[key];
+    const live = name.startsWith("timers-") ? null : this._liveLooks[key];
     return h("img", {
-      class: "lookimg", alt: "", draggable: "false", "data-look": key, loading: "lazy",
+      class: `lookimg${fit === "contain" ? " contain" : ""}`, alt: "", draggable: "false", "data-look": key, loading: "lazy",
       src: live ? live.u : `${this._static}/looks/${name}-${mode}.webp`,
       onerror: (e) => { if (fallback) e.currentTarget.replaceWith(fallback()); },
     });
@@ -2182,10 +2208,10 @@ class PanelOSPage extends HTMLElement {
   }
 
   // Looks to pick from; the ones this panel cannot show are greyed, with the reason once below.
-  _lookPicker(items, value, onpick) {
+  _lookPicker(items, value, onpick, { wide = false } = {}) {
     const why = [...new Set(items.filter((it) => it.disabled && it.why).map((it) => it.why))];
     return [
-      h("div", { class: "looks", role: "radiogroup" }, items.map((it) =>
+      h("div", { class: `looks${wide ? " wide" : ""}`, role: "radiogroup" }, items.map((it) =>
         h("button", { class: `look${it.id === value ? " on" : ""}`, disabled: Boolean(it.disabled), title: it.why || null, role: "radio", "aria-checked": it.id === value ? "true" : "false", onclick: () => it.id !== value && onpick(it.id) },
           h("div", { class: "pic" }, it.pic, it.id === value ? h("span", { class: "chk" }, icon("check")) : null),
           h("span", null, it.name)))),
@@ -3800,7 +3826,7 @@ class PanelOSPage extends HTMLElement {
         this._ui.sheet = null;
         this._ui.sel = items.length - 1;
         this._saveItems(p, sh.page, items, { toast: `${w.name} added` });
-      } }, h("div", { class: "pic wicon" }, icon(w.icon)), h("b", null, w.name), h("small", null, spot ? `${w.def[0]} × ${w.def[1]}` : small ? "Smaller, to fit" : "On top of the others"));
+      } }, h("div", { class: "pic wicon" }, this._lookPic(p, `widget-${kind}`, () => icon(w.icon), { fit: "contain" })), h("b", null, w.name), h("small", null, spot ? `${w.def[0]} × ${w.def[1]}` : small ? "Smaller, to fit" : "On top of the others"));
     })), null, { wide: true });
   }
 
@@ -3818,7 +3844,8 @@ class PanelOSPage extends HTMLElement {
         why ? { sub: why, cls: "dim" } : {});
     };
     const body = [];
-    if (w.kind === 0) body.push(h("div", { class: "sec" }, h("h3", null, "Style"), h("div", { class: "chips" }, CLOCK_STYLES.map((n, k) => this._chipToggle((w.style || 0) === k, n, () => set({ style: k }))))));
+    if (w.kind === 0) body.push(h("div", { class: "sec" }, h("h3", null, "Style"),
+      this._lookPicker(CLOCK_STYLES.map((n, k) => ({ id: k, name: n, pic: this._lookPic(p, `clockw-${k}`, () => svgNode(ART.clock[k]()), { fit: "contain" }) })), w.style || 0, (k) => set({ style: k }), { wide: true })));
     const bits = meta.bits;
     if (w.kind === 7) {
       const scroll = Boolean((w.opts || 0) & 1);
