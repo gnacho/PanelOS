@@ -8,7 +8,7 @@
 // so every stroked Path here gets a box one stroke width larger to keep its coordinates exact.
 // Images are drawn at their exact size (the renderer scales without filtering). Coloured shapes are a
 // white mask (colorize = the colour) with a grey + alpha shading layer on top.
-import { Theme, Act, Clock } from "theme.slint";
+import { Theme, Act, Clock, Words } from "theme.slint";
 import { Icon, GlowText } from "widgets.slint";
 import { FlapCard } from "panels.slint";
 import { Keyboard } from "overlays.slint";
@@ -512,12 +512,25 @@ export component TimersPage inherits Rectangle {
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/floor-shadow.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/post-back.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/glass-back.png"); }
-        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.masks[hg.li]; colorize: hg.tint; }
-        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.shades[hg.li]; }
-        // (the next level stays in place and only fades: with a short timer the level changes several
-        // times a second, and making and dropping these layers each time made the sand stutter)
-        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.masks[hg.li + 1]; colorize: hg.tint; opacity: hg.lk; }
-        Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: hg.shades[hg.li + 1]; opacity: hg.lk; }
+        // The sand, the two bulbs apart (split at the neck: rows 0-119 hold the top sand, the bottom sand starts below row 139). Top: the current level, the fuller one
+        // before it fading out over it (the top drains). Bottom: the smaller heap before it, the current level's
+        // bigger heap fading in over it (the heap grows); drawn the top way, the bottom heap jumped at every
+        // level change. (Both levels stay in place and only fade: with a short timer the level changes several
+        // times a second, and making and dropping these layers each time made the sand stutter.)
+        Rectangle {
+            x: hg.x0; y: hg.y0; width: 172px; height: 120px; clip: true;
+            Image { x: 0; y: 0; width: 172px; height: 244px; source: hg.masks[hg.li]; colorize: hg.tint; }
+            Image { x: 0; y: 0; width: 172px; height: 244px; source: hg.shades[hg.li]; }
+            Image { x: 0; y: 0; width: 172px; height: 244px; source: hg.masks[hg.li + 1]; colorize: hg.tint; opacity: hg.lk; }
+            Image { x: 0; y: 0; width: 172px; height: 244px; source: hg.shades[hg.li + 1]; opacity: hg.lk; }
+        }
+        Rectangle {
+            x: hg.x0; y: hg.y0 + 120px; width: 172px; height: 124px; clip: true;
+            Image { x: 0; y: -120px; width: 172px; height: 244px; source: hg.masks[hg.li + 1]; colorize: hg.tint; }
+            Image { x: 0; y: -120px; width: 172px; height: 244px; source: hg.shades[hg.li + 1]; }
+            Image { x: 0; y: -120px; width: 172px; height: 244px; source: hg.masks[hg.li]; colorize: hg.tint; opacity: 1 - hg.lk; }
+            Image { x: 0; y: -120px; width: 172px; height: 244px; source: hg.shades[hg.li]; opacity: 1 - hg.lk; }
+        }
         if hg.flowing: Rectangle {
             x: hg.x0 + 84px; y: hg.y0 + 118px; width: 5px; height: max(0px, (hg.peak - 118) * 1px + 1px); clip: true;
             // each stream frame is a picture of its own (coloured once); only their opacity moves: frame si
@@ -903,28 +916,28 @@ export component TimersPage inherits Rectangle {
         }
         HorizontalLayout {
             x: 16px; y: st.r1; height: 32px; alignment: start; spacing: 6px;
-            Chip { text: "Flying Colours"; on: root.colourful; }
+            Chip { text: Words.line("ui.looks.timers.0"); on: root.colourful; }
             for c in [#ff3d6e, #ffb21e, #22d3a6, #3d9bff, #a76bff]: VerticalLayout { alignment: center;
                 Rectangle { width: 10px; height: 10px; border-radius: 5px; background: c; opacity: root.colourful ? 1 : 0.35; } }
             Rectangle { width: 10px; }
-            Chip { text: "One Shade"; on: !root.colourful; }
+            Chip { text: Words.line("ui.looks.timers.1"); on: !root.colourful; }
             VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 5px; background: Theme.accent; opacity: root.colourful ? 0.35 : 1; } }
         }
         HorizontalLayout {
             x: 16px; y: st.r2; height: 32px; alignment: start; spacing: 6px;
-            Chip { text: "Full Circle"; on: root.theme == 0; }
-            Chip { text: "Done to a Turn"; on: root.theme == 1; }
-            Chip { text: "Sands of Time"; on: root.theme == 2; }
+            Chip { text: Words.line("ui.looks.timers.2"); on: root.theme == 0; }
+            Chip { text: Words.line("ui.looks.timers.3"); on: root.theme == 1; }
+            Chip { text: Words.line("ui.looks.timers.4"); on: root.theme == 2; }
         }
         HorizontalLayout {
             x: 16px; y: st.r2 + 40px; height: 32px; alignment: start; spacing: 6px;
-            Chip { text: "In the Fast Lane"; on: root.theme == 3; }
-            Chip { text: "Flip Side"; on: root.theme == 4; }
+            Chip { text: Words.line("ui.looks.timers.5"); on: root.theme == 3; }
+            Chip { text: Words.line("ui.looks.timers.6"); on: root.theme == 4; }
         }
         if st.scenes: HorizontalLayout {
             x: 16px; y: st.r3; height: 32px; alignment: start; spacing: 6px;
-            Chip { text: "Surprise Me"; on: root.sw-choice < 0; }
-            Chip { text: "Ride into the Sunset"; on: root.sw-choice == 0; }
+            Chip { text: Words.line("ui.looks.timers.7"); on: root.sw-choice < 0; }
+            Chip { text: Words.line("ui.looks.timers.8"); on: root.sw-choice == 0; }
             Chip { text: "Concrete Jungle"; on: root.sw-choice == 1; }
         }
         if st.scenes: HorizontalLayout {

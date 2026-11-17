@@ -24,3 +24,6 @@ config.local.*
 
 # Logs
 *.log
+
+# Local demo captures (not for the repository)
+demo/

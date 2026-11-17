@@ -3,8 +3,8 @@
 // month (grid with event labels; a tap on a day opens that day). A tap on any event opens its details (the home page's
 // next-event widget too), with Edit where the calendar allows it. The panel keeps the last view, across restarts too.
 // Weeks start on Monday, times are 24-hour; the app writes every label (relative times like "in 4 h 15 min" too).
-import { Theme, Act } from "theme.slint";
-import { Icon, Toggle } from "widgets.slint";
+import { Theme, Act, Words } from "theme.slint";
+import { Icon, Toggle, Crawl } from "widgets.slint";
 import { Keyboard } from "overlays.slint";
 
 export struct CalEvent {
@@ -108,7 +108,8 @@ component CalBoardLook inherits Rectangle {
     in property <[CalBoard]> rows;
     in property <string> clock;            // "13:45"
     in property <string> date;             // "SAT 14 NOV"
-    in property <string> ticker;           // the app picks the line
+    in property <string> ticker;           // the app picks the lines
+    in property <int> ticker-epoch;
     in property <string> empty;            // no departures
     background: #0b0b0c;
     Icon { x: 16px; y: 50px; width: 26px; height: 28px; text: "\u{F05D5}"; font-size: 24px; color: #f4f4f2; }
@@ -126,9 +127,20 @@ component CalBoardLook inherits Rectangle {
     }
     if root.rows.length == 0: Text { x: 19px; y: 130px; width: 442px; height: 30px; text: root.empty; font-family: "DejaVu Sans Mono"; font-size: 17px;
         font-weight: 700; color: #ffd23f; horizontal-alignment: center; vertical-alignment: center; }
+}
+
+// The board and its crawl: the board is drawn once into a layer, the crawl rolls on above it.
+component CalBoardPage inherits Rectangle {
+    in property <[CalBoard]> rows;
+    in property <string> clock;
+    in property <string> date;
+    in property <string> ticker;
+    in property <int> ticker-epoch;
+    in property <string> empty;
+    CalBoardLook { rows: root.rows; clock: root.clock; date: root.date; empty: root.empty; }
     Rectangle { x: 0; y: 418px; width: root.width; height: 26px; background: #141416;
-        Text { x: 19px; y: 0; width: 442px; height: parent.height; text: root.ticker; font-family: "DejaVu Sans Mono"; font-size: 12px; font-weight: 700;
-            letter-spacing: 1px; color: #ff9f1a; vertical-alignment: center; overflow: elide; } }
+        Crawl { x: 19px; y: 0; width: 442px; height: parent.height; text: root.ticker; epoch: root.ticker-epoch; font-family: "DejaVu Sans Mono";
+            font-size: 12px; font-weight: 700; letter-spacing: 1px; ink: #ff9f1a; } }
 }
 
 // ---------------------------------------------------------------- tear-off look (a page-a-day desk calendar)
@@ -212,12 +224,13 @@ component CalWallLook inherits Rectangle {
 
 export component CalendarPage inherits Rectangle {
     in property <int> view;                // 0 agenda, 1 day, 2 week, 3 month, 4 three days (plain look)
-    in property <int> look;                // 0 plain, 1 departure board, 2 tear-off, 3 wall calendar (panel names playful, HA's plain)
+    in property <int> look;                // 0 plain, 1 departure board, 2 tear-off, 3 wall calendar
     // departure board
     in property <[CalBoard]> board-rows;
     in property <string> board-clock;
     in property <string> board-date;
     in property <string> board-ticker;
+    in property <int> board-epoch;
     in property <string> board-empty;
     // tear-off
     in property <string> tear-month;
@@ -286,7 +299,8 @@ export component CalendarPage inherits Rectangle {
     background: Theme.background;
 
     // ---------------------------------------------------------------- header: title and date, view chip (top right), back / forward
-    if root.look == 1: CalBoardLook { rows: root.board-rows; clock: root.board-clock; date: root.board-date; ticker: root.board-ticker; empty: root.board-empty; }
+    if root.look == 1: CalBoardPage { rows: root.board-rows; clock: root.board-clock; date: root.board-date; ticker: root.board-ticker;
+        ticker-epoch: root.board-epoch; empty: root.board-empty; }
     if root.look == 2: CalTearLook { month: root.tear-month; day: root.tear-day; weekday: root.tear-weekday; sunday: root.tear-sunday; info: root.tear-info;
         events: root.tear-events; more: root.tear-more; line: root.tear-line; free: root.day-free; }
     if root.look == 3: CalWallLook { month: root.wall-month; year: root.wall-year; photo: root.wall-photo; names: root.week-names; cells: root.wall-cells; }
@@ -300,14 +314,17 @@ export component CalendarPage inherits Rectangle {
                 : root.view == 0 ? "\u{F0C46}" : root.view == 1 ? "\u{F1A30}" : root.view == 2 ? "\u{F1A34}" : root.view == 4 ? "\u{F0B68}" : "\u{F0E18}"; }
         vn := Text { x: 36px; y: 0; width: self.preferred-width; height: parent.height; font-size: 14px; font-weight: 600; color: root.look == 1 ? #ffffff : Theme.text;
             vertical-alignment: center;
-            text: root.look == 1 ? "Now Boarding" : root.look == 2 ? "Seize the Day" : root.look == 3 ? "Hang in There"
+            text: root.look == 1 ? Words.line("ui.looks.calendar.1") : root.look == 2 ? Words.line("ui.looks.calendar.2") : root.look == 3 ? Words.line("ui.looks.calendar.3")
                 : root.view == 0 ? "Agenda" : root.view == 1 ? "Day" : root.view == 2 ? "Week" : root.view == 4 ? "3 days" : "Month"; }
         Icon { x: parent.width - 26px; y: 0; width: 18px; height: parent.height; text: "\u{F0140}"; font-size: 18px; color: root.look == 1 ? #ffffffb0 : Theme.muted; }
+        TouchArea { x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px; clicked => { Act.act("cal.settings", ""); } }
     }
     if root.look == 0 && root.view != 0: Rectangle { x: 372px; y: 52px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
-        Icon { text: "\u{F0141}"; font-size: 24px; color: Theme.text; } }
+        Icon { text: "\u{F0141}"; font-size: 24px; color: Theme.text; }
+        TouchArea { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; clicked => { Act.act("cal.prev", ""); } } }
     if root.look == 0 && root.view != 0: Rectangle { x: 424px; y: 52px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
-        Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.text; } }
+        Icon { text: "\u{F0142}"; font-size: 24px; color: Theme.text; }
+        TouchArea { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; clicked => { Act.act("cal.next", ""); } } }
 
     // ---------------------------------------------------------------- agenda: days with their events, today's past ones faded
     if root.look == 0 && root.view == 0: Flickable {
@@ -421,26 +438,29 @@ export component CalendarPage inherits Rectangle {
     // the settings fades in (240 ms) and out (200 ms) instead of popping
     property <float> settings-k: root.settings ? 1 : 0;
     animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
+    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080;
+        TouchArea { clicked => { Act.act("cal.settings-close", ""); } } }
     if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
         property <length> need: 72px + (root.look == 0 ? 3 : 2) * 52px - 12px + 26px;
         x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
         Text { x: 24px; y: 24px; height: 28px; text: "Calendar"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 110px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
-        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        TouchArea {}
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center;
+            TouchArea { x: -12px; y: -10px; width: parent.width + 24px; height: parent.height + 20px; clicked => { Act.act("cal.settings-close", ""); } } }
         HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
-            ViewChip { text: "Plain Sailing"; on: root.look == 0; }
-            ViewChip { text: "Now Boarding"; on: root.look == 1; } }
+            ViewChip { text: Words.line("ui.looks.calendar.0"); on: root.look == 0; TouchArea { clicked => { Act.act("cal.look", "0"); } } }
+            ViewChip { text: Words.line("ui.looks.calendar.1"); on: root.look == 1; TouchArea { clicked => { Act.act("cal.look", "1"); } } } }
         HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
-            ViewChip { text: "Seize the Day"; on: root.look == 2; }
-            ViewChip { text: "Hang in There"; on: root.look == 3; } }
+            ViewChip { text: Words.line("ui.looks.calendar.2"); on: root.look == 2; TouchArea { clicked => { Act.act("cal.look", "2"); } } }
+            ViewChip { text: Words.line("ui.looks.calendar.3"); on: root.look == 3; TouchArea { clicked => { Act.act("cal.look", "3"); } } } }
         if root.look == 0: HorizontalLayout { x: 24px; y: 176px; height: 40px; spacing: 8px; alignment: start;
-            ViewChip { text: "Agenda"; on: root.view == 0; }
-            ViewChip { text: "Day"; on: root.view == 1; }
-            ViewChip { text: "3 days"; on: root.view == 4; }
-            ViewChip { text: "Week"; on: root.view == 2; }
-            ViewChip { text: "Month"; on: root.view == 3; } }
+            ViewChip { text: "Agenda"; on: root.view == 0; TouchArea { clicked => { Act.act("cal.view", "0"); } } }
+            ViewChip { text: "Day"; on: root.view == 1; TouchArea { clicked => { Act.act("cal.view", "1"); } } }
+            ViewChip { text: "3 days"; on: root.view == 4; TouchArea { clicked => { Act.act("cal.view", "4"); } } }
+            ViewChip { text: "Week"; on: root.view == 2; TouchArea { clicked => { Act.act("cal.view", "2"); } } }
+            ViewChip { text: "Month"; on: root.view == 3; TouchArea { clicked => { Act.act("cal.view", "3"); } } } }
     }
 
     // ---------------------------------------------------------------- an event's details (tap on an event, or the home page's next-event widget)
@@ -517,7 +537,7 @@ export component CalendarPage inherits Rectangle {
         x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
         Text { x: 24px; y: 24px; height: 28px; text: root.edit-picker == 1 ? "Starts" : "Ends"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
-        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         // the wheel: the picked row in a band in the middle, the others fading away from it
         Rectangle { x: 120px; y: 68px + 2 * 40px; width: 240px; height: 40px; border-radius: 12px; background: Theme.surface-raised; }
         for hv[i] in root.edit-hours: Text { x: 140px; y: 68px + i * 40px; width: 80px; height: 40px; text: hv; horizontal-alignment: center; vertical-alignment: center;

@@ -1,6 +1,8 @@
 //! The UI's word lists (titles, hints, empty-state lines, …) live in
 //! `text.pak`: a header and a masked JSON object {place: [lines]}. A place
-//! with several lines shows one of them, a different one each time it opens.
+//! with several lines shows one of them, a different one each time it opens:
+//! a page keeps its lines while it is on screen and gets new ones for the
+//! next visit (`kept`, `reroll`).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -38,9 +40,43 @@ pub fn list(place: &str) -> &'static [String] {
     all().get(place).map(Vec::as_slice).unwrap_or(&[])
 }
 
+/// The placeholders a line may hold: "{year}" is this year ("{wake}" and "{ROOM}" are filled where the wake
+/// word and the room are known).
+fn fill(line: String) -> String {
+    if line.contains("{year}") {
+        line.replace("{year}", &crate::pages::local_format(crate::pages::now(), "%Y"))
+    } else {
+        line
+    }
+}
+
 /// Line `i` of a place (for places whose lines have fixed roles), or "".
 pub fn nth(place: &str, i: usize) -> String {
-    list(place).get(i).cloned().unwrap_or_default()
+    fill(list(place).get(i).cloned().unwrap_or_default())
+}
+
+thread_local!(static KEPT: std::cell::RefCell<HashMap<(String, usize), String>> = std::cell::RefCell::new(HashMap::new()));
+
+/// A fresh line of a place that stays the same on every redraw until the place is picked again (`reroll`);
+/// `slot` tells apart several lines of one place shown together (a ticker's).
+pub fn kept(place: &str, slot: usize) -> String {
+    kept_if(place, slot, |_| true)
+}
+
+/// `kept`, from the lines that pass `ok` ("" when none does).
+pub fn kept_if(place: &str, slot: usize, ok: impl Fn(&str) -> bool) -> String {
+    let key = (place.to_string(), slot);
+    if let Some(line) = KEPT.with(|k| k.borrow().get(&key).cloned()) {
+        return line;
+    }
+    let line = (0..list(place).len()).map(|_| fresh(place)).find(|l| ok(l)).unwrap_or_default();
+    KEPT.with(|k| k.borrow_mut().insert(key, line.clone()));
+    line
+}
+
+/// New lines for the places whose names start with `prefix` (a page out of sight: its next visit shows new ones).
+pub fn reroll(prefix: &str) {
+    KEPT.with(|k| k.borrow_mut().retain(|(place, _), _| !place.starts_with(prefix)));
 }
 
 /// One line of a place, picked at random but never one of `avoid` while
@@ -53,7 +89,7 @@ pub fn pick(place: &str, avoid: &[usize]) -> (usize, String) {
     let free: Vec<usize> = (0..lines.len()).filter(|i| !avoid.contains(i)).collect();
     let choices = if free.is_empty() { (0..lines.len()).collect() } else { free };
     let i = choices[random() as usize % choices.len()];
-    (i, lines[i].clone())
+    (i, fill(lines[i].clone()))
 }
 
 /// A line of a place that was not shown since the place last ran out of

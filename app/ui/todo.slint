@@ -1,7 +1,7 @@
 // To-do panel: one HA to-do list (shopping, tasks …). Open items with a round check (a ticked item stays struck through for a
 // moment, then moves down), due dates and notes under the item, the completed items folded under a header, a list picker,
 // adding with the keyboard. Which lists show is set in the HA integration.
-import { Theme, Act } from "theme.slint";
+import { Theme, Act, Words } from "theme.slint";
 import { Icon, GlowText } from "widgets.slint";
 import { Keyboard } from "overlays.slint";
 
@@ -148,12 +148,14 @@ component TodoReceipt inherits Rectangle {
         rc := VerticalLayout {
             x: 60px; y: 8px; width: 320px; padding-top: 24px; padding-bottom: 30px; spacing: 0px; alignment: start;
             Icon { height: 36px; text: root.l.icon; font-size: 28px; color: root.ink; }
-            Text { height: 26px; text: root.l.name.to-uppercase(); font-family: "DejaVu Sans Mono"; font-size: 18px; font-weight: 700; color: root.ink;
-                horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+            Rectangle { height: 26px;
+                TouchArea { clicked => { Act.act("todo.next-list", ""); } }
+                Text { width: parent.width; height: parent.height; text: root.l.name.to-uppercase(); font-family: "DejaVu Sans Mono"; font-size: 18px;
+                    font-weight: 700; color: root.ink; horizontal-alignment: center; vertical-alignment: center; overflow: elide; } }
             Text { height: 22px; text: root.stamp; font-family: "DejaVu Sans Mono"; font-size: 13px; color: root.ink;
                 horizontal-alignment: center; vertical-alignment: center; }
             ReceiptDashes { ink: root.ink; }
-            for it in root.open-items: ReceiptRow { item: it; ink: root.ink; paper: root.paper; }
+            for it[i] in root.open-items: ReceiptRow { item: it; ink: root.ink; paper: root.paper; TouchArea { clicked => { Act.act("todo.check", i); } } }
             if root.open-items.length == 0: Text { height: 60px; text: root.empty; font-family: "DejaVu Sans Mono"; font-size: 15px; font-weight: 700;
                 color: root.ink; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
             ReceiptDashes { ink: root.ink; }
@@ -163,12 +165,13 @@ component TodoReceipt inherits Rectangle {
                     font-weight: 700; color: root.ink; horizontal-alignment: right; vertical-alignment: center; }
             }
             if root.done-items.length > 0: Rectangle { height: 30px;
+                TouchArea { clicked => { Act.act("todo.done-toggle", ""); } }
                 Text { x: 0; y: 0; height: parent.height; text: "DONE"; font-family: "DejaVu Sans Mono"; font-size: 14px; color: root.ink; vertical-alignment: center; }
                 Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.done-items.length + (root.show-done ? "  ▲" : "  ▼");
                     font-family: "DejaVu Sans Mono"; font-size: 14px; font-weight: 700; color: root.ink; horizontal-alignment: right; vertical-alignment: center; }
             }
             if root.show-done: VerticalLayout {
-                for it in root.done-items: ReceiptRow { item: it; ink: root.ink; paper: root.paper; }
+                for it[i] in root.done-items: ReceiptRow { item: it; ink: root.ink; paper: root.paper; TouchArea { clicked => { Act.act("todo.uncheck", i); } } }
             }
             ReceiptDashes { ink: root.ink; }
             Text { height: 34px; text: root.footer; font-family: "DejaVu Sans Mono"; font-size: 13px; color: root.ink;
@@ -218,7 +221,7 @@ component TodoTerminal inherits Rectangle {
     property <color> g: #3dff74;
     property <color> dim: #3dff74.with-alpha(0.5);
     background: #030803;
-    TermLine { x: 20px; y: 44px; width: 440px; height: 30px; text: "panel@home:~$ todo --list " + root.l.name; ink: root.g; }
+    TermLine { x: 20px; y: 44px; width: 440px; height: 30px; text: "panel@home:~$ todo --list " + root.l.name; ink: root.g; TouchArea { clicked => { Act.act("todo.next-list", ""); } } }
     TermLine { x: 20px; y: 72px; width: 440px; height: 24px; fs: 14px; ink: root.dim; glow: false;
         text: root.open-items.length + " open, " + root.done-items.length + " done"; }
     Flickable {
@@ -228,12 +231,12 @@ component TodoTerminal inherits Rectangle {
         content-y: -root.scroll;
         tl := VerticalLayout {
             x: 20px; y: 0; width: 440px; padding-top: 4px; padding-bottom: 8px; spacing: 0px; alignment: start;
-            for it in root.open-items: TermRow { item: it; g: root.g; dim: root.dim; }
+            for it[i] in root.open-items: TermRow { item: it; g: root.g; dim: root.dim; TouchArea { clicked => { Act.act("todo.check", i); } } }
             if root.open-items.length == 0: TermLine { height: 40px; text: root.empty; ink: root.g; }
             if root.done-items.length > 0: TermLine { height: 36px; ink: root.dim; glow: false;
-                text: "-- " + root.done-items.length + " done (tap to " + (root.show-done ? "hide" : "show") + ") --"; }
+                text: "-- " + root.done-items.length + " done (tap to " + (root.show-done ? "hide" : "show") + ") --"; TouchArea { clicked => { Act.act("todo.done-toggle", ""); } } }
             if root.show-done: VerticalLayout {
-                for it in root.done-items: TermRow { item: it; g: root.g; dim: root.dim; }
+                for it[i] in root.done-items: TermRow { item: it; g: root.g; dim: root.dim; TouchArea { clicked => { Act.act("todo.uncheck", i); } } }
             }
         }
     }
@@ -241,6 +244,7 @@ component TodoTerminal inherits Rectangle {
     TermLine { x: 20px; y: 420px; width: 150px; height: 30px; text: "panel@home:~$"; ink: root.g; }
     Rectangle { x: 20px + 14 * 9.63px; y: 426px; width: 10px; height: 18px; background: root.g; }
     TermLine { x: 20px + 16 * 9.63px; y: 420px; width: 280px; height: 30px; fs: 14px; text: "# tap to add"; ink: root.dim; glow: false; }
+    TouchArea { x: 0; y: 412px; width: root.width; height: 60px; clicked => { Act.act("todo.add", ""); } }
     Image { x: 0; y: 0; width: 480px; height: 480px; source: @image-url("todo/term-scan.png"); }
 }
 
@@ -258,7 +262,7 @@ component TodoLabels inherits Rectangle {
     in property <image> done-head;         // "DONE · n" on tape
     in property <image> empty-tape;        // nothing left (the app picks the text)
     in property <string> empty-sub;
-    Image { x: 12px; y: 40px; width: root.head.width * 1px; height: root.head.height * 1px; source: root.head; }
+    Image { x: 12px; y: 40px; width: root.head.width * 1px; height: root.head.height * 1px; source: root.head; TouchArea { clicked => { Act.act("todo.next-list", ""); } } }
     Flickable {
         x: 0; y: 104px; width: root.width; height: root.height - 104px;
         content-width: root.width;
@@ -266,19 +270,19 @@ component TodoLabels inherits Rectangle {
         content-y: -root.scroll;
         ll := VerticalLayout {
             x: 0; y: 0; width: root.width; padding-left: 12px; padding-right: 12px; padding-top: 8px; padding-bottom: 40px; spacing: 2px; alignment: start;
-            for it in root.open-items: HorizontalLayout { alignment: start;
-                Image { width: it.tape.width * 1px; height: it.tape.height * 1px; source: it.tape; } }
+            for it[i] in root.open-items: HorizontalLayout { alignment: start;
+                Image { width: it.tape.width * 1px; height: it.tape.height * 1px; source: it.tape; TouchArea { clicked => { Act.act("todo.check", i); } } } }
             if root.open-items.length == 0: VerticalLayout { padding-top: 40px; padding-bottom: 24px; spacing: 10px;
                 HorizontalLayout { alignment: center; Image { width: root.empty-tape.width * 1px; height: root.empty-tape.height * 1px; source: root.empty-tape; } }
                 Text { height: 44px; text: root.empty-sub; font-size: 15px; color: Theme.muted; horizontal-alignment: center; wrap: word-wrap; }
             }
             if root.done-items.length > 0: HorizontalLayout { padding-top: 8px; spacing: 4px; alignment: start;
-                Image { width: root.done-head.width * 1px; height: root.done-head.height * 1px; source: root.done-head; }
+                Image { width: root.done-head.width * 1px; height: root.done-head.height * 1px; source: root.done-head; TouchArea { clicked => { Act.act("todo.done-toggle", ""); } } }
                 Icon { width: 22px; text: root.show-done ? "\u{F0143}" : "\u{F0140}"; font-size: 20px; color: Theme.faint; }
             }
             if root.show-done: VerticalLayout { spacing: 2px;
-                for it in root.done-items: HorizontalLayout { alignment: start;
-                    Image { width: it.tape.width * 1px; height: it.tape.height * 1px; source: it.tape; } }
+                for it[i] in root.done-items: HorizontalLayout { alignment: start;
+                    Image { width: it.tape.width * 1px; height: it.tape.height * 1px; source: it.tape; TouchArea { clicked => { Act.act("todo.uncheck", i); } } } }
             }
         }
     }
@@ -313,14 +317,14 @@ component TodoNotepad inherits Rectangle {
             Rectangle { x: 62px; y: 18px; width: 1px; height: parent.height - 18px; background: #e05a5ab3; }
             Rectangle { x: 0; y: 0; width: parent.width; height: 18px; background: #6d1f24; }
             Rectangle { x: 0; y: 18px; width: parent.width; height: 2px; background: #00000026; }
-            Image { x: 0; y: 18px; width: root.head.width * 1px; height: root.head.height * 1px; source: root.head; }
+            Image { x: 0; y: 18px; width: root.head.width * 1px; height: root.head.height * 1px; source: root.head; TouchArea { clicked => { Act.act("todo.next-list", ""); } } }
             nl := VerticalLayout {
                 x: 0; y: root.top; width: parent.width; spacing: 0px; alignment: start;
-                for it in root.open-items: Image { width: it.hand.width * 1px; height: it.hand.height * 1px; source: it.hand; }
+                for it[i] in root.open-items: Image { width: it.hand.width * 1px; height: it.hand.height * 1px; source: it.hand; TouchArea { clicked => { Act.act("todo.check", i); } } }
                 if root.open-items.length == 0: Image { width: root.empty-rows.width * 1px; height: root.empty-rows.height * 1px; source: root.empty-rows; }
-                if root.done-items.length > 0: Image { width: root.done-row.width * 1px; height: root.done-row.height * 1px; source: root.done-row; }
+                if root.done-items.length > 0: Image { width: root.done-row.width * 1px; height: root.done-row.height * 1px; source: root.done-row; TouchArea { clicked => { Act.act("todo.done-toggle", ""); } } }
                 if root.show-done: VerticalLayout { spacing: 0px;
-                    for it in root.done-items: Image { width: it.hand.width * 1px; height: it.hand.height * 1px; source: it.hand; }
+                    for it[i] in root.done-items: Image { width: it.hand.width * 1px; height: it.hand.height * 1px; source: it.hand; TouchArea { clicked => { Act.act("todo.uncheck", i); } } }
                 }
             }
         }
@@ -344,7 +348,7 @@ export component TodoPage inherits Rectangle {
     in property <int> due-pick: -1;        // 0 today, 1 tomorrow, 2 a picked date
     in property <string> due-picked;       // the picked date's label
     in property <int> kb-layer;
-    // looks: 0 plain, 1 receipt, 2 terminal, 3 label maker, 4 notepad (panel names are playful, HA's plain); the page's look sheet
+    // looks: 0 plain, 1 receipt, 2 terminal, 3 label maker, 4 notepad; the page's look sheet
     in property <int> look;
     in property <bool> settings;
     in property <string> stamp;            // receipt: date and time
@@ -375,6 +379,7 @@ export component TodoPage inherits Rectangle {
                 max-width: root.lists.length > 1 ? 350px : 380px; }
             if root.lists.length > 1: Icon { width: 22px; text: "\u{F0140}"; font-size: 22px; color: Theme.muted; }
         }
+        if root.lists.length > 1: TouchArea { x: 8px; y: 40px; width: 392px; height: 46px; clicked => { Act.act("todo.next-list", ""); } }
         Text { x: 16px; y: 80px; height: 20px; text: root.n-open == 0 ? "Nothing left" : root.n-open == 1 ? "1 to do" : root.n-open + " to do";
             font-size: 14px; color: Theme.muted; vertical-alignment: center; }
 
@@ -427,7 +432,8 @@ export component TodoPage inherits Rectangle {
         background: @linear-gradient(180deg, root.page-bg.with-alpha(root.fade-at(i + 1, 10)) 0%, root.page-bg.with-alpha(root.fade-at(i, 10)) 100%); }
     // add (drawn over the edge fades; the terminal look adds from its prompt)
     if root.look != 2: Rectangle { x: 416px; y: 48px; width: 48px; height: 48px; border-radius: 24px; background: Theme.accent;
-        Icon { text: "\u{F0415}"; font-size: 28px; color: #ffffff; } }
+        Icon { text: "\u{F0415}"; font-size: 28px; color: #ffffff; }
+        TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("todo.add", ""); } } }
 
     // ---------------------------------------------------------------- the page's sheet: the look
     // the settings fades in (240 ms) and out (200 ms) instead of popping
@@ -440,14 +446,14 @@ export component TodoPage inherits Rectangle {
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
         Text { x: 24px; y: 24px; height: 28px; text: "To-do"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 80px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
-        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
-            LookChip { text: "Clean Slate"; on: root.look == 0; }
-            LookChip { text: "Paper Trail"; on: root.look == 1; }
-            LookChip { text: "Root Access"; on: root.look == 2; } }
+            LookChip { text: Words.line("ui.looks.todo.0"); on: root.look == 0; }
+            LookChip { text: Words.line("ui.looks.todo.1"); on: root.look == 1; }
+            LookChip { text: Words.line("ui.looks.todo.2"); on: root.look == 2; } }
         HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
-            LookChip { text: "Label Me Impressed"; on: root.look == 3; }
-            LookChip { text: "Note to Self"; on: root.look == 4; } }
+            LookChip { text: Words.line("ui.looks.todo.3"); on: root.look == 3; }
+            LookChip { text: Words.line("ui.looks.todo.4"); on: root.look == 4; } }
     }
 
     // ---------------------------------------------------------------- list picker (tap on the list name)
@@ -476,8 +482,10 @@ export component TodoPage inherits Rectangle {
     // ---------------------------------------------------------------- adding an item: the field, due date chips (lists that take one), keyboard
     if root.adding: Rectangle {
         background: Theme.background;
+        TouchArea {}
         Rectangle { x: 16px; y: 46px; width: 40px; height: 40px; border-radius: 20px; background: Theme.surface-raised;
-            Icon { text: "\u{F0156}"; font-size: 22px; color: Theme.text; } }
+            Icon { text: "\u{F0156}"; font-size: 22px; color: Theme.text; }
+            TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("todo.add-cancel", ""); } } }
         Text { x: 68px; y: 46px; width: 396px; height: 40px; text: "Add to " + root.l.name; font-size: 20px; font-weight: 600; color: Theme.text;
             vertical-alignment: center; overflow: elide; }
         Rectangle { x: 16px; y: 102px; width: 448px; height: 46px; border-radius: 14px; background: Theme.surface; border-width: 2px; border-color: Theme.accent;
@@ -489,10 +497,12 @@ export component TodoPage inherits Rectangle {
             }
         }
         if root.can-due: HorizontalLayout { x: 16px; y: 164px; height: 40px; spacing: 8px; alignment: start;
-            DueChip { text: "Today"; icon: "\u{F00F6}"; on: root.due-pick == 0; }
-            DueChip { text: "Tomorrow"; icon: "\u{F0B67}"; on: root.due-pick == 1; }
-            DueChip { text: root.due-pick == 2 ? root.due-picked : "Pick a date"; icon: "\u{F0B67}"; on: root.due-pick == 2; }
+            DueChip { text: "Today"; icon: "\u{F00F6}"; on: root.due-pick == 0; TouchArea { clicked => { Act.act("todo.due", "0"); } } }
+            DueChip { text: "Tomorrow"; icon: "\u{F0B67}"; on: root.due-pick == 1; TouchArea { clicked => { Act.act("todo.due", "1"); } } }
+            DueChip { text: root.due-pick == 2 ? root.due-picked : "Pick a date"; icon: "\u{F0B67}"; on: root.due-pick == 2;
+                TouchArea { clicked => { Act.act("todo.due", "2"); } } }
         }
-        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; enter-label: "Add"; }
+        Keyboard { x: Theme.pad; y: Theme.keyboard-top; width: root.width - 2 * Theme.pad; layer: root.kb-layer; enter-label: "Add";
+            key(k) => { Act.act("todo.key", k); } }
     }
 }

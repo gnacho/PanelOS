@@ -70,6 +70,16 @@ impl Touch {
     pub fn fd(&self) -> RawFd {
         self.fd
     }
+}
+
+impl Drop for Touch {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor is ours and closed once.
+        unsafe { libc::close(self.fd) };
+    }
+}
+
+impl Touch {
 
     /// Reads everything available and returns the resulting pointer events.
     pub fn read_events(&mut self) -> Vec<TouchEvent> {

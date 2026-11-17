@@ -5,6 +5,12 @@
 // Taps, holds and drags anywhere in the UI go to the app through this one
 // callback: what ("music.play", "set.brightness", ...) and a value ("", an
 // index, a number as text).
+// The word lists of src/text.pak for texts the UI files draw themselves: a place's lines, or its first line.
+export global Words {
+    pure callback list(string) -> [string];
+    pure callback line(string) -> string;
+}
+
 export global Act {
     callback act(string, string);
     // a drag on a page that moves sideways (the turntable's arm): the pages do not swipe meanwhile

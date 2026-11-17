@@ -134,10 +134,10 @@ export component CameraPage inherits Rectangle {
     }
     // live badge top right (the camera prints its own name / time top left), the linked entities (up to three) at the bottom
     if root.view == 0 && root.c.state == 0: Rectangle {
-        x: root.width - (root.fit == 0 ? 26px : 16px) - self.width; y: root.fit == 0 ? 124px : 54px; width: lv.preferred-width + 34px; height: 26px; border-radius: 13px; background: #e8262d;
-        Rectangle { x: 11px; y: 10px; width: 6px; height: 6px; border-radius: 3px; background: #ffffff; }
+        x: root.width - (root.fit == 0 ? 26px : 16px) - self.width; y: root.fit == 0 ? 124px : 54px; width: lv.preferred-width + 34px; height: 26px; border-radius: 13px; background: #101114cc;
+        Rectangle { x: 11px; y: 10px; width: 6px; height: 6px; border-radius: 3px; background: Theme.brand; }
         lv := Text { x: 23px; y: 0; width: self.preferred-width; height: parent.height; text: "LIVE"; font-size: 12px; font-weight: 800; letter-spacing: 1px;
-            color: #ffffff; vertical-alignment: center; }
+            color: #F5F3EE; vertical-alignment: center; }
     }
     if root.view == 0 && root.c.state == 0: HorizontalLayout {
         x: 16px; y: root.fit == 0 ? 391px : 400px; width: 448px; height: 36px; alignment: center; spacing: 8px;
@@ -195,7 +195,7 @@ export component CameraPage inherits Rectangle {
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
         Text { x: 24px; y: 24px; height: 28px; text: "Cameras"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 132px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
-        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
             SheetChip { text: "Whole picture"; on: root.fit == 0; }
             SheetChip { text: "Fill the screen"; on: root.fit == 1; } }

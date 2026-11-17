@@ -37,6 +37,10 @@ fn tint(i: usize) -> Color {
 
 thread_local! {
     static EVENTS: std::cell::RefCell<Vec<Ev>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// Back / forward from today in the view's steps.
+    static SHIFT: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
+    /// The start view last applied from the integration's settings.
+    static START: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
 /// What the fetch thread reads (the calendars change with the integration).
@@ -372,7 +376,19 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         let day1 = day_after(day0, 1);
         events.iter().filter(|e| e.start < day1 && e.end > day0).collect()
     };
+    // the start view: set in the integration, else the last one used (kept there too); applied when it changes
+    let start = crate::page_option(s, "calendar", "view")
+        .and_then(|v| v.as_i64())
+        .filter(|v| (0..=4).contains(v))
+        .or_else(|| crate::page_option(s, "calendar", "last_view").and_then(|v| v.as_i64()).filter(|v| (0..=4).contains(v)))
+        .unwrap_or(0);
+    if START.with(|v| v.replace(Some(start))) != Some(start) {
+        ui.set_cal_view(start as i32);
+        SHIFT.with(|o| o.set(0));
+    }
     let view = ui.get_cal_view();
+    // back / forward: days in the day view, weeks in the week and 3-day views, months in the month view
+    let shift = SHIFT.with(|o| o.get());
     // the wall calendar's pen notes come in one by one: its cells follow them
     if crate::page_looks(ui, "calendar").contains(&3) {
         // the calendars written on the wall (daily routines would fill every cell): set in the integration, else all
@@ -383,7 +399,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     }
     // New models rebuild the page: only when the events, the minute or the view changed.
     thread_local!(static LAST: std::cell::Cell<u64> = const { std::cell::Cell::new(0) });
-    let key = events.iter().fold((t / 60) as u64 ^ ((view as u64) << 56), |k, e| {
+    let key = events.iter().fold((t / 60) as u64 ^ ((view as u64) << 56) ^ ((shift as u64) << 40), |k, e| {
         k.wrapping_mul(31).wrapping_add(e.start as u64 ^ (e.end as u64).rotate_left(17) ^ e.title.len() as u64)
     }) ^ names.iter().fold(0u64, |k, n| k.wrapping_mul(131).wrapping_add(n.len() as u64 ^ n.bytes().map(u64::from).sum::<u64>()));
     if LAST.with(|l| l.replace(key)) == key {
@@ -399,26 +415,27 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         }
         agenda.push(CalDay {
             label: day_label(day0, today).into(),
-            free: if list.is_empty() { texts::nth("cal.free", 0).into() } else { SharedString::new() },
+            free: if list.is_empty() { texts::kept("cal.free", 0).into() } else { SharedString::new() },
             events: ModelRc::new(VecModel::from(list)),
         });
     }
     if agenda.len() <= 1 && agenda.first().is_some_and(|d| slint::Model::row_count(&d.events) == 0) {
-        ui.set_cal_empty_title(texts::nth("cal.empty.titles", 0).into());
-        ui.set_cal_empty_sub(texts::nth("cal.empty.subs", 0).into());
+        ui.set_cal_empty_title(texts::kept("cal.empty.titles", 0).into());
+        ui.set_cal_empty_sub(texts::kept("cal.empty.subs", 0).into());
     }
     ui.set_cal_agenda(ModelRc::new(VecModel::from(agenda)));
     // day: today on a timeline
-    let mut timed: Vec<CalEvent> = on_day(today).iter().filter(|e| !e.all_day).map(|e| event(e, &names, today, t)).collect();
+    let dayv = day_after(today, if view == 1 { shift } else { 0 });
+    let mut timed: Vec<CalEvent> = on_day(dayv).iter().filter(|e| !e.all_day).map(|e| event(e, &names, dayv, t)).collect();
     lanes(&mut timed);
-    let allday: Vec<CalEvent> = on_day(today).iter().filter(|e| e.all_day).map(|e| event(e, &names, today, t)).collect();
-    ui.set_cal_day_free(if timed.is_empty() && allday.is_empty() { texts::nth("cal.free", 0).into() } else { SharedString::new() });
+    let allday: Vec<CalEvent> = on_day(dayv).iter().filter(|e| e.all_day).map(|e| event(e, &names, dayv, t)).collect();
+    ui.set_cal_day_free(if timed.is_empty() && allday.is_empty() { texts::kept("cal.free", 0).into() } else { SharedString::new() });
     ui.set_cal_day_events(ModelRc::new(VecModel::from(timed)));
     ui.set_cal_day_allday(ModelRc::new(VecModel::from(allday)));
-    ui.set_cal_day_today(true);
+    ui.set_cal_day_today(dayv == today);
     ui.set_cal_now_min(((t - today) / 60) as i32);
     // week: Monday to Sunday of this week
-    let monday = day_after(today, -weekday(t));
+    let monday = day_after(today, -weekday(t) + if view == 2 || view == 4 { 7 * shift } else { 0 });
     let mut week_events = Vec::new();
     let mut week_allday = Vec::new();
     let mut nums = Vec::new();
@@ -434,13 +451,15 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     }
     ui.set_cal_week_names(ModelRc::new(VecModel::from(wnames)));
     ui.set_cal_week_nums(ModelRc::new(VecModel::from(nums)));
-    ui.set_cal_week_today(weekday(t) as i32);
+    ui.set_cal_week_today(if view == 2 || view == 4 { if shift == 0 { weekday(t) as i32 } else { -1 } } else { weekday(t) as i32 });
     ui.set_cal_week_events(ModelRc::new(VecModel::from(week_events)));
     ui.set_cal_week_allday(ModelRc::new(VecModel::from(week_allday)));
     // month: six weeks from the Monday on or before the first
-    let first = date_epoch(&local_format(t, "%Y-%m-01")).unwrap_or(today);
+    let months = local_format(t, "%Y").parse::<i64>().unwrap_or(2026) * 12 + local_format(t, "%m").parse::<i64>().unwrap_or(1) - 1
+        + if view == 3 { shift } else { 0 };
+    let first = date_epoch(&format!("{:04}-{:02}-01", months.div_euclid(12), months.rem_euclid(12) + 1)).unwrap_or(today);
     let grid0 = day_after(first, -weekday(first));
-    let month = local_format(t, "%m");
+    let month = local_format(first, "%m");
     let cells: Vec<CalCell> = (0..42)
         .map(|k| {
             let day0 = day_after(grid0, k);
@@ -495,10 +514,10 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     ui.set_cal_board_rows(ModelRc::new(VecModel::from(board)));
     ui.set_cal_board_clock(hm(t).into());
     ui.set_cal_board_date(local_format(t, "%a %-d %b").to_uppercase().into());
-    if ui.get_cal_board_ticker().is_empty() {
-        ui.set_cal_board_ticker(texts::fresh("cal.board.tickers").into());
-        ui.set_cal_board_empty(texts::fresh("cal.board.empty").into());
-    }
+    // the board's crawl: four lines (never shorter than its strip)
+    let crawl: Vec<String> = (0..4).map(|i| texts::kept("cal.board.tickers", i)).collect();
+    ui.set_cal_board_ticker(crawl.join("   \u{2022}   ").into());
+    ui.set_cal_board_empty(texts::kept("cal.board.empty", 0).into());
     // tear-off: today's page
     let todays: Vec<CalEvent> = on_day(today).iter().map(|e| event(e, &names, today, t)).collect();
     let shown = todays.len().min(3);
@@ -509,13 +528,27 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     ui.set_cal_tear_info(format!("week {} · day {}", local_format(t, "%V").trim_start_matches('0'), local_format(t, "%j").trim_start_matches('0')).into());
     ui.set_cal_tear_more(if todays.len() > shown { format!("+{} more", todays.len() - shown).into() } else { SharedString::new() });
     ui.set_cal_tear_events(ModelRc::new(VecModel::from(todays.into_iter().take(shown).collect::<Vec<_>>())));
-    if ui.get_cal_tear_line().is_empty() {
-        ui.set_cal_tear_line(texts::fresh("cal.tear.lines").into());
-    }
+    ui.set_cal_tear_line(texts::kept("cal.tear.lines", 0).into());
     let (title, sub) = match view {
-        1 => ("Today".to_string(), local_format(t, "%A, %-d %B")),
-        2 | 4 => ("This week".into(), format!("{}–{} · week {}", local_format(monday, "%-d"), local_format(day_after(monday, 6), "%-d %B"), local_format(t, "%V").trim_start_matches('0'))),
-        3 => (local_format(t, "%B"), local_format(t, "%Y")),
+        1 => (
+            match shift {
+                0 => "Today".to_string(),
+                1 => "Tomorrow".into(),
+                -1 => "Yesterday".into(),
+                _ => local_format(dayv, "%A"),
+            },
+            local_format(dayv, "%A, %-d %B"),
+        ),
+        2 | 4 => (
+            match shift {
+                0 => "This week".to_string(),
+                1 => "Next week".into(),
+                -1 => "Last week".into(),
+                _ => format!("Week {}", local_format(monday, "%V").trim_start_matches('0')),
+            },
+            format!("{}–{} · week {}", local_format(monday, "%-d"), local_format(day_after(monday, 6), "%-d %B"), local_format(monday, "%V").trim_start_matches('0')),
+        ),
+        3 => (local_format(first, "%B"), local_format(first, "%Y")),
         _ => ("Coming up".into(), local_format(t, "%A, %-d %B")),
     };
     ui.set_cal_title(title.into());
@@ -525,8 +558,24 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
 /// Taps on the page (`cal.*`).
 pub fn act(ui: &AppWindow, what: &str, value: &str) {
     match what {
+        // the view (sheet chips): kept as the last used one, the start view unless the integration sets one
         "cal.view" => {
-            ui.set_cal_view(value.parse().unwrap_or(0));
+            let view: i32 = value.parse().unwrap_or(0).clamp(0, 4);
+            ui.set_cal_view(view);
+            SHIFT.with(|o| o.set(0));
+            ui.set_cal_settings(false);
+            crate::page_set(ui, "calendar", None, serde_json::json!({ "last_view": view }));
+            with_state(|s| refresh(ui, s));
+        }
+        "cal.look" => {
+            ui.set_cal_settings(false);
+            crate::page_set(ui, "calendar", Some(value.parse().unwrap_or(0)), Value::Null);
+            with_state(|s| refresh(ui, s));
+        }
+        "cal.settings" => ui.set_cal_settings(true),
+        "cal.settings-close" => ui.set_cal_settings(false),
+        "cal.prev" | "cal.next" => {
+            SHIFT.with(|o| o.set(o.get() + if what == "cal.next" { 1 } else { -1 }));
             with_state(|s| refresh(ui, s));
         }
         "cal.detail-close" => ui.set_cal_detail(false),

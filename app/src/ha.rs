@@ -30,6 +30,8 @@ pub enum Command {
     ListDashboards,
     /// Picture of the screen (PNG, base64) asked for by the PanelOS page.
     Screen(String),
+    /// A page's look or options set on the panel (its page sheet): the integration keeps them.
+    PageSet { index: usize, variant: Option<i32>, options: Value },
 }
 
 pub enum Event {
@@ -306,6 +308,17 @@ fn session(
                 }
                 Command::Screen(_) => {
                     crate::SCREENS_SENT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                Command::PageSet { index, variant, options } => {
+                    next_id += 1;
+                    let mut msg = json!({"id": next_id, "type": "panelos/page_set", "panel_id": PANEL_ID, "index": index});
+                    if let Some(v) = variant {
+                        msg["variant"] = json!(v);
+                    }
+                    if options.is_object() {
+                        msg["options"] = options;
+                    }
+                    send_json(&mut ws, &msg)?;
                 }
             }
         }

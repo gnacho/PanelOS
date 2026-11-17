@@ -2,7 +2,7 @@
 // Every widget has a kind, a size in cells (w x h) and its own look (style, accent, weight, switches).
 // The layout is edited in Home Assistant; editing on the panel itself is optional (switched on in
 // HA): a long press opens a lock, holding the lock unlocks the edit mode.
-import { Theme, Act } from "theme.slint";
+import { Theme, Act, Words } from "theme.slint";
 import { Icon, GlowText, Marquee } from "widgets.slint";
 import { WeatherData, ClockData, AnalogDial, FlipClock } from "panels.slint";
 
@@ -475,12 +475,21 @@ component MusicW inherits Rectangle {
         t >= 3600 ? Math.floor(t / 3600) + ":" + root.two(Math.mod(Math.floor(t / 60), 60)) + ":" + root.two(Math.mod(Math.floor(t), 60))
             : Math.floor(t / 60) + ":" + root.two(Math.mod(Math.floor(t), 60))
     }
-    // the position runs on smoothly between the app's updates (about once a second)
+    // the position runs on between the app's updates (about once a second), stepped by a timer whenever the shown
+    // second changes: nothing here follows the animation clock, so the times stay cached layers between seconds
+    // (over the synthwave scene a time redrawn every frame cost about 10 ms a frame)
     property <float> pos-base: root.pos;
     property <duration> pos-t;
-    changed pos => { root.pos-base = root.pos; root.pos-t = animation-tick(); }
-    property <float> pos-live: root.m.playing && root.m.dur > 0
-        ? Math.min(root.m.dur, root.pos-base + Math.min(2, (animation-tick() - root.pos-t) / 1s)) : root.pos-base;
+    property <float> pos-live: root.pos;
+    changed pos => { root.pos-base = root.pos; root.pos-t = animation-tick(); root.pos-live = root.pos; }
+    Timer {
+        interval: 250ms;
+        running: root.m.playing && root.m.dur > 0;
+        triggered => {
+            let p = Math.min(root.m.dur, root.pos-base + Math.min(2, (animation-tick() - root.pos-t) / 1s));
+            if Math.floor(p) != Math.floor(root.pos-live) { root.pos-live = p; }
+        }
+    }
     property <float> fr: root.m.dur > 0 ? max(0, min(1, root.pos-live / root.m.dur)) : 0;
     property <color> acc: root.m.accent;
     // the cover: the next one fades in over the last (300 ms)
@@ -513,7 +522,7 @@ component MusicW inherits Rectangle {
                 x: (parent.width - 54px) / 2; y: 63px; width: 54px; height: 3px; border-radius: 1.5px; background: root.ink.with-alpha(0.20);
                 Rectangle { x: 0; width: parent.width * root.fr; border-radius: 1.5px; background: root.acc; }
             }
-            GlowText { paper: root.ink.red < 128; live: true; x: 0; y: 67px; width: parent.width; height: 16px; text: root.m.dur > 0 ? root.mmss(root.pos-live) : "LIVE"; k: root.halo; neon: root.neon; glow: root.glow;
+            GlowText { paper: root.ink.red < 128; x: 0; y: 67px; width: parent.width; height: 16px; text: root.m.dur > 0 ? root.mmss(root.pos-live) : "LIVE"; k: root.halo; neon: root.neon; glow: root.glow;
                 font-size: 12px; color: root.ink.with-alpha(0.88); horizontal-alignment: center; }
             if !root.m.playing: Rectangle {
                 x: (parent.width - 54px) / 2 + 54px - 20px; y: 6px + 54px - 20px; width: 20px; height: 20px; border-radius: 10px; background: #000000a0;
@@ -537,9 +546,9 @@ component MusicW inherits Rectangle {
             x: 90px; y: 56px; width: parent.width - 90px - parent.rgt; height: 3px; border-radius: 1.5px; background: root.ink.with-alpha(0.20);
             Rectangle { x: 0; width: parent.width * root.fr; border-radius: 1.5px; background: root.acc; }
         }
-        if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; live: true; x: 90px; y: 61px; width: 50px; height: 16px; text: root.mmss(root.pos-live); k: root.halo; neon: root.neon; glow: root.glow;
+        if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; x: 90px; y: 61px; width: 50px; height: 16px; text: root.mmss(root.pos-live); k: root.halo; neon: root.neon; glow: root.glow;
             font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); }
-        if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; live: true; x: parent.width - parent.rgt - 50px; y: 61px; width: 50px; height: 16px; k: root.halo; neon: root.neon; glow: root.glow;
+        if root.it.w >= 2 && root.m.dur > 0: GlowText { paper: root.ink.red < 128; x: parent.width - parent.rgt - 50px; y: 61px; width: 50px; height: 16px; k: root.halo; neon: root.neon; glow: root.glow;
             text: "−" + root.mmss(max(0, root.m.dur - root.pos-live)); font-size: 12px; font-weight: 500; color: root.ink.with-alpha(0.92); horizontal-alignment: right; }
         if root.it.w >= 2 && root.m.dur <= 0: Rectangle {
             x: 90px; y: 56px; width: 40px; height: 18px; border-radius: 9px; background: root.acc.with-alpha(0.3);
@@ -702,7 +711,7 @@ export component HomeGrid inherits Rectangle {
     in property <float> halo: 1;          // how much glow the background needs behind white text
     in property <bool> neon;              // neon letters (Fast Lane background)
     in property <color> glow;             // … in the scene's colour
-    in property <bool> fast-lane;         // the background is "In the Fast Lane": the edit mode offers its sheet
+    in property <bool> fast-lane;         // the background is the synthwave scene: the edit mode offers its sheet
     in property <bool> bg-sheet;          // panel edit mode: the background sheet is open
     in property <int> fl-scene;
     in property <bool> fl-cars: true;
@@ -768,7 +777,7 @@ export component HomeGrid inherits Rectangle {
         x: 16px; y: root.height - 46px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff26;
         Icon { text: "\u{F0415}"; font-size: 22px; color: #ffffff; }
     }
-    // the background's own options (only "In the Fast Lane" has any)
+    // the background's own options (only the synthwave scene has any)
     if root.editing && !root.ha-mode && !root.picker && root.settings < 0 && !root.bg-sheet && root.fast-lane: Rectangle {
         x: 62px; y: root.height - 46px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff26;
         Icon { text: "\u{F03D8}"; font-size: 21px; color: #ffffff; }
@@ -805,18 +814,18 @@ export component HomeGrid inherits Rectangle {
         Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
         HorizontalLayout {
             x: 16px; y: bgs.r0; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Ride into the Sunset"; on: root.fl-scene == 0; accent: root.accent; }
-            SheetChip { text: "Concrete Jungle"; on: root.fl-scene == 1; accent: root.accent; }
+            SheetChip { text: Words.line("ui.looks.home.0"); on: root.fl-scene == 0; accent: root.accent; }
+            SheetChip { text: Words.line("ui.looks.home.1"); on: root.fl-scene == 1; accent: root.accent; }
         }
         HorizontalLayout {
             x: 16px; y: bgs.r1; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Life's a Beach"; on: root.fl-scene == 2; accent: root.accent; }
-            SheetChip { text: "Starry-Eyed"; on: root.fl-scene == 3; accent: root.accent; }
+            SheetChip { text: Words.line("ui.looks.home.2"); on: root.fl-scene == 2; accent: root.accent; }
+            SheetChip { text: Words.line("ui.looks.home.3"); on: root.fl-scene == 3; accent: root.accent; }
         }
         sw-row := HorizontalLayout {
             x: 16px; y: bgs.r2; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Glow Up"; check: true; on: root.neon; accent: root.accent; }
-            SheetChip { text: "Joyride"; check: true; on: root.fl-cars; accent: root.accent; }
+            SheetChip { text: Words.line("ui.looks.home.4"); check: true; on: root.neon; accent: root.accent; }
+            SheetChip { text: Words.line("ui.looks.home.5"); check: true; on: root.fl-cars; accent: root.accent; }
         }
         InfoButton { x: 16px + sw-row.preferred-width + 8px; y: bgs.r2 - 2px; on: root.info; }
         if root.info: InfoPop {
@@ -954,19 +963,19 @@ export component HomeGrid inherits Rectangle {
                 x: 16px; y: parent.r0; width: parent.width - 16px; height: 32px; clip: true;
                 HorizontalLayout {
                     alignment: start; spacing: 6px;
-                    SheetChip { text: "Plain and Simple"; on: root.cur.style == 0; accent: root.accent; }
-                    SheetChip { text: "No Glasses Needed"; on: root.cur.style == 1; accent: root.accent; }
-                    SheetChip { text: "Kitchen Classic"; on: root.cur.style == 2; accent: root.accent; }
-                    SheetChip { text: "Square Deal"; on: root.cur.style == 3; accent: root.accent; }
-                    SheetChip { text: "Barely There"; on: root.cur.style == 4; accent: root.accent; }
-                    SheetChip { text: "Big 4"; on: root.cur.style == 5; accent: root.accent; }
-                    SheetChip { text: "Flip Out"; on: root.cur.style == 6; accent: root.accent; }
-                    SheetChip { text: "In So Many Words"; on: root.cur.style == 7; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.6"); on: root.cur.style == 0; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.7"); on: root.cur.style == 1; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.8"); on: root.cur.style == 2; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.9"); on: root.cur.style == 3; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.10"); on: root.cur.style == 4; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.11"); on: root.cur.style == 5; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.12"); on: root.cur.style == 6; accent: root.accent; }
+                    SheetChip { text: Words.line("ui.looks.home.13"); on: root.cur.style == 7; accent: root.accent; }
                 }
                 Rectangle { x: parent.width - 56px; width: 56px; background: @linear-gradient(90deg, #1a1a1d00 0%, #1a1a1dff 85%); }
             }
             // Colour: eight swatches here, any colour in Home Assistant
-            for c[i] in (root.cur.kind == 7 ? [] : [#e8262d, #ff7a33, #ffc23d, #3ecf8e, #2ec4d6, #4c8dff, #a66cff, #f2f2f2]): Rectangle {
+            for c[i] in (root.cur.kind == 7 ? [] : [#FF4A1C, #ff7a33, #ffc23d, #3ecf8e, #2ec4d6, #4c8dff, #a66cff, #f2f2f2]): Rectangle {
                 x: 16px + i * 42px; y: parent.r0 + 54px; width: 32px; height: 32px; border-radius: 16px;
                 border-width: c == root.cur.accent ? 2px : 0px; border-color: #ffffff;
                 Rectangle { x: 5px; y: 5px; width: 22px; height: 22px; border-radius: 11px; background: c; }

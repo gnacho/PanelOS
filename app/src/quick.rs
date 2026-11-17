@@ -129,9 +129,11 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         return;
     };
     ui.set_quick_look(slot.variant);
-    if s.quick_title.is_empty() {
-        s.quick_title = texts::fresh(if slot.variant == 2 { "quick.titles.deck" } else { "quick.titles" });
-        ui.set_quick_title(s.quick_title.as_str().into());
+    ui.set_quick_title(texts::kept(if slot.variant == 2 { "quick.titles.deck" } else { "quick.titles" }, 0).into());
+    // the deck's placard may name the panel's room (lines that need it wait until the panel knows its room)
+    let room = crate::config_str(s, "room").to_uppercase();
+    ui.set_quick_placard(texts::kept_if("quick.placard", 0, |l| !l.contains("{ROOM}") || !room.is_empty()).replace("{ROOM}", &room).into());
+    if ui.get_quick_screw().size().width == 0 {
         // The desk's and the deck's panels and parts (loaded once).
         ui.set_quick_mixer_panel(picture("quick/mixer-panel.png"));
         ui.set_quick_fader(picture("quick/fader.png"));
@@ -184,14 +186,14 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     }
 }
 
-/// The playful line under the tiles: all off, some on, all on.
+/// The line under the tiles: all off, some on, all on.
 pub fn mood(tiles: &[QuickTile]) -> String {
     let live: Vec<&QuickTile> = tiles.iter().filter(|t| !t.gone).collect();
     if live.is_empty() {
         return String::new();
     }
     let on = live.iter().filter(|t| t.on).count();
-    texts::nth(
+    texts::kept(
         if on == 0 {
             "quick.off"
         } else if on == live.len() {

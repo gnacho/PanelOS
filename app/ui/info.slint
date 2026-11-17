@@ -2,8 +2,8 @@
 // A card pops up above any panel (info blue, warning amber; several in a row page through "1 of 3"); the notifications
 // page lists them, unread first. Critical alerts (smoke, CO, water) always take the whole screen in plain red, whatever the
 // look, and keep sounding until someone holds the button: the funky looks are for info and warnings only.
-import { Theme, Act } from "theme.slint";
-import { Icon, GlowText } from "widgets.slint";
+import { Theme, Act, Words } from "theme.slint";
+import { Icon, GlowText, Crawl } from "widgets.slint";
 
 export struct InfoNote {
     title: string,
@@ -80,7 +80,7 @@ export component NoteCard inherits Rectangle {
     }
 }
 
-// ---------------------------------------------------------------- pager look ("Beep Beep"): a 90s pager with its LCD
+// ---------------------------------------------------------------- pager look: a 90s pager with its LCD
 // The pager is a picture drawn for the theme (stippled graphite, or a see-through shell with the board inside); the page writes
 // the LCD text over it, each line with the faint shadow LCD ink casts on the reflector behind the glass.
 component LcdText inherits Rectangle {
@@ -131,13 +131,14 @@ component PagerLook inherits Rectangle {
     }
 }
 
-// ---------------------------------------------------------------- news look ("Breaking News"): a TV news screen
+// ---------------------------------------------------------------- news look: a TV news screen
 component NewsLook inherits Rectangle {
     in property <[InfoNote]> notes;
     in property <bool> open;
     in property <InfoNote> n;
     in property <string> clock;
-    in property <string> ticker;           // the app picks the line (between the real headlines)
+    in property <string> ticker;           // the headlines with the app's own lines between them
+    in property <int> ticker-epoch;
     in property <string> empty;
     background: @linear-gradient(160deg, #0b1f4d 0%, #071230 100%);
     // channel bug
@@ -175,11 +176,11 @@ component NewsLook inherits Rectangle {
     Rectangle { x: 16px; y: 404px; width: 72px; height: 28px; background: #d8202a;
         Text { text: root.clock; font-size: 15px; font-weight: 900; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } }
     Rectangle { x: 88px; y: 404px; width: 376px; height: 28px; background: #ffffff;
-        Text { x: 10px; y: 0; width: parent.width - 20px; height: parent.height; text: root.ticker; font-size: 13px; font-weight: 700; color: #0b1f4d;
-            vertical-alignment: center; overflow: elide; } }
+        Crawl { x: 8px; y: 0; width: parent.width - 8px; height: parent.height; text: root.ticker; epoch: root.ticker-epoch; font-size: 13px;
+            font-weight: 700; ink: #0b1f4d; } }
 }
 
-// ---------------------------------------------------------------- fridge look ("Fridge Magnet"): notes on a fridge door
+// ---------------------------------------------------------------- fridge look: notes on a fridge door
 // The app draws every note (a sticky note with handwriting, a magnet or tape, a small tilt); the page lays them out.
 component FridgeLook inherits Rectangle {
     in property <[InfoNote]> notes;
@@ -209,7 +210,7 @@ component FridgeLook inherits Rectangle {
 }
 
 export component InfoPage inherits Rectangle {
-    in property <int> look;                // 0 plain, 1 fridge, 2 pager, 3 news (panel names playful, HA's plain)
+    in property <int> look;                // 0 plain, 1 fridge, 2 pager, 3 news
     in property <[InfoNote]> notes;
     in property <length> scroll;
     in property <string> empty-title;      // the app picks these texts
@@ -233,6 +234,7 @@ export component InfoPage inherits Rectangle {
     in property <string> clock;
     in property <string> pager-empty;
     in property <string> news-ticker;
+    in property <int> news-epoch;
     in property <string> news-empty;
     in property <image> fridge-door;
     in property <image> fridge-empty;
@@ -268,7 +270,7 @@ export component InfoPage inherits Rectangle {
     if root.look == 1: FridgeLook { notes: root.notes; open: root.card; n: root.card-note; door: root.fridge-door; empty: root.fridge-empty; scroll: root.scroll; }
     if root.look == 2: PagerLook { notes: root.notes; open: root.card; n: root.card-note; index: root.card-index; clock: root.clock; empty: root.pager-empty;
         body: root.pager-body; led: root.pager-led; first-row: root.pager-first; }
-    if root.look == 3: NewsLook { notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; empty: root.news-empty; }
+    if root.look == 3: NewsLook { notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; ticker-epoch: root.news-epoch; empty: root.news-empty; }
 
     // ---------------------------------------------------------------- plain pop-up card (the looks show their own)
     if root.look == 0 && root.card: Rectangle { background: Theme.scrim; TouchArea { clicked => { Act.act("info.close", ""); } } }
@@ -285,13 +287,13 @@ export component InfoPage inherits Rectangle {
         Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
         Text { x: 24px; y: 24px; height: 28px; text: "Notifications"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 146px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
-        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.accent; vertical-alignment: center; }
+        Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
-            LookChip { text: "Heads Up"; on: root.look == 0; }
-            LookChip { text: "Fridge Magnet"; on: root.look == 1; } }
+            LookChip { text: Words.line("ui.looks.info.0"); on: root.look == 0; }
+            LookChip { text: Words.line("ui.looks.info.1"); on: root.look == 1; } }
         HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
-            LookChip { text: "Beep Beep"; on: root.look == 2; }
-            LookChip { text: "Breaking News"; on: root.look == 3; } }
+            LookChip { text: Words.line("ui.looks.info.2"); on: root.look == 2; }
+            LookChip { text: Words.line("ui.looks.info.3"); on: root.look == 3; } }
     }
 
     // ---------------------------------------------------------------- critical: whole screen, plain red, breathing; hold to silence

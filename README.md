@@ -28,7 +28,7 @@ PanelOS draws its own interface on the panel's GPU: no browser, no web page, eve
 - **Notifications**: a list, sticky notes on a fridge, a 90s pager, or the evening news.
 - **Quick controls**: tiles, a mixing desk with faders, or a flight deck with toggle switches.
 
-**It tells you what matters.** Status screens show what happens at home (someone in the bathroom, a call going on, the robot vacuum at work) in their own colour, with a few words that change every time; a swipe folds one into a strip on top. A critical alert (smoke, CO, gas, water) takes the whole screen in red and keeps sounding until someone holds the button. Do not disturb lets through what you choose.
+**It tells you what matters.** Status screens show what happens at home (someone in the bathroom, a call going on, the robot vacuum at work) in their own colour, with a few words; a swipe folds one into a strip on top. A critical alert (smoke, CO, gas, water) takes the whole screen in red and keeps sounding until someone holds the button. Do not disturb lets through what you choose.
 
 **Talk to it.** Wake words run on the panel itself. While you speak the screen listens with you, in a plain, terminal, comic or oscilloscope look, and the answer appears as it is spoken.
 

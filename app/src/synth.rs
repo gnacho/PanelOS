@@ -1,4 +1,4 @@
-//! The synthwave scenes ("In the Fast Lane": home background, timers theme,
+//! The synthwave scenes (home background, timers theme,
 //! thermostat look): which view (day, night, the beach's dawn) and the fade
 //! between them by the sun, the floor colour, and a passing car now and then.
 //! The clock, the floor lines, the palms and the cars' motion run in the UI.
@@ -122,8 +122,8 @@ fn fitting_trip(line: f32, now: f32, want: f32, alive: &[SwCar]) -> Option<f32> 
     alive.iter().all(|c| clear_of(line, now, dur, c)).then_some(dur).filter(|d| *d <= CAR_TRIP.1)
 }
 
-/// How far behind the car it follows the patrol car starts, as a share of their trip (owner 2026-11-16:
-/// 0.3-0.6 s was too close; 0.7-1.1 s still overlapped near the viewer). From 15 % on, the patrol car's
+/// How far behind the car it follows the patrol car starts, as a share of their trip (0.3-0.6 s was too
+/// close; 0.7-1.1 s still overlapped near the viewer). From 15 % on, the patrol car's
 /// roof stays below the car ahead, so it never covers it; with the same trip it keeps this distance.
 const PATROL_BEHIND: (f32, f32) = (0.15, 0.18);
 

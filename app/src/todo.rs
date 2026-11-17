@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use slint::ComponentHandle;
+use slint::{ComponentHandle, SharedString};
 
 use crate::draw::{self, Job, Tint};
 use crate::pages::{local_format, now, parse_iso};
@@ -25,6 +25,8 @@ struct Item {
 
 thread_local! {
     static ITEMS: std::cell::RefCell<Vec<Item>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The third due date chip: days from today.
+    static DUE_DAYS: std::cell::Cell<u32> = const { std::cell::Cell::new(2) };
 }
 /// The list to read, and a request to read it now.
 static WANTED: Mutex<(String, bool)> = Mutex::new((String::new(), false));
@@ -165,6 +167,9 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         }
         w.0 = entities[sel].clone();
     }
+    // the list takes due dates (Home Assistant's "set due date" feature, 16, or date and time, 32)
+    let features = s.states.get(&entities[sel]).and_then(|e| e.attrs.get("supported_features")).and_then(Value::as_u64).unwrap_or(0);
+    ui.set_todo_can_due(features & (16 | 32) != 0);
     ensure_started(ui, s);
     let lists: Vec<TodoList> = entities
         .iter()
@@ -212,15 +217,13 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     let open: Vec<TodoItem> = items.iter().filter(|i| !i.done).map(|i| drawn(i, false)).collect();
     let done: Vec<TodoItem> = items.iter().filter(|i| i.done).map(|i| drawn(i, true)).collect();
     // the receipt and terminal looks' own lines and the receipt's stamp
-    if ui.get_todo_receipt_footer().is_empty() {
-        ui.set_todo_receipt_footer(texts::fresh("todo.receipt.footers").into());
-        ui.set_todo_receipt_empty(texts::fresh("todo.receipt.empty").into());
-        ui.set_todo_term_empty(texts::fresh("todo.term.empty").into());
-    }
+    ui.set_todo_receipt_footer(texts::kept("todo.receipt.footers", 0).into());
+    ui.set_todo_receipt_empty(texts::kept("todo.receipt.empty", 0).into());
+    ui.set_todo_term_empty(texts::kept("todo.term.empty", 0).into());
     ui.set_todo_stamp(local_format(now(), "%d.%m.%Y %H:%M").into());
-    if open.is_empty() && ui.get_todo_empty_title().is_empty() {
-        ui.set_todo_empty_title(texts::fresh("todo.empty.titles").into());
-        ui.set_todo_empty_sub(texts::fresh("todo.empty.subs").into());
+    if open.is_empty() {
+        ui.set_todo_empty_title(texts::kept("todo.empty.titles", 0).into());
+        ui.set_todo_empty_sub(texts::kept("todo.empty.subs", 0).into());
     }
     let n_open = open.len();
     if tapes {
@@ -228,13 +231,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         ui.set_todo_label_head(draw::get(Job::TapeHead { name: name.clone(), count, seed: draw::seed(&name) }));
         ui.set_todo_label_done_head(draw::get(Job::Tape { text: format!("DONE · {}", done.len()), tint: Tint::Black, small: true, seed: 77 + done.len() as u32 }));
         if n_open == 0 {
-            thread_local!(static EMPTY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) });
-            let text = EMPTY.with(|e| {
-                if e.borrow().is_empty() {
-                    *e.borrow_mut() = texts::fresh("todo.label.empty");
-                }
-                e.borrow().clone()
-            });
+            let text = texts::kept("todo.label.empty", 0);
             ui.set_todo_label_empty_tape(draw::get(Job::Tape { text, tint, small: false, seed: 4242 }));
         }
     }
@@ -282,6 +279,91 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
         "todo.done-toggle" => {
             ui.set_todo_show_done(!ui.get_todo_show_done());
             with_state(|s| refresh(ui, s));
+        }
+        // adding an item: the field with the keyboard (a capital first), due date chips where the list takes one
+        "todo.add" => {
+            ui.set_todo_draft(SharedString::new());
+            ui.set_todo_due_pick(-1);
+            ui.set_todo_kb_layer(1);
+            ui.set_todo_adding(true);
+        }
+        "todo.add-cancel" => ui.set_todo_adding(false),
+        // the list name: the next list (round)
+        "todo.next-list" => {
+            let count = slint::Model::row_count(&ui.get_todo_lists()).max(1);
+            ui.set_todo_sel(((ui.get_todo_sel().max(0) as usize + 1) % count) as i32);
+            ui.set_todo_scroll(0.0);
+            WANTED.lock().unwrap().1 = true;
+            with_state(|s| refresh(ui, s));
+        }
+        "todo.due" => {
+            let pick = ui.get_todo_due_pick();
+            match n {
+                // a second tap takes the date off
+                0 | 1 if pick == n as i32 => ui.set_todo_due_pick(-1),
+                0 | 1 => ui.set_todo_due_pick(n as i32),
+                // the third chip steps a day further on each tap (from the day after tomorrow, two weeks on)
+                _ => {
+                    let days = if pick == 2 { DUE_DAYS.with(|d| d.get()) % 15 + 1 } else { 2 };
+                    let days = days.max(2);
+                    DUE_DAYS.with(|d| d.set(days));
+                    ui.set_todo_due_picked(local_format(now() + days as i64 * 86_400, "%a %-d %b").into());
+                    ui.set_todo_due_pick(2);
+                }
+            }
+        }
+        "todo.key" => {
+            let mut draft = ui.get_todo_draft().to_string();
+            let layer = ui.get_todo_kb_layer();
+            match value {
+                "enter" => {
+                    let text = draft.trim().to_string();
+                    if !text.is_empty() {
+                        let list = WANTED.lock().unwrap().0.clone();
+                        let days = match ui.get_todo_due_pick() {
+                            0 => Some(0),
+                            1 => Some(1),
+                            2 => Some(DUE_DAYS.with(|d| d.get())),
+                            _ => None,
+                        };
+                        let mut data = json!({ "item": text });
+                        if let Some(d) = days {
+                            data["due_date"] = json!(local_format(now() + d as i64 * 86_400, "%Y-%m-%d"));
+                        }
+                        crate::call("todo", "add_item", &list, data);
+                        // shown at once; the list is read again right after
+                        ITEMS.with(|i| {
+                            i.borrow_mut().push(Item { uid: String::new(), summary: text, done: false, due: String::new(), note: String::new() })
+                        });
+                        WANTED.lock().unwrap().1 = true;
+                    }
+                    ui.set_todo_adding(false);
+                    with_state(|s| refresh(ui, s));
+                    return;
+                }
+                "back" => {
+                    draft.pop();
+                }
+                "clear" => draft.clear(),
+                "shift" => ui.set_todo_kb_layer(match layer {
+                    0 => 1,
+                    1 => 0,
+                    2 => 3,
+                    _ => 2,
+                }),
+                "symbols" => ui.set_todo_kb_layer(if layer >= 2 { 0 } else { 2 }),
+                "layout" => {}
+                k => {
+                    if draft.chars().count() < 120 {
+                        draft.push_str(k);
+                    }
+                    // one capital, then small letters again
+                    if layer == 1 {
+                        ui.set_todo_kb_layer(0);
+                    }
+                }
+            }
+            ui.set_todo_draft(SharedString::from(draft));
         }
         _ => eprintln!("nspanel-app: act {what} {value} (not handled)"),
     }

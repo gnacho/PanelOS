@@ -21,6 +21,10 @@ export struct TimerInfo {
 // One running timer; the chip grows with its text.
 component TimerChip inherits Rectangle {
     in property <TimerInfo> timer;
+    // on a coloured or dark page background (1) the chip keeps the dark palette, whatever the theme
+    in property <float> on-k;
+    property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
+    property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
     probe := Text { visible: false; text: root.timer.hours ? "0:00:00" : "00:00"; font-size: Theme.font-caption; font-weight: Theme.weight-strong; }
     // a new chip fades in (200 ms)
     property <bool> came;
@@ -29,7 +33,7 @@ component TimerChip inherits Rectangle {
     animate opacity { duration: 200ms; easing: ease-out; }
     height: 26px;
     border-radius: 13px;
-    background: root.timer.urgent ? Theme.danger.with-alpha(0.2) : Theme.warning.with-alpha(0.18);
+    background: root.timer.urgent ? root.alert.with-alpha(0.2) : root.warn.with-alpha(0.18);
     animate background { duration: 300ms; easing: ease-in-out; }
     HorizontalLayout {
         padding-left: 8px;
@@ -38,13 +42,13 @@ component TimerChip inherits Rectangle {
         Icon {
             text: "\u{F051B}";
             font-size: 15px;
-            color: root.timer.urgent ? Theme.danger : Theme.warning;
+            color: root.timer.urgent ? root.alert : root.warn;
             animate color { duration: 300ms; easing: ease-in-out; }
         }
         if root.timer.label != "": Text {
             text: root.timer.label;
             font-size: Theme.font-caption;
-            color: Theme.muted;
+            color: (#A3A19C).mix(Theme.muted, root.on-k);
             vertical-alignment: center;
         }
         // the time keeps one width while it counts down (no jumping of the bar): as wide as "00:00", or
@@ -54,7 +58,7 @@ component TimerChip inherits Rectangle {
             min-width: probe.preferred-width;
             font-size: Theme.font-caption;
             font-weight: Theme.weight-strong;
-            color: Theme.text;
+            color: (#F5F3EE).mix(Theme.text, root.on-k);
             horizontal-alignment: right;
             vertical-alignment: center;
         }
@@ -65,13 +69,14 @@ component TimerChip inherits Rectangle {
 export component TimerChips inherits HorizontalLayout {
     in property <[TimerInfo]> timers;
     in property <int> most: 2;           // chips shown before "+N"
+    in property <float> on-k;
     spacing: 6px;
-    if root.timers.length > 0: TimerChip { timer: root.timers[0]; }
-    if root.timers.length > 1 && root.most > 1: TimerChip { timer: root.timers[1]; }
+    if root.timers.length > 0: TimerChip { timer: root.timers[0]; on-k: root.on-k; }
+    if root.timers.length > 1 && root.most > 1: TimerChip { timer: root.timers[1]; on-k: root.on-k; }
     if root.timers.length > root.most: Rectangle {
         height: 26px;
         border-radius: 13px;
-        background: Theme.warning.with-alpha(0.18);
+        background: (#f5a524).mix(Theme.warning, root.on-k).with-alpha(0.18);
         HorizontalLayout {
             padding-left: 9px;
             padding-right: 9px;
@@ -79,7 +84,7 @@ export component TimerChips inherits HorizontalLayout {
                 text: "+" + (root.timers.length - root.most);
                 font-size: Theme.font-caption;
                 font-weight: Theme.weight-strong;
-                color: Theme.text;
+                color: (#F5F3EE).mix(Theme.text, root.on-k);
                 vertical-alignment: center;
             }
         }
@@ -100,17 +105,38 @@ export component StatusBar inherits HorizontalLayout {
     in property <bool> quiet;            // screensaver: no hint, no microphone
     in property <bool> on-color;         // drawn over a coloured panel background
     in property <float> on-k: root.on-color ? 1 : 0;   // the same, mixed while a swipe crosses pages
-    // the page has its own chip at the top right (speaker, room, camera, view): the timers move to the left,
-    // one chip and "+N", and the hint gives way
+    // the page has its own chip at the top right (speaker, room, camera, view): everything of the status line
+    // that sits on the right moves to the left (the bell, the problem mark, the timers as one chip and "+N"),
+    // and the texts give way, so nothing lies on or under the page's chip
     in property <bool> left-chips;
     in property <float> left-k: root.left-chips ? 1 : 0;
     property <color> soft: (#ffffffb3).mix(Theme.faint, root.on-k);
+    property <bool> bell-on: root.notes > 0 && !root.quiet;
+    // the warning and error colours keep the dark palette on a coloured page background
+    property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
+    property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
     height: 32px;
     spacing: 8px;
-    if root.left-k > 0.001: VerticalLayout {
+    if root.left-k > 0.001 && root.timers.length > 0: VerticalLayout {
         alignment: center;
         opacity: root.left-k;
-        TimerChips { timers: root.timers; most: 1; }
+        TimerChips { timers: root.timers; most: 1; on-k: root.on-k; }
+    }
+    if root.left-k > 0.001 && root.problem: VerticalLayout {
+        alignment: center;
+        opacity: root.left-k;
+        Icon { text: "\u{F092B}"; font-size: 18px; color: root.warn; }
+    }
+    if root.left-k > 0.001 && root.bell-on: Rectangle {
+        width: 34px;
+        opacity: root.left-k;
+        Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
+        Rectangle {
+            x: 18px; y: (parent.height - 26px) / 2; width: max(15px, ntl.preferred-width + 8px); height: 15px; border-radius: 7.5px;
+            background: Theme.accent;
+            ntl := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+        }
+        TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; enabled: root.left-k > 0.5; clicked => { Act.act("notes.open", ""); } }
     }
     if root.listening: VerticalLayout {
         alignment: center;
@@ -119,7 +145,7 @@ export component StatusBar inherits HorizontalLayout {
     if root.mic-muted: Icon {
         text: "\u{F036D}";
         font-size: 17px;
-        color: Theme.danger;
+        color: root.alert;
     }
     if root.speaker-muted: Icon {
         text: "\u{F075F}";
@@ -136,28 +162,30 @@ export component StatusBar inherits HorizontalLayout {
         text: root.mic-muted ? (root.left-k > 0.999 ? "" : "Microphone off") : root.quiet || root.left-k > 0.999 ? "" : root.hint;
         opacity: 1 - root.left-k;
         font-size: Theme.font-caption;
-        color: root.mic-muted ? Theme.danger : root.soft;
+        color: root.mic-muted ? root.alert : root.soft;
         vertical-alignment: center;
         overflow: elide;
     }
-    if root.problem: VerticalLayout {
+    if root.left-k < 0.999 && root.problem: VerticalLayout {
         alignment: center;
-        Icon { text: "\u{F092B}"; font-size: 18px; color: Theme.warning; }
+        opacity: 1 - root.left-k;
+        Icon { text: "\u{F092B}"; font-size: 18px; color: root.warn; }
     }
-    if root.notes > 0 && !root.quiet: bell := Rectangle {
+    if root.left-k < 0.999 && root.bell-on: bell := Rectangle {
         width: 34px;
+        opacity: 1 - root.left-k;
         Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
         Rectangle {
             x: 18px; y: (parent.height - 26px) / 2; width: max(15px, nt.preferred-width + 8px); height: 15px; border-radius: 7.5px;
             background: Theme.accent;
             nt := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
         }
-        TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; clicked => { Act.act("notes.open", ""); } }
+        TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; enabled: root.left-k <= 0.5; clicked => { Act.act("notes.open", ""); } }
     }
     if root.left-k < 0.999: VerticalLayout {
         alignment: center;
         opacity: 1 - root.left-k;
-        TimerChips { timers: root.timers; }
+        TimerChips { timers: root.timers; on-k: root.on-k; }
     }
 }
 

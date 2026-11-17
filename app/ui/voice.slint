@@ -1,6 +1,6 @@
 // Voice feedback: the full-screen conversation view while the assistant listens, thinks and answers.
 // States: 1 listening, 2 thinking, 3 answering, 4 error, 5 listening for more (follow-up, ends after 5 s), 6 not understood.
-// Looks: 0 plain, 1 terminal, 2 comic, 3 oscilloscope. The status line (`line`) is a playful text picked by the app for the
+// Looks: 0 plain, 1 terminal, 2 comic, 3 oscilloscope. The status line (`line`) is a text picked by the app for the
 // state; heard / answer are the real texts of the turn. `level` is the microphone level (0 … 1), `left` the follow-up time left.
 import { Theme, Act } from "theme.slint";
 import { Icon } from "widgets.slint";
@@ -12,7 +12,7 @@ export component VoicePage inherits Rectangle {
     in property <string> heard;
     in property <string> answer;
     in property <string> line;
-    in property <string> detail;           // error detail (plain words, not playful)
+    in property <string> detail;           // error detail
     in property <float> level;
     in property <float> left: -1;
     in property <string> wave;             // oscilloscope trace (path commands in a 400 x 160 box)
@@ -83,7 +83,7 @@ export component VoicePage inherits Rectangle {
     if root.look == 2: Rectangle {
         background: #ffd43b;
         Image { x: 0; y: 0; width: 480px; height: 480px; source: root.dots; }
-        // the caption box on top: the state, playful
+        // the caption box on top: the state
         Rectangle { x: 18px; y: 16px; width: min(cap.preferred-width + 28px, parent.width - 36px); height: 38px; background: #fff7d6; border-width: 3px; border-color: #111111;
             cap := Text { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; text: root.line.to-uppercase(); font-size: 16px; font-weight: 800; color: #111111;
                 vertical-alignment: center; overflow: elide; } }

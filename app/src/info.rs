@@ -24,7 +24,6 @@ thread_local! {
     /// The note open (its id), the pager's first list row.
     static OPEN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static FIRST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static FRIDGE_EMPTY: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
     /// The new notification shown as a card above any page (its id).
     static POP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
 }
@@ -173,14 +172,8 @@ pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
     FIRST.with(|f| f.set(first));
     ui.set_info_pager_first(first as i32);
     if look == 1 {
-        let title = FRIDGE_EMPTY.with(|e| {
-            if e.borrow().is_empty() {
-                *e.borrow_mut() = texts::fresh("info.fridge.empty");
-            }
-            e.borrow().clone()
-        });
         ui.set_info_fridge_empty(draw::get(Job::Fridge {
-            title,
+            title: texts::kept("info.fridge.empty", 0),
             message: "Nothing new on the fridge.".into(),
             foot: "the fridge · now".into(),
             level: 0,
@@ -199,14 +192,23 @@ pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
         let door = if slint::ComponentHandle::global::<crate::Theme>(ui).get_dark() { "info/door-dark.png" } else { "info/door-light.png" };
         ui.set_info_fridge_door(crate::quick::picture(door));
     }
-    if ui.get_info_news_ticker().is_empty() {
-        ui.set_info_news_ticker(texts::fresh("info.news.tickers").into());
-        ui.set_info_news_empty(texts::fresh("info.news.empty").into());
-        ui.set_info_pager_empty(texts::fresh("info.pager.empty").into());
+    // the news look's crawl: the headlines, a line of the channel's own after every second one and the rest of
+    // those lines at the end (three of them: the crawl is never shorter than its strip)
+    let mut crawl: Vec<String> = Vec::new();
+    let mut own = (0..3).map(|i| texts::kept("info.news.tickers", i));
+    for (k, (_, n)) in list.iter().enumerate() {
+        crawl.push(if n.title.is_empty() { n.message.to_uppercase() } else { n.title.to_uppercase() });
+        if k % 2 == 1 {
+            crawl.extend(own.next());
+        }
     }
-    if rows.is_empty() && ui.get_info_empty_title().is_empty() {
-        ui.set_info_empty_title(texts::fresh("info.empty.titles").into());
-        ui.set_info_empty_sub(texts::fresh("info.empty.subs").into());
+    crawl.extend(own);
+    ui.set_info_news_ticker(crawl.join("   \u{2022}   ").into());
+    ui.set_info_news_empty(texts::kept("info.news.empty", 0).into());
+    ui.set_info_pager_empty(texts::kept("info.pager.empty", 0).into());
+    if rows.is_empty() {
+        ui.set_info_empty_title(texts::kept("info.empty.titles", 0).into());
+        ui.set_info_empty_sub(texts::kept("info.empty.subs", 0).into());
     }
     if let Some(m) = crate::pages::update_rows(&ui.get_info_notes(), rows) {
         ui.set_info_notes(m);

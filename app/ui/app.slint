@@ -12,7 +12,7 @@ import "./fonts/DejaVuSansMono.ttf";
 import "./fonts/DejaVuSansMono-Bold.ttf";
 import "./fonts/Caveat[wght].ttf";
 
-import { Theme, Act, Clock } from "theme.slint";
+import { Theme, Act, Clock, Words } from "theme.slint";
 import { PairingScreen, FoundHa, SetupScreen, WifiNet, WifiScreen, WifiPasswordScreen, HiddenNetworkScreen, HaPickScreen, ConnectingScreen, OfflineScreen, Phrases } from "overlays.slint";
 import { Person, TimerInfo, ClockData, ClockFace, StatusBar, PageDots, People, WeatherHour, WeatherDay, WeatherData, WeatherPanel } from "panels.slint";
 import { HomeItem, HomeEvent, HomeMusic, HomeGrid } from "home.slint";
@@ -31,7 +31,7 @@ import { QuickTile, QuickGroup, QuickPage } from "quick.slint";
 import { SetRow, SetBar, SetSeg, SetSection, SettingsLayer } from "settings.slint";
 import { WebLoading, PullToRefresh } from "loading.slint";
 
-export { Theme, Act, Phrases, FoundHa, WifiNet, Person, TimerInfo, ClockData, WeatherHour, WeatherDay, WeatherData }
+export { Theme, Act, Words, Phrases, FoundHa, WifiNet, Person, TimerInfo, ClockData, WeatherHour, WeatherDay, WeatherData }
 export { HomeItem, HomeEvent, HomeMusic, MusicPlayer, TimerItem, AlarmItem, SwCar, ClimateDev, ClimateRoom, CamItem, CamAction }
 export { TodoItem, TodoList, CalEvent, CalDay, CalCell, CalBoard, WallCell, InfoNote, StatusScreen, QuickTile, QuickGroup }
 export { SetRow, SetBar, SetSeg, SetSection, WinRect }
@@ -148,6 +148,7 @@ export component AppWindow inherits Window {
     in property <string> info-clock;
     in property <string> info-pager-empty;
     in property <string> info-news-ticker;
+    in property <int> info-news-epoch;
     in property <string> info-news-empty;
     in property <image> info-fridge-door;
     in property <image> info-fridge-empty;
@@ -212,6 +213,7 @@ export component AppWindow inherits Window {
     in property <string> cal-board-clock;
     in property <string> cal-board-date;
     in property <string> cal-board-ticker;
+    in property <int> cal-board-epoch;
     in property <string> cal-board-empty;
     in property <string> cal-tear-month;
     in property <int> cal-tear-day;
@@ -287,7 +289,7 @@ export component AppWindow inherits Window {
     in property <image> todo-note-head;
     in property <image> todo-note-done;
     in property <image> todo-note-empty;
-    // home background "In the Fast Lane" (weather.theme 8): scene, the two views being faded (a -> b by mix),
+    // the synthwave home background (weather.theme 8): scene, the two views being faded (a -> b by mix),
     // the view's colour, night amount (shooting star), floor time, cars (empty = switched off), palms,
     // neon letters, and the panel's background sheet
     in property <int> home-fl-scene;
@@ -614,7 +616,7 @@ export component AppWindow inherits Window {
     in property <bool> saver-seconds: true;
     in property <float> saver-speed: 20;
     property <length> drag-x;
-    property <bool> dragging;
+    out property <bool> dragging;
     // Endless: `pos` counts pages without wrapping (after the last page comes the first from the same side);
     // the page shown is pos modulo the count. A page set by the app (out of step with pos) is taken as it is.
     property <int> pos;
@@ -643,12 +645,12 @@ export component AppWindow inherits Window {
     public function reset-pos() {
         root.pos = root.page;
     }
-    // the timers' side in the status bar (left where the page has its own chip at the top right), mixed by
-    // the swipe like the colours
+    // the status line's right-hand side (the bell, the problem mark, the timers) moves to the left where the page
+    // has its own chip at the top right, mixed by the swipe like the colours
     pure function chips-left(p: PageSlot) -> bool {
         p.kind == "music" || p.kind == "thermostat" || p.kind == "camera" || p.kind == "calendar"
     }
-    property <float> left-k: root.screensaver-on || root.status-on || root.timers.length == 0 || root.pages.length == 0 ? 0
+    property <float> left-k: root.screensaver-on || root.status-on || root.pages.length == 0 ? 0
         : (root.chips-left(root.pages[root.pg-a]) ? 1 : 0) * (1 - root.pg-f) + (root.chips-left(root.pages[root.pg-b]) ? 1 : 0) * root.pg-f;
 
     // Taps, holds and drags of every page and layer: what ("music.play",
@@ -1011,7 +1013,7 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "calendar": CalendarPage {
                     look: slot.variant; board-rows: root.cal-board-rows; board-clock: root.cal-board-clock; board-date: root.cal-board-date;
-                    board-ticker: root.cal-board-ticker; board-empty: root.cal-board-empty; tear-month: root.cal-tear-month; tear-day: root.cal-tear-day;
+                    board-ticker: root.cal-board-ticker; board-epoch: root.cal-board-epoch; board-empty: root.cal-board-empty; tear-month: root.cal-tear-month; tear-day: root.cal-tear-day;
                     tear-weekday: root.cal-tear-weekday; tear-sunday: root.cal-tear-sunday; tear-info: root.cal-tear-info; tear-events: root.cal-tear-events;
                     tear-more: root.cal-tear-more; tear-line: root.cal-tear-line; wall-month: root.cal-wall-month; wall-year: root.cal-wall-year;
                     wall-photo: root.cal-wall-photo; wall-cells: root.cal-wall-cells;
@@ -1038,7 +1040,7 @@ export component AppWindow inherits Window {
                     card: root.info-card; card-note: root.info-card-note; card-index: root.info-card-index; card-count: root.info-card-count;
                     critical: root.info-critical; crit-title: root.info-crit-title; crit-message: root.info-crit-message; crit-icon: root.info-crit-icon;
                     crit-source: root.info-crit-source; crit-hold: root.info-crit-hold; crit-pulse: root.info-crit-pulse; settings: root.info-settings;
-                    clock: root.info-clock; pager-empty: root.info-pager-empty; news-ticker: root.info-news-ticker; news-empty: root.info-news-empty;
+                    clock: root.info-clock; pager-empty: root.info-pager-empty; news-ticker: root.info-news-ticker; news-epoch: root.info-news-epoch; news-empty: root.info-news-empty;
                     fridge-door: root.info-fridge-door; fridge-empty: root.info-fridge-empty;
                     pager-body: root.info-pager-body; pager-led: root.info-pager-led; pager-first: root.info-pager-first; crit-button: root.info-crit-button;
                 }
@@ -1053,9 +1055,17 @@ export component AppWindow inherits Window {
     }
 
     // ---- over every page ----
-    // A ringing timer: a tap anywhere stops it.
+    // A ringing timer or alarm: a tap anywhere stops it, except on the ringing screen's second button
+    // ("+1 min" / "Snooze 9 min", 140 x 44 at the bottom middle, see timers.slint), with a margin for the finger.
     if root.timers-ringing: TouchArea {
-        clicked => { root.act("timers.stop", ""); }
+        clicked => {
+            if self.mouse-x > (root.width - 140px) / 2 - 12px && self.mouse-x < (root.width + 140px) / 2 + 12px
+                && self.mouse-y > 392px - 10px && self.mouse-y < 392px + 44px + 14px {
+                root.act("timers.more", "");
+            } else {
+                root.act("timers.stop", "");
+            }
+        }
     }
     property <float> status-k: root.status-on ? 1 : 0;
     animate status-k { duration: 300ms; easing: ease-in-out; }

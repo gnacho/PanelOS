@@ -2,6 +2,65 @@
 
 import { Theme, Clock } from "theme.slint";
 
+// A news crawl: the text rolls on from right to left without end, drawn twice for a seamless loop. A new text
+// joins at the tail (never under the eye); a new `epoch` starts it afresh (bumped while its page is out of sight).
+export component Crawl inherits Rectangle {
+    in property <string> text;
+    in property <int> epoch;
+    in property <length> font-size: 13px;
+    in property <int> font-weight: 700;
+    in property <string> font-family;
+    in property <length> letter-spacing: 0;
+    in property <color> ink;
+    in property <float> speed: 0.07;       // px per ms
+    clip: true;
+    // the gap between the copies is the app's own separator ("   •   "), so the seam looks like every other joint
+    sep-probe := Text { visible: false; text: "a   \u{2022}   a"; font-size: root.font-size; font-weight: root.font-weight;
+        font-family: root.font-family; letter-spacing: root.letter-spacing; }
+    pair-probe := Text { visible: false; text: "aa"; font-size: root.font-size; font-weight: root.font-weight;
+        font-family: root.font-family; letter-spacing: root.letter-spacing; }
+    property <length> gap: sep-probe.preferred-width - pair-probe.preferred-width;
+    property <string> lead;                // the copy in front
+    property <string> tail;                // the copy behind it
+    property <duration> t0;
+    // a copy never shorter than the strip, so the strip is never half empty
+    property <length> span: max(lead-text.preferred-width, root.width) + root.gap;
+    property <length> off: (animation-tick() - root.t0) / 1ms * root.speed * 1px;
+    function restart() {
+        root.lead = root.text;
+        root.tail = root.text;
+        root.t0 = animation-tick();
+    }
+    init => { root.restart(); }
+    changed epoch => { root.restart(); }
+    changed text => {
+        if root.lead == "" {
+            root.restart();
+        } else if root.span - root.off > root.width {
+            root.tail = root.text;
+        }
+    }
+    // when the front copy has rolled out, the one behind leads and the newest text follows it (a late look only
+    // moves the swap into the gap: the picture does not jump)
+    Timer {
+        interval: 250ms;
+        running: root.lead != "";
+        triggered => {
+            if root.off >= root.span {
+                root.t0 += root.span / 1px / root.speed * 1ms;
+                root.lead = root.tail;
+                root.tail = root.text;
+            }
+        }
+    }
+    lead-text := Text { x: -root.off; y: 0; height: root.height; text: root.lead; font-size: root.font-size; font-weight: root.font-weight;
+        font-family: root.font-family; letter-spacing: root.letter-spacing; color: root.ink; vertical-alignment: center; }
+    Text { x: root.span - root.off - root.gap / 2 - self.preferred-width / 2; y: 0; height: root.height; text: "\u{2022}"; font-size: root.font-size;
+        font-weight: root.font-weight; font-family: root.font-family; color: root.ink; vertical-alignment: center; }
+    Text { x: root.span - root.off; y: 0; height: root.height; text: root.tail; font-size: root.font-size; font-weight: root.font-weight;
+        font-family: root.font-family; letter-spacing: root.letter-spacing; color: root.ink; vertical-alignment: center; }
+}
+
 export component Icon inherits Text {
     font-family: "Material Design Icons";
     // No layer of its own: a cached Text item kept showing the old glyph after
@@ -24,7 +83,7 @@ export component GlowText {
     in property <string> family;      // another font (e.g. the to-do terminal look's monospace); empty: the default
     in property <TextHorizontalAlignment> horizontal-alignment: left;
     in property <TextOverflow> overflow: clip;
-    // neon letters (home page, "In the Fast Lane" background): a coloured glow around the letters and a
+    // neon letters (home page, synthwave background): a coloured glow around the letters and a
     // firm dark rim instead of the soft one (as the timers page's synthwave theme)
     in property <bool> neon;
     in property <color> glow: #ff2bd6;
@@ -36,11 +95,11 @@ export component GlowText {
     in property <bool> paper;          // dark text on a light scene: a Paper rim instead of the dark one
     property <color> rim: root.paper ? #F5F3EE.with-alpha(0.55 * min(1, root.k)) : #000000.with-alpha(0.18 * min(1, root.k));
     // the glow: one ring of copies just outside the thin dark rim, enough to show on every background
-    // without turning into a halo (owner: two rings were too much neon); the rim keeps the letters
+    // without turning into a halo (two rings are too much neon); the rim keeps the letters
     // readable on bright skies
     property <length> gi: max(1.8px, min(5px, root.font-size / 22));
     property <length> nr: max(0.7px, min(1.6px, root.font-size / 48));
-    property <float> neon-rim: 0;     // the dark rim under the glow: off (owner: with neon no black frame)
+    property <float> neon-rim: 0;     // the dark rim under the glow: off (no black frame with neon)
     preferred-width: t.preferred-width;
     preferred-height: t.preferred-height;
     min-height: t.preferred-height;

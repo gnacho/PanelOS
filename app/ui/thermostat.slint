@@ -3,14 +3,14 @@
 //   1 a remote control: the yellowish LCD of an air-conditioner remote (segment digits, triangle
 //     arrows next to them), rubber buttons under it
 //   2 a wall thermostat: a knob on a printed scale, a needle thermometer in its middle, slide switches
-//   3 neon over the synthwave scene ("In the Fast Lane" background, drawn by main.slint under the page)
+//   3 neon over the synthwave scene (home background, drawn by main.slint under the page)
 // Every look shows the same thing in its middle: a glow in the colour of what the device does, strong
 // and breathing while it works (heating, cooling, drying, fan), faint while it is only switched on and
 // waiting, none when off; so from across the room it is clear whether something is merely set or busy.
 // The device chip (top right) opens the rooms; the extra options (fan, swing, preset) open a sheet.
 // The app gives every text and decides what the device can do.
 import { Icon, GlowText } from "widgets.slint";
-import { Theme, Act } from "theme.slint";
+import { Theme, Act, Words } from "theme.slint";
 
 export struct ClimateDev {
     name: string,           // "Living room AC"
@@ -806,19 +806,19 @@ export component ThermostatPage inherits Rectangle {
         Rectangle { x: parent.width - 16px - 88px; y: 19px; width: 88px; height: 34px; border-radius: 17px; background: Theme.text;
             Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; } }
         HorizontalLayout { x: 16px; y: st.r0; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Comfort Zone"; on: root.look == 0; accent: Theme.accent; }
-            SheetChip { text: "Push My Buttons"; on: root.look == 1; accent: Theme.accent; } }
+            SheetChip { text: Words.line("ui.looks.thermostat.0"); on: root.look == 0; accent: Theme.accent; }
+            SheetChip { text: Words.line("ui.looks.thermostat.1"); on: root.look == 1; accent: Theme.accent; } }
         HorizontalLayout { x: 16px; y: st.r0 + 40px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Old Flame"; on: root.look == 2; accent: Theme.accent; }
-            SheetChip { text: "In the Fast Lane"; on: root.look == 3; accent: Theme.accent; } }
+            SheetChip { text: Words.line("ui.looks.thermostat.2"); on: root.look == 2; accent: Theme.accent; }
+            SheetChip { text: Words.line("ui.looks.thermostat.3"); on: root.look == 3; accent: Theme.accent; } }
         if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 94px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Ride into the Sunset"; on: root.fl-scene == 0; accent: Theme.accent; }
-            SheetChip { text: "Concrete Jungle"; on: root.fl-scene == 1; accent: Theme.accent; } }
+            SheetChip { text: Words.line("ui.looks.thermostat.4"); on: root.fl-scene == 0; accent: Theme.accent; }
+            SheetChip { text: Words.line("ui.looks.thermostat.5"); on: root.fl-scene == 1; accent: Theme.accent; } }
         if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 134px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Life's a Beach"; on: root.fl-scene == 2; accent: Theme.accent; }
-            SheetChip { text: "Starry-Eyed"; on: root.fl-scene == 3; accent: Theme.accent; } }
+            SheetChip { text: Words.line("ui.looks.thermostat.6"); on: root.fl-scene == 2; accent: Theme.accent; }
+            SheetChip { text: Words.line("ui.looks.thermostat.7"); on: root.fl-scene == 3; accent: Theme.accent; } }
         if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 188px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: "Joyride"; on: root.fl-cars; check: true; accent: Theme.accent; } }
+            SheetChip { text: Words.line("ui.looks.thermostat.8"); on: root.fl-cars; check: true; accent: Theme.accent; } }
     }
 
     // ---------------------------------------------------------------- rooms (the device picker)

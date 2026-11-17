@@ -197,6 +197,8 @@ pub struct PanelPlatform {
     start: Instant,
     display: Rc<RefCell<Display>>,
     touch: RefCell<Option<Touch>>,
+    /// When to look for the touch device again (ms since START) while there is none.
+    touch_retry: std::cell::Cell<u64>,
     wakeup: Wakeup,
     /// Development: FIFO with lines "tap x y" / "down x y" / "move x y" / "up x y"
     /// / "swipe x1 y1 x2 y2 ms" (moves every 16 ms).
@@ -223,6 +225,7 @@ impl PanelPlatform {
             start: Instant::now(),
             display,
             touch: RefCell::new(touch),
+            touch_retry: std::cell::Cell::new(now_ms() + 5000),
             wakeup: Wakeup::new(),
             dev_input,
             dev_buf: RefCell::new(String::new()),
@@ -493,6 +496,20 @@ impl Platform for PanelPlatform {
                 let wait = (t.saturating_sub(crate::webstats::now_us()) / 1000) as i32;
                 timeout_ms = if timeout_ms < 0 { wait } else { timeout_ms.min(wait) };
             }
+            // No touch device (gone when its driver was bound again): look for it every few seconds.
+            if self.touch.borrow().is_none() {
+                if now_ms() >= self.touch_retry.get() {
+                    if let Ok(t) = Touch::open() {
+                        eprintln!("nspanel-app: touch input: {}", t.name);
+                        *self.touch.borrow_mut() = Some(t);
+                    }
+                    self.touch_retry.set(now_ms() + 5000);
+                }
+                if self.touch.borrow().is_none() {
+                    let wait = self.touch_retry.get().saturating_sub(now_ms()) as i32;
+                    timeout_ms = if timeout_ms < 0 { wait } else { timeout_ms.min(wait) };
+                }
+            }
 
             let display_fd = self.display.borrow().fd();
             let touch_fd = self.touch.borrow().as_ref().map(|t| t.fd()).unwrap_or(-1);
@@ -530,6 +547,12 @@ impl Platform for PanelPlatform {
                 for event in events {
                     self.dispatch_finger(event);
                 }
+            }
+            if touch_fd >= 0 && fds[1].revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
+                // the device went away: let it go (no busy loop on a dead descriptor) and look for it again
+                eprintln!("nspanel-app: touch input gone");
+                *self.touch.borrow_mut() = None;
+                self.touch_retry.set(now_ms() + 1000);
             }
 
             if let Some(fd) = self.dev_input {

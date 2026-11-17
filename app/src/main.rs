@@ -154,6 +154,8 @@ pub struct UiState {
     laps: Vec<f32>,
     lap_at: f32,
     ringing: Option<Instant>,
+    /// A snoozed alarm: when it rings again, its time, label and sound.
+    snooze: Option<(Instant, String, String, String)>,
     /// The ringing timer's or alarm's sound (`<value>|<default>`, as the integration names sounds).
     ring_tone: String,
     /// The sound looping now (`ring:…` or `crit:…`), to start and stop it once.
@@ -174,7 +176,6 @@ pub struct UiState {
     /// The status bar's wake hint: for which wake phrase, and its text.
     wake_hint: (String, String),
     /// Quick controls: the title picked for this run.
-    quick_title: String,
     art_url: Option<String>,
     art_tx: Option<Sender<Option<String>>>,
     art: Option<slint::Image>,
@@ -228,7 +229,7 @@ fn accent(s: &UiState) -> slint::Color {
         .unwrap_or_else(|| slint::Color::from_rgb_u8(0xFF, 0x4A, 0x1C))
 }
 
-fn config_str(s: &UiState, key: &str) -> String {
+pub fn config_str(s: &UiState, key: &str) -> String {
     s.panel_config.as_ref().and_then(|c| c.get(key)).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
@@ -539,17 +540,18 @@ fn update_clock(ui: &AppWindow) {
             s.alarm_minute = minute;
             if !first {
                 if let Some((time, label, tone)) = alarms::due(s) {
-                    s.ring_tone = format!("{tone}|birds");
-                    s.ringing = Some(Instant::now());
-                    s.ringing_flag.store(true, Ordering::SeqCst);
-                    ui.set_timers_ring_alarm(true);
-                    ui.set_timers_ring_time(time.into());
-                    ui.set_timers_ring_label(label.into());
-                    ui.set_timers_ringing(true);
-                    RANG.with(|r| r.set(true));
+                    s.snooze = None;
+                    ring_alarm(ui, s, time, label, tone);
                 }
             }
             alarms::refresh(ui, s);
+        }
+        // a snoozed alarm rings again
+        if s.snooze.as_ref().is_some_and(|(at, ..)| Instant::now() >= *at) {
+            if let Some((_, _, label, tone)) = s.snooze.take() {
+                // the big time shows the time now (the alarm's own time has passed)
+                ring_alarm(ui, s, pages::local_format(pages::now(), "%-H:%M"), label, tone);
+            }
         }
         // Voice view: closes a few seconds after the end.
         if s.voice_hide_at.is_some_and(|t| Instant::now() >= t) {
@@ -1345,6 +1347,32 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
     update_clock(ui);
 }
 
+/// An alarm rings: its screen and its sound (looping until stopped, at most a minute).
+fn ring_alarm(ui: &AppWindow, s: &mut UiState, time: String, label: String, tone: String) {
+    s.ring_tone = format!("{tone}|birds");
+    s.ringing = Some(Instant::now());
+    s.ringing_flag.store(true, Ordering::SeqCst);
+    ui.set_timers_ring_alarm(true);
+    ui.set_timers_ring_time(time.into());
+    ui.set_timers_ring_label(label.into());
+    ui.set_timers_ringing(true);
+    RANG.with(|r| r.set(true));
+}
+
+/// The ringing screen's second button: an alarm sleeps 9 minutes and rings again, a timer gets one more minute.
+fn ring_more(ui: &AppWindow) {
+    let alarm = ui.get_timers_ring_alarm();
+    let label = ui.get_timers_ring_label().to_string();
+    let time = ui.get_timers_ring_time().to_string();
+    let tone = with_state(|s| s.ring_tone.rsplit_once('|').map(|(v, _)| v.to_string()).unwrap_or_default());
+    stop_ringing(ui);
+    if alarm {
+        with_state(|s| s.snooze = Some((Instant::now() + Duration::from_secs(9 * 60), time, label, tone)));
+    } else {
+        start_timer(ui, 60, label);
+    }
+}
+
 fn stop_ringing(ui: &AppWindow) {
     with_state(|s| {
         s.ringing = None;
@@ -1787,6 +1815,20 @@ fn send(cmd: Command) {
     }
 }
 
+/// A page's look (`variant`) or options set on the panel: shown at once, kept by the integration (which sends the
+/// panel its new settings back).
+pub fn page_set(ui: &AppWindow, kind: &str, variant: Option<i32>, options: Value) {
+    let pages = ui.get_pages();
+    let Some(index) = (0..pages.row_count()).find(|&i| pages.row_data(i).is_some_and(|p| p.kind == kind)) else { return };
+    if let Some(v) = variant {
+        if let Some(mut p) = pages.row_data(index) {
+            p.variant = v;
+            pages.set_row_data(index, p);
+        }
+    }
+    send(Command::PageSet { index, variant, options });
+}
+
 fn call(domain: &str, service: &str, entity_id: &str, data: Value) {
     send(Command::CallService { domain: domain.into(), service: service.into(), entity_id: entity_id.into(), data });
 }
@@ -1971,6 +2013,34 @@ fn update_connection_screens(ui: &AppWindow) {
         if ui.get_offline_cause() != cause {
             ui.set_offline_cause(cause);
         }
+    });
+}
+
+/// New random lines (empty-list lines, footers, crawls, titles) for the pages out of sight, so each visit shows
+/// new ones. It waits until the page has settled and no finger drags a neighbour into view: nothing changes under
+/// the eye.
+fn reroll_lines(weak: slint::Weak<AppWindow>) {
+    slint::Timer::single_shot(Duration::from_millis(700), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        if ui.get_dragging() {
+            reroll_lines(ui.as_weak());
+            return;
+        }
+        let pages = ui.get_pages();
+        let kind = pages.row_data(ui.get_page().max(0) as usize).map(|p| p.kind.to_string()).unwrap_or_default();
+        for (k, prefix) in [("info", "info."), ("todo", "todo."), ("calendar", "cal."), ("quick", "quick.")] {
+            if kind != k {
+                texts::reroll(prefix);
+            }
+        }
+        // the crawls start afresh on their next visit
+        if kind != "info" {
+            ui.set_info_news_epoch(ui.get_info_news_epoch() + 1);
+        }
+        if kind != "calendar" {
+            ui.set_cal_board_epoch(ui.get_cal_board_epoch() + 1);
+        }
+        refresh_pages(&ui);
     });
 }
 
@@ -2569,6 +2639,7 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
     match what {
         "saver.wake" => wake(ui),
         "timers.stop" => stop_ringing(ui),
+        "timers.more" => ring_more(ui),
         w if w.starts_with("alarms.") || w.starts_with("alarm.") => alarms::act(ui, w, value),
         w if w.starts_with("timers.") || w.starts_with("watch.") => timers_act(ui, w, value),
         "voice.close" => ui.set_voice_on(false),
@@ -2749,6 +2820,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("set_platform: {e:?}"))?;
 
     let ui = AppWindow::new()?;
+    // the packed word lists the UI files ask for (before anything is drawn)
+    ui.global::<Words>().on_list(|place| {
+        ModelRc::new(VecModel::from(texts::list(&place).iter().map(|l| slint::SharedString::from(l.as_str())).collect::<Vec<_>>()))
+    });
+    ui.global::<Words>().on_line(|place| texts::nth(&place, 0).into());
     // Hand-over picture: the splash's last frame (same logo, same pixels),
     // then it fades over the UI.
     {
@@ -2902,6 +2978,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             laps: Vec::new(),
             lap_at: 0.0,
             ringing: None,
+            snooze: None,
             ringing_flag: ringing_flag.clone(),
             ring_tone: String::new(),
             looping: None,
@@ -2915,7 +2992,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             forecast_daily: Vec::new(),
             wake_phrase: phrase,
             wake_hint: Default::default(),
-            quick_title: String::new(),
             art_url: None,
             art_bg: None,
             art_tx: None,
@@ -3012,6 +3088,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(ui) = weak.upgrade() {
             leave_temporary_page(&ui, now);
             with_state(|s| cam::refresh(&ui, s));
+            reroll_lines(ui.as_weak());
         }
     });
     let weak = ui.as_weak();
