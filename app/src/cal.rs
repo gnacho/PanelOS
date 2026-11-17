@@ -37,6 +37,10 @@ fn tint(i: usize) -> Color {
 
 thread_local! {
     static EVENTS: std::cell::RefCell<Vec<Ev>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// The days behind the month grid's and the wall calendar's cells and the week's columns (a tap opens that day's list).
+    static DAYS: std::cell::RefCell<std::collections::HashMap<&'static str, Vec<i64>>> = std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The events behind the departure board's rows and the tear-off page's lines, with their "when" line (a tap opens them).
+    static ROWS: std::cell::RefCell<std::collections::HashMap<&'static str, Vec<(CalEvent, String)>>> = std::cell::RefCell::new(std::collections::HashMap::new());
     /// Back / forward from today in the view's steps.
     static SHIFT: std::cell::Cell<i64> = const { std::cell::Cell::new(0) };
     /// The start view last applied from the integration's settings.
@@ -318,6 +322,7 @@ fn wall(ui: &AppWindow, events: &[Ev], t: i64, written: Option<&[usize]>) {
     let grid0 = day_after(first, -weekday(first));
     let month = local_format(t, "%m");
     let inks = [Ink::Blue, Ink::Purple, Ink::Red, Ink::Green, Ink::Black];
+    DAYS.with(|d| d.borrow_mut().insert("wall", (0..42).map(|k| day_after(grid0, k)).collect()));
     let rows: Vec<WallCell> = (0..42)
         .map(|k| {
             let day0 = day_after(grid0, k);
@@ -449,6 +454,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         week_events.extend(timed);
         week_allday.extend(on_day(day0).iter().filter(|e| e.all_day).map(|e| event(e, &names, day0, t)));
     }
+    DAYS.with(|d| d.borrow_mut().insert("week", (0..7).map(|k| day_after(monday, k)).collect()));
     ui.set_cal_week_names(ModelRc::new(VecModel::from(wnames)));
     ui.set_cal_week_nums(ModelRc::new(VecModel::from(nums)));
     ui.set_cal_week_today(if view == 2 || view == 4 { if shift == 0 { weekday(t) as i32 } else { -1 } } else { weekday(t) as i32 });
@@ -460,6 +466,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     let first = date_epoch(&format!("{:04}-{:02}-01", months.div_euclid(12), months.rem_euclid(12) + 1)).unwrap_or(today);
     let grid0 = day_after(first, -weekday(first));
     let month = local_format(first, "%m");
+    DAYS.with(|d| d.borrow_mut().insert("month", (0..42).map(|k| day_after(grid0, k)).collect()));
     let cells: Vec<CalCell> = (0..42)
         .map(|k| {
             let day0 = day_after(grid0, k);
@@ -484,6 +491,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         up
     };
     let mut board: Vec<CalBoard> = Vec::new();
+    let mut board_ev: Vec<(CalEvent, String)> = Vec::new();
     for d in 0..7 {
         let day0 = day_after(today, d);
         for e in on_day(day0) {
@@ -502,6 +510,8 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
             } else {
                 (local_format(day0, "%a %-d").to_uppercase(), 3)
             };
+            let ev = event(e, &names, day0, t);
+            board_ev.push((ev.clone(), format!("{} · {}", day_label(day0, today), ev.time)));
             board.push(CalBoard {
                 time: if e.all_day { "--:--".into() } else { hm(e.start).into() },
                 what: cell(&e.title, 16).into(),
@@ -511,6 +521,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
             });
         }
     }
+    ROWS.with(|r| r.borrow_mut().insert("board", board_ev));
     ui.set_cal_board_rows(ModelRc::new(VecModel::from(board)));
     ui.set_cal_board_clock(hm(t).into());
     ui.set_cal_board_date(local_format(t, "%a %-d %b").to_uppercase().into());
@@ -521,6 +532,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     // tear-off: today's page
     let todays: Vec<CalEvent> = on_day(today).iter().map(|e| event(e, &names, today, t)).collect();
     let shown = todays.len().min(3);
+    ROWS.with(|r| r.borrow_mut().insert("tear", todays.iter().take(shown).map(|e| (e.clone(), format!("Today · {}", e.time))).collect()));
     ui.set_cal_tear_month(local_format(t, "%B %Y").to_uppercase().into());
     ui.set_cal_tear_day(local_format(t, "%-d").parse().unwrap_or(1));
     ui.set_cal_tear_weekday(local_format(t, "%A").to_uppercase().into());
@@ -555,6 +567,23 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     ui.set_cal_sub(sub.into());
 }
 
+/// A day's events as a list over the page (a tap on one opens its details).
+fn open_day(ui: &AppWindow, s: &crate::UiState, day0: i64) {
+    let entities = crate::page_entities(s, "calendar");
+    let names: Vec<String> = entities
+        .iter()
+        .map(|id| s.states.get(id).and_then(|e| e.attrs.get("friendly_name")).and_then(Value::as_str).unwrap_or(id).to_string())
+        .collect();
+    let day1 = day_after(day0, 1);
+    let t = now();
+    let list: Vec<CalEvent> =
+        EVENTS.with(|e| e.borrow().iter().filter(|e| e.start < day1 && e.end > day0).map(|e| event(e, &names, day0, t)).collect());
+    ui.set_cal_day_sheet_title(local_format(day0, "%A, %-d %B").into());
+    ui.set_cal_day_sheet_events(ModelRc::new(VecModel::from(list)));
+    ui.set_cal_day_sheet_free(texts::kept("cal.free", 0).into());
+    ui.set_cal_day_sheet(true);
+}
+
 /// Taps on the page (`cal.*`).
 pub fn act(ui: &AppWindow, what: &str, value: &str) {
     match what {
@@ -571,6 +600,29 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             ui.set_cal_settings(false);
             crate::page_set(ui, "calendar", Some(value.parse().unwrap_or(0)), Value::Null);
             with_state(|s| refresh(ui, s));
+        }
+        // a tap on a day (month grid, wall calendar, a week column or a narrow event there): that day's events in a list
+        "cal.month-day" | "cal.wall-day" | "cal.week-day" => {
+            let key = match what {
+                "cal.month-day" => "month",
+                "cal.wall-day" => "wall",
+                _ => "week",
+            };
+            let n: usize = value.parse().unwrap_or(0);
+            if let Some(day0) = DAYS.with(|d| d.borrow().get(key).and_then(|v| v.get(n).copied())) {
+                with_state(|s| open_day(ui, s, day0));
+            }
+        }
+        "cal.day-sheet-close" => ui.set_cal_day_sheet(false),
+        // a departure board row or a tear-off line: its details
+        "cal.board" | "cal.tear" => {
+            let key = if what == "cal.board" { "board" } else { "tear" };
+            let n: usize = value.parse().unwrap_or(0);
+            if let Some((ev, when)) = ROWS.with(|r| r.borrow().get(key).and_then(|v| v.get(n).cloned())) {
+                ui.set_cal_detail_ev(ev);
+                ui.set_cal_detail_when(when.into());
+                ui.set_cal_detail(true);
+            }
         }
         "cal.settings" => ui.set_cal_settings(true),
         "cal.settings-close" => ui.set_cal_settings(false),

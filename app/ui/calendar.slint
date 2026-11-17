@@ -124,6 +124,7 @@ component CalBoardLook inherits Rectangle {
         FlapText { x: 78px; y: 0; cells: 16; text: r.what; ink: parent.ink; }
         FlapText { x: 299px; y: 0; cells: 2; text: r.gate; ink: parent.ink; }
         FlapText { x: 338px; y: 0; cells: 8; text: r.status; ink: r.state == 1 ? #4cd964 : r.state == 3 ? #f4f4f2 : parent.ink; }
+        TouchArea { y: -4px; height: parent.height + 8px; clicked => { Act.act("cal.board", i); } }
     }
     if root.rows.length == 0: Text { x: 19px; y: 130px; width: 442px; height: 30px; text: root.empty; font-family: "DejaVu Sans Mono"; font-size: 17px;
         font-weight: 700; color: #ffd23f; horizontal-alignment: center; vertical-alignment: center; }
@@ -185,6 +186,7 @@ component CalTearLook inherits Rectangle {
         if root.more != "": Text { height: 20px; text: root.more; font-size: 12px; color: #8a8880; vertical-alignment: center; }
         if root.events.length == 0: Text { height: 24px; text: root.free; font-size: 14px; color: #8a8880; horizontal-alignment: center; vertical-alignment: center; }
     }
+    for e[i] in root.events: TouchArea { x: 104px; y: 306px + i * 24px; width: 272px; height: 24px; clicked => { Act.act("cal.tear", i); } }
     Text { x: 104px; y: 400px; width: 272px; height: 34px; text: root.line; font-size: 12px; color: #6f6d66; horizontal-alignment: center;
         vertical-alignment: center; wrap: word-wrap; overflow: elide; }
 }
@@ -218,7 +220,8 @@ component CalWallLook inherits Rectangle {
         Rectangle { x: 0; y: 0; width: 1px; height: parent.height; background: #d8d8d4; }
         Text { x: 5px; y: 2px; width: 30px; height: 14px; text: c.num; font-size: 11px; font-weight: 800;
             color: c.other-month ? #c4c4c0 : c.sunday ? root.red : #2a2a2e; vertical-alignment: center; }
-        Image { x: 0; y: 0; width: 64px; height: 46px; source: c.notes; } }
+        Image { x: 0; y: 0; width: 64px; height: 46px; source: c.notes; }
+        TouchArea { clicked => { Act.act("cal.wall-day", i); } } }
     Rectangle { x: 464px; y: 200px; width: 1px; height: 276px; background: #d8d8d4; }
 }
 
@@ -284,6 +287,11 @@ export component CalendarPage inherits Rectangle {
     in property <[string]> edit-mins;
     // sheets
     in property <bool> settings;
+    // a day's events as a list (the app fills it)
+    in property <bool> day-sheet;
+    in property <string> day-sheet-title;
+    in property <[CalEvent]> day-sheet-events;
+    in property <string> day-sheet-free;
     // a tap on an event opens its details here (the page sets them itself)
     in-out property <bool> detail;
     in-out property <CalEvent> detail-ev;
@@ -353,6 +361,7 @@ export component CalendarPage inherits Rectangle {
     if root.look == 0 && root.view == 1: HorizontalLayout {
         x: 16px; y: 104px; width: 448px; height: 28px; spacing: 6px; alignment: start;
         for e in root.day-allday: Rectangle { height: 26px; width: min(at.preferred-width + 20px, 220px); border-radius: 13px; background: e.tint.with-alpha(0.25);
+            TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.title + " · " + e.time; root.detail = true; } }
             at := Text { x: 10px; y: 0; width: parent.width - 20px; height: parent.height; text: e.title; font-size: 13px; font-weight: 600; color: Theme.text;
                 vertical-alignment: center; overflow: elide; } }
         if root.day-allday.length == 0: Text { height: 26px; text: root.day-events.length == 0 ? root.day-free : ""; font-size: 14px; color: Theme.faint;
@@ -370,6 +379,7 @@ export component CalendarPage inherits Rectangle {
             x: 66px + e.lane * (398px / max(1, e.lanes)); width: 398px / max(1, e.lanes) - 4px;
             y: e.start / 60 * root.hh + 1px; height: max(22px, (e.end - e.start) / 60 * root.hh - 2px);
             border-radius: 8px; background: e.tint.with-alpha(Theme.dark ? 0.28 : 0.22); opacity: e.past ? 0.5 : 1;
+            TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.title + " · " + e.time; root.detail = true; } }
             Rectangle { x: 5px; y: 5px; width: 3px; height: parent.height - 10px; border-radius: 1.5px; background: e.tint; }
             Text { x: 14px; y: 3px; width: parent.width - 20px; height: 18px; text: e.title; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
             if db.height >= 40px: Text { x: 14px; y: 20px; width: parent.width - 20px; height: 16px; text: e.time; font-size: 12px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
@@ -383,12 +393,14 @@ export component CalendarPage inherits Rectangle {
     // Overlapping events sit side by side; past three lanes (week) or four (3 days) the app folds the rest into a "+n" block.
     if root.look == 0 && (root.view == 2 || root.view == 4): Rectangle { x: 0; y: 100px; width: root.width; height: 44px;
         for n[i] in root.week-names: Rectangle { x: root.wx + i * root.gw; y: 0; width: root.gw; height: 44px;
+            TouchArea { clicked => { Act.act("cal.week-day", i); } }
             Text { x: 0; y: 0; width: parent.width; height: 16px; text: n; font-size: 11px; font-weight: 600; color: i == root.week-today ? Theme.accent : Theme.muted;
                 horizontal-alignment: center; vertical-alignment: center; }
             Text { x: 0; y: 16px; width: parent.width; height: 26px; text: root.week-nums[i]; font-size: 15px; font-weight: 600;
                 color: i == root.week-today ? Theme.accent : Theme.text; horizontal-alignment: center; vertical-alignment: center; } } }
     if root.look == 0 && (root.view == 2 || root.view == 4): Rectangle { x: 0; y: 146px; width: root.width; height: 22px;
         for e in root.week-allday: Rectangle { x: root.wx + e.day * root.gw + 1px; y: 0; width: root.gw - 2px; height: 20px; border-radius: 5px; background: e.tint.with-alpha(0.32);
+            TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.week-names[e.day] + " " + root.week-nums[e.day] + " · " + e.time; root.detail = true; } }
             Text { x: 4px; y: 0; width: parent.width - 8px; height: parent.height; text: e.title; font-size: root.view == 4 ? 12px : 10px; font-weight: 600; color: Theme.text;
                 vertical-alignment: center; overflow: elide; } } }
     if root.look == 0 && (root.view == 2 || root.view == 4): Flickable {
@@ -405,6 +417,13 @@ export component CalendarPage inherits Rectangle {
             x: root.wx + e.day * root.gw + 2px + e.lane * ((root.gw - 4px) / max(1, e.lanes)); width: (root.gw - 4px) / max(1, e.lanes) - 1px;
             y: e.start / 60 * root.gh + 1px; height: max(12px, (e.end - e.start) / 60 * root.gh - 2px);
             border-radius: 5px; background: e.tint.with-alpha(Theme.dark ? 0.38 : 0.30); opacity: e.past ? 0.5 : 1;
+            TouchArea { clicked => {
+                if wb.width >= 26px {
+                    root.detail-ev = e; root.detail-when = root.week-names[e.day] + " " + root.week-nums[e.day] + " · " + e.time; root.detail = true;
+                } else {
+                    Act.act("cal.week-day", e.day);
+                }
+            } }
             Rectangle { x: 0; y: 0; width: 2px; height: parent.height; background: e.tint; }
             // narrow lanes keep only their colour (and the "+n" of a folded group)
             if wb.height >= 18px && (wb.width >= 26px || e.title.character-count <= 3): Text { x: wb.width >= 26px ? 5px : 3px; y: 1px; width: parent.width - 7px; height: root.view == 4 ? 17px : 14px; text: e.title;
@@ -423,6 +442,7 @@ export component CalendarPage inherits Rectangle {
         for n[i] in root.month-names: Text { x: 16px + i * 64px; y: 0; width: 64px; height: 18px; text: n; font-size: 11px; font-weight: 600; color: Theme.muted;
             horizontal-alignment: center; vertical-alignment: center; }
         for c[i] in root.month-cells: Rectangle { x: 16px + Math.mod(i, 7) * 64px; y: 20px + Math.floor(i / 7) * 56px; width: 64px; height: 56px;
+            TouchArea { clicked => { Act.act("cal.month-day", i); } }
             Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: Theme.outline; }
             Text { x: 3px; y: 4px; width: 22px; height: 22px; text: c.num; font-size: 13px; font-weight: c.today ? 700 : 500;
                 color: c.today ? Theme.accent : c.other-month ? Theme.faint : Theme.text; horizontal-alignment: center; vertical-alignment: center; }
@@ -461,6 +481,32 @@ export component CalendarPage inherits Rectangle {
             ViewChip { text: "3 days"; on: root.view == 4; TouchArea { clicked => { Act.act("cal.view", "4"); } } }
             ViewChip { text: "Week"; on: root.view == 2; TouchArea { clicked => { Act.act("cal.view", "2"); } } }
             ViewChip { text: "Month"; on: root.view == 3; TouchArea { clicked => { Act.act("cal.view", "3"); } } } }
+    }
+
+    // ---------------------------------------------------------------- a day's events (a tap on a day in the month grid, the wall calendar
+    // or a week column): a list sized to its content, a tap on one opens its details over it
+    property <float> day-k: root.day-sheet ? 1 : 0;
+    animate day-k { duration: root.day-sheet ? 240ms : 200ms; easing: ease-out; }
+    if root.day-k > 0.001: Rectangle { opacity: root.day-k; background: #00000080; TouchArea { clicked => { Act.act("cal.day-sheet-close", ""); } } }
+    if root.day-k > 0.001: Rectangle { opacity: root.day-k;
+        property <length> need: min(root.height - 60px, 72px + max(40px, dsr.preferred-height) + 20px);
+        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
+        TouchArea { }
+        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+        Text { x: 24px; y: 24px; width: parent.width - 48px; height: 28px; text: root.day-sheet-title; font-size: 18px; font-weight: 600; color: Theme.text;
+            vertical-alignment: center; overflow: elide; }
+        Flickable { x: 24px; y: 64px; width: parent.width - 48px; height: parent.need - 64px - 12px; content-height: dsr.preferred-height;
+            dsr := VerticalLayout { width: parent.width; spacing: 6px; alignment: start;
+                for e in root.day-sheet-events: Rectangle { height: 52px; border-radius: 12px; background: Theme.surface-raised; opacity: e.past ? 0.55 : 1;
+                    TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.day-sheet-title + " · " + e.time; root.detail = true; } }
+                    Rectangle { x: 10px; y: 10px; width: 4px; height: parent.height - 20px; border-radius: 2px; background: e.tint; }
+                    Text { x: 24px; y: 6px; width: parent.width - 32px; height: 22px; text: e.title; font-size: 15px; font-weight: 600; color: Theme.text;
+                        vertical-alignment: center; overflow: elide; }
+                    Text { x: 24px; y: 27px; width: parent.width - 32px; height: 18px; text: e.time + "  ·  " + e.cal; font-size: 12px; color: Theme.muted;
+                        vertical-alignment: center; overflow: elide; } }
+                if root.day-sheet-events.length == 0: Text { height: 40px; text: root.day-sheet-free; font-size: 15px; color: Theme.muted; vertical-alignment: center; }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- an event's details (tap on an event, or the home page's next-event widget)

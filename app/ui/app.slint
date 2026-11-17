@@ -259,6 +259,10 @@ export component AppWindow inherits Window {
     in property <[string]> cal-edit-hours;
     in property <[string]> cal-edit-mins;
     in property <bool> cal-settings;
+    in property <bool> cal-day-sheet;
+    in property <string> cal-day-sheet-title;
+    in property <[CalEvent]> cal-day-sheet-events;
+    in property <string> cal-day-sheet-free;
     in-out property <bool> cal-detail;
     in-out property <CalEvent> cal-detail-ev;
     in-out property <string> cal-detail-when;
@@ -1025,6 +1029,8 @@ export component AppWindow inherits Window {
                     edit-day: root.cal-edit-day; edit-start: root.cal-edit-start; edit-end: root.cal-edit-end; edit-allday: root.cal-edit-allday;
                     edit-typing: root.cal-edit-typing; edit-can-delete: root.cal-edit-can-delete; edit-picker: root.cal-edit-picker; edit-hours: root.cal-edit-hours;
                     edit-mins: root.cal-edit-mins; settings: root.cal-settings; detail <=> root.cal-detail; detail-ev <=> root.cal-detail-ev; detail-when <=> root.cal-detail-when;
+                    day-sheet: root.cal-day-sheet; day-sheet-title: root.cal-day-sheet-title; day-sheet-events: root.cal-day-sheet-events;
+                    day-sheet-free: root.cal-day-sheet-free;
                 }
                 if slot.kind == "todo": TodoPage {
                     lists: root.todo-lists; sel: root.todo-sel; open-items: root.todo-open; done-items: root.todo-done; show-done: root.todo-show-done;

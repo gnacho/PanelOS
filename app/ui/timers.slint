@@ -646,9 +646,9 @@ export component TimersPage inherits Rectangle {
         if root.n > 0: TouchArea { clicked => { Act.act("timers.quick-close", ""); } }
         Rectangle { x: (root.width - 80px) / 2; y: root.top + 18px; width: 80px; height: 80px; border-radius: 40px; background: root.synth-quick ? #0000008c : TFg.c.with-alpha(0.05);
             Icon { width: parent.width; height: parent.height; text: "\u{F13AB}"; font-size: 42px; color: root.synth-quick ? #ffffffcc : TFg.c.with-alpha(0.40); } }
-        if !root.synth-quick: Text { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
+        if !root.synth-quick: Text { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: root.n > 0 ? "New timer" : "No timers"; font-size: 17px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
         // over the bright sun: white with a firm rim
-        if root.synth-quick: GlowText { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: "No timers"; font-size: 17px; font-weight: 600; color: #ffffff; k: 2; horizontal-alignment: center; }
+        if root.synth-quick: GlowText { x: 0; y: root.top + 106px; width: root.width; height: 24px; text: root.n > 0 ? "New timer" : "No timers"; font-size: 17px; font-weight: 600; color: #ffffff; k: 2; horizontal-alignment: center; }
         for m[i] in [1, 3, 5, 10, 15, 30]: Rectangle {
             x: 60px + Math.mod(i, 3) * 124px; y: root.top + 150px + Math.floor(i / 3) * 62px; width: 112px; height: 54px; border-radius: 27px;
             background: root.synth-quick ? (qs-touch.pressed ? #000000b3 : #0000008c) : (qs-touch.pressed ? TFg.c.with-alpha(0.2) : TFg.c.with-alpha(0.10));
@@ -725,6 +725,16 @@ export component TimersPage inherits Rectangle {
             RoundButton { size: 72px; icon-size: 38px; fill: root.watch-tint; ink: #ffffff; icon: root.watch-running ? "\u{F03E4}" : "\u{F040A}"; act: "watch.toggle"; }
             VerticalLayout { alignment: center; RoundButton { size: 48px; icon-size: 24px; outline: true; icon: "\u{F023D}"; opacity: root.watch-running ? 1 : 0; act: root.watch-running ? "watch.lap" : ""; } }
         }
+    }
+
+    // ---------------------------------------------------------------- one or two timers running: another one (the quick starts)
+    // (three and four have a "+" cell in their grid)
+    if !root.ringing && root.mode == 1 && root.n >= 1 && root.n < 3 && !root.quick: Rectangle {
+        x: root.width - 16px - 40px; y: root.funcs > 1 ? 50px : 48px; width: 40px; height: 40px; border-radius: 20px;
+        background: root.synth ? (add-ta.pressed ? #000000b3 : #00000080) : (add-ta.pressed ? TFg.c.with-alpha(0.22) : TFg.c.with-alpha(0.12));
+        border-width: root.synth ? 1px : 0px; border-color: root.grid.with-alpha(0.55);
+        Icon { width: parent.width; height: parent.height; text: "\u{F0415}"; font-size: 24px; color: root.synth ? #ffffff : TFg.c; }
+        add-ta := TouchArea { x: -6px; y: -6px; width: parent.width + 12px; height: parent.height + 12px; clicked => { Act.act("timers.quick", ""); } }
     }
 
     // ---------------------------------------------------------------- tabs (only the functions switched on)
