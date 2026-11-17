@@ -46,8 +46,16 @@ pub fn recognize(samples: &[i16]) -> Result<String, String> {
     Ok(v["text"].as_str().unwrap_or("").to_string())
 }
 
+/// What stops a ringing timer: a stop phrase, or any single word (through the ring the speech recognition often
+/// turns a lone "állj" into another word: "Fájl.", "Jók.", "Folytat." were measured), never a longer sentence
+/// (another speaker's answer, a sentence to someone).
+pub fn stops_ring(text: &str) -> bool {
+    let words = text.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).count();
+    is_stop(text) || words == 1
+}
+
 /// A short phrase that means "stop" (Hungarian and English): at most four words, one of them a stop word, or a
-/// two-word stop phrase. Anything else (another speaker's answer, a sentence to someone) is not.
+/// two-word stop phrase.
 pub fn is_stop(text: &str) -> bool {
     let clean: String = text.to_lowercase().chars().map(|c| if c.is_alphanumeric() { c } else { ' ' }).collect();
     let words: Vec<&str> = clean.split_whitespace().collect();
@@ -70,7 +78,17 @@ pub fn is_stop(text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::is_stop;
+    use super::{is_stop, stops_ring};
+
+    #[test]
+    fn ring_stops() {
+        assert!(stops_ring("Fájl."));
+        assert!(stops_ring("Jók."));
+        assert!(stops_ring("Állj, állj!"));
+        assert!(!stops_ring("Köszönöm szépen."));
+        assert!(!stops_ring(""));
+        assert!(!stops_ring("Beállítottam egy egyperces időzítőt."));
+    }
 
     #[test]
     fn stop_words() {

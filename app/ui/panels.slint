@@ -126,11 +126,10 @@ export component StatusBar inherits Rectangle {
     HorizontalLayout {
         x: 0; y: 0; width: max(0px, ctr.x - 8px); height: root.height;
         spacing: 8px;
-        // the wake word hint, or with the microphone muted its own line (the app picks it)
+        // the wake word hint, or with the microphone muted its own line (the app picks it), on every page
         Text {
             horizontal-stretch: 1;
-            text: (root.quiet && !root.mic-muted) || root.left-k > 0.999 ? "" : root.hint;
-            opacity: 1 - root.left-k;
+            text: root.quiet && !root.mic-muted ? "" : root.hint;
             font-size: Theme.font-caption;
             color: root.mic-muted ? root.alert : root.soft;
             vertical-alignment: center;

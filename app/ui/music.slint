@@ -258,6 +258,11 @@ export component MusicPage inherits Rectangle {
     property <bool> light: root.style == 1 && !Theme.dark;
     property <color> acc: root.light ? root.accent.darker(0.35) : root.accent;
     animate acc { duration: 400ms; easing: ease-in-out; }
+    // the record on the turntable: the cover's own colour as it is (black, white and grey too)
+    in property <color> record;
+    in property <bool> has-record;
+    property <color> vinyl: root.has-record ? root.record : root.acc.mix(#000000, 0.82);
+    animate vinyl { duration: 400ms; easing: ease-in-out; }
     property <color> ink: root.light ? #18181b : #ffffff;
     property <color> soft: root.ink.with-alpha(root.light ? 0.7 : 0.62);
     property <bool> live: root.dur <= 0;
@@ -444,7 +449,7 @@ export component MusicPage inherits Rectangle {
         }
         Rectangle {
             x: (tt.cx - tt.rv) * 1px; y: (tt.cy - tt.rv) * 1px; width: 2 * tt.rv * 1px; height: self.width;
-            border-radius: tt.rv * 1px; border-width: (tt.rv - tt.rl) * 1px; border-color: root.acc.mix(#000000, 0.82);
+            border-radius: tt.rv * 1px; border-width: (tt.rv - tt.rl) * 1px; border-color: root.vinyl;
         }
         Image { x: (tt.cx - tt.rv) * 1px; y: (tt.cy - tt.rv) * 1px; width: 2 * tt.rv * 1px; height: self.width; source: root.tt-grooves; }
         // tone arm: shadow, counterweight, tube, headshell, pivot cap. Stroked Paths sit in a box one stroke

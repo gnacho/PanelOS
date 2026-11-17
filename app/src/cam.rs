@@ -114,8 +114,8 @@ pub fn soft(src: &SharedPixelBuffer<Rgb8Pixel>) -> SharedPixelBuffer<Rgb8Pixel> 
 
 /// The frame scaled down to `n` pixels across (box filter).
 /// The cover's own colour for the music page (the record, the accents): the strongest hue of a small copy,
-/// weighted by how colourful and how common it is, brought to a lightness that reads on the dark deck. None
-/// for a grey cover.
+/// weighted by how colourful and how common it is, brought to a lightness that reads on the dark deck; for a
+/// grey cover its own neutral tone.
 pub fn cover_accent(small: &SharedPixelBuffer<Rgb8Pixel>) -> Option<(u8, u8, u8)> {
     const BINS: usize = 24;
     let mut weight = [0f32; BINS];
@@ -147,7 +147,14 @@ pub fn cover_accent(small: &SharedPixelBuffer<Rgb8Pixel>) -> Option<(u8, u8, u8)
     let best = (0..BINS).max_by(|&a, &b| score(a).total_cmp(&score(b)))?;
     let total: f32 = weight.iter().sum();
     if weight[best] <= 0.0 || total < small.as_slice().len() as f32 * 0.002 {
-        return None;
+        // a grey cover: its own neutral tone (the mean colour, as grey as it is), at a brightness that reads
+        let n = small.as_slice().len().max(1) as f32;
+        let (r, g, b) = small.as_slice().iter().fold((0f32, 0f32, 0f32), |(r, g, b), p| (r + p.r as f32, g + p.g as f32, b + p.b as f32));
+        let (r, g, b) = (r / n / 255.0, g / n / 255.0, b / n / 255.0);
+        let max = r.max(g).max(b).max(0.01);
+        let k = max.clamp(0.55, 0.8) / max;
+        let c = |v: f32| (v * k * 255.0).round().clamp(0.0, 255.0) as u8;
+        return Some((c(r), c(g), c(b)));
     }
     let (r, g, b) = (sum[best][0] / weight[best], sum[best][1] / weight[best], sum[best][2] / weight[best]);
     // to HSV, then a saturation and brightness that read as a colour on the dark deck and the record
@@ -161,6 +168,46 @@ pub fn cover_accent(small: &SharedPixelBuffer<Rgb8Pixel>) -> Option<(u8, u8, u8)
         (c * 255.0).round().clamp(0.0, 255.0) as u8
     };
     Some((k(r), k(g), k(b)))
+}
+
+/// The record's colour on the turntable: the cover's own colour as it is, black, white and grey too (the
+/// strongest hue's mean where the cover has colours, else the cover's mean tone).
+pub fn cover_record(small: &SharedPixelBuffer<Rgb8Pixel>) -> (u8, u8, u8) {
+    const BINS: usize = 24;
+    let mut weight = [0f32; BINS];
+    let mut sum = [[0f32; 3]; BINS];
+    let px = small.as_slice();
+    for p in px {
+        let (r, g, b) = (p.r as f32 / 255.0, p.g as f32 / 255.0, p.b as f32 / 255.0);
+        let max = r.max(g).max(b);
+        let chroma = max - r.min(g).min(b);
+        if max < 0.12 || chroma < 0.08 {
+            continue;
+        }
+        let hue = if max == r {
+            ((g - b) / chroma).rem_euclid(6.0)
+        } else if max == g {
+            (b - r) / chroma + 2.0
+        } else {
+            (r - g) / chroma + 4.0
+        } / 6.0;
+        let bin = ((hue * BINS as f32) as usize).min(BINS - 1);
+        let w = chroma * chroma * max;
+        weight[bin] += w;
+        sum[bin][0] += r * w;
+        sum[bin][1] += g * w;
+        sum[bin][2] += b * w;
+    }
+    let total: f32 = weight.iter().sum();
+    let best = (0..BINS).max_by(|&a, &b| weight[a].total_cmp(&weight[b])).unwrap_or(0);
+    let to8 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    if weight[best] > 0.0 && total >= px.len() as f32 * 0.002 {
+        let w = weight[best];
+        return (to8(sum[best][0] / w), to8(sum[best][1] / w), to8(sum[best][2] / w));
+    }
+    let n = px.len().max(1) as f32;
+    let (r, g, b) = px.iter().fold((0f32, 0f32, 0f32), |(r, g, b), p| (r + p.r as f32, g + p.g as f32, b + p.b as f32));
+    ((r / n).round() as u8, (g / n).round() as u8, (b / n).round() as u8)
 }
 
 pub fn shrink(frame: &SharedPixelBuffer<Rgb8Pixel>, n: u32) -> SharedPixelBuffer<Rgb8Pixel> {

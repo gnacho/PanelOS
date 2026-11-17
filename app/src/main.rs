@@ -189,8 +189,10 @@ pub struct UiState {
     art: Option<slint::Image>,
     /// The cover blurred into soft colour (the plain look, the cover behind the cassette).
     art_bg: Option<slint::Image>,
-    /// The cover's own colour (the music page's accent, the record): None for a grey cover or none.
+    /// The cover's own colour (the music page's accent, the record; a grey cover's own tone): None without a cover.
     art_accent: Option<slint::Color>,
+    /// The record's colour (the cover's own, black, white or grey too): None without a cover.
+    art_record: Option<slint::Color>,
     /// When a layer opened by a show request closes by itself.
     show_until: Option<Instant>,
     /// Split-flap clock: the digits shown before the last change, and when it changed.
@@ -744,6 +746,12 @@ fn refresh_pages(ui: &AppWindow) {
         }
         // the music page takes the cover's colour (the record, the accents), else the panel's
         ui.set_music_accent(if music.has_art { s.art_accent.unwrap_or(a) } else { a });
+        // the record: the cover's own colour as it is
+        let record = if music.has_art { s.art_record } else { None };
+        ui.set_music_has_record(record.is_some());
+        if let Some(c) = record {
+            ui.set_music_record(c);
+        }
         if let Some(p) = s.states.get(&player) {
             ui.set_music_album(p.attrs.get("media_album_name").and_then(Value::as_str).unwrap_or("").into());
             ui.set_music_volume(p.attrs.get("volume_level").and_then(Value::as_f64).unwrap_or(0.0) as f32);
@@ -3155,6 +3163,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             art_url: None,
             art_bg: None,
             art_accent: None,
+            art_record: None,
             art_tx: None,
             art: None,
             show_until: None,
@@ -3448,6 +3457,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // to a few pixels and softened (the GPU scales it up smoothly).
         let bg = img.as_ref().map(|b| cam::rgba(&cam::soft(&cam::shrink(b, 18))));
         let tint = img.as_ref().and_then(|b| cam::cover_accent(&cam::shrink(b, 32)));
+        let record = img.as_ref().map(|b| cam::cover_record(&cam::shrink(b, 32)));
         let img = img.map(|b| cam::rgba(&b));
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -3456,6 +3466,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     s.art = img.map(slint::Image::from_rgba8);
                     s.art_bg = bg.map(slint::Image::from_rgba8);
                     s.art_accent = tint.map(|(r, g, b)| slint::Color::from_rgb_u8(r, g, b));
+                    s.art_record = record.map(|(r, g, b)| slint::Color::from_rgb_u8(r, g, b));
                 });
                 refresh_pages(&ui);
             }

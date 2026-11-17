@@ -1364,13 +1364,13 @@ pub fn spawn(
             }
             // what the speech recognition heard over the ring: a stop word stops it; nothing goes to the assistant
             while let Ok(text) = ring_rx.try_recv() {
-                if crate::stt::is_stop(&text) && control.ringing.load(Ordering::SeqCst) {
+                if crate::stt::stops_ring(&text) && control.ringing.load(Ordering::SeqCst) {
                     eprintln!("nspanel-app: voice: '{text}' while the timer rings -> stop");
                     control.ringing.store(false, Ordering::SeqCst);
                     player.stop();
                     ui(VoiceUi::Stopped);
                 } else if !text.is_empty() {
-                    eprintln!("nspanel-app: voice: '{text}' is not a stop word");
+                    eprintln!("nspanel-app: voice: '{text}' is not a stop phrase");
                 }
             }
             match state {

@@ -389,6 +389,8 @@ export component AppWindow inherits Window {
     in property <int> music-repeat;
     in property <float> music-volume: 0.5;
     in property <string> music-player;
+    in property <color> music-record;       // the record on the turntable: the cover's own colour
+    in property <bool> music-has-record;
     in property <image> music-art;
     in property <image> music-art-bg;
     in property <bool> music-cover-blur: true;
@@ -971,7 +973,7 @@ export component AppWindow inherits Window {
                     playing: root.music-playing; pos: root.music-pos; dur: root.music-dur;
                     shuffle: root.music-shuffle; repeat: root.music-repeat; volume: root.music-volume;
                     player: root.music-player; art: root.music-art; art-bg: root.music-art-bg; cs-cover: root.music-cs-cover; cover-blur: root.music-cover-blur; has-art: root.music-has-art;
-                    kind-icon: root.music-kind-icon; accent: root.music-accent; players: root.music-players; picker: root.music-picker;
+                    kind-icon: root.music-kind-icon; accent: root.music-accent; record: root.music-record; has-record: root.music-has-record; players: root.music-players; picker: root.music-picker;
                     style: slot.variant; tape-scope: root.music-tape-scope; q-played: root.music-q-played; q-total: root.music-q-total;
                     q-index: root.music-q-index; q-count: root.music-q-count; tt-deck: root.music-tt-deck; tt-grooves: root.music-tt-grooves;
                     cs-back: root.music-cs-back; cs-front: root.music-cs-front; cs-hub: root.music-cs-hub; cs-hub-r: root.music-cs-hub-r;
