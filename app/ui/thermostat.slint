@@ -9,7 +9,7 @@
 // waiting, none when off; so from across the room it is clear whether something is merely set or busy.
 // The device chip (top right) opens the rooms; the extra options (fan, swing, preset) open a sheet.
 // The app gives every text and decides what the device can do.
-import { Icon, GlowText } from "widgets.slint";
+import { Icon, GlowText, DragSheet } from "widgets.slint";
 import { Theme, Act, Words } from "theme.slint";
 
 export struct ClimateDev {
@@ -752,18 +752,15 @@ export component ThermostatPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- options sheet
-    // the sheet fades in (240 ms) and out (200 ms) instead of popping
-    property <float> sheet-k: root.sheet ? 1 : 0;
-    animate sheet-k { duration: root.sheet ? 240ms : 200ms; easing: ease-out; }
-    if root.sheet-k > 0.001: Rectangle { opacity: root.sheet-k; background: #00000080; TouchArea { clicked => { Act.act("thermo.sheet-close", ""); } } }
-    if root.sheet-k > 0.001: sh := Rectangle { opacity: root.sheet-k;
-        TouchArea { }
-        property <length> r0: 72px;
-        property <int> nrows: (root.d.fans.length > 0 ? 1 : 0) + (root.d.swings.length > 0 ? 1 : 0) + (root.d.presets.length > 0 ? 1 : 0);
-        property <length> need: self.r0 + self.nrows * 54px - 22px + 26px;
-        x: 0; y: root.height - self.need; width: root.width; height: self.need;
-        border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1a1a1df7;
-        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
+    // the sheet: a sheet that follows the finger (DragSheet)
+    property <length> sh-r0: 72px;
+    property <int> sh-nrows: (root.d.fans.length > 0 ? 1 : 0) + (root.d.swings.length > 0 ? 1 : 0) + (root.d.presets.length > 0 ? 1 : 0);
+    property <length> sheet-need: root.sh-r0 + root.sh-nrows * 54px - 22px + 26px - 24px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.sheet; need: root.sheet-need;
+        close => { Act.act("thermo.sheet-close", ""); }
+        sheet-color: #1a1a1df7; ink: #ffffff;
         Text { x: 20px; y: 22px; height: 30px; text: root.d.name; font-size: 20px; font-weight: 600; color: #ffffff; vertical-alignment: center; }
         Rectangle {
             x: parent.width - 16px - 88px; y: 20px; width: 88px; height: 34px; border-radius: 17px; background: root.tint;
@@ -778,7 +775,7 @@ export component ThermostatPage inherits Rectangle {
         ]: Rectangle {
             property <int> before: (ri > 0 && root.d.fans.length > 0 ? 1 : 0) + (ri > 1 && root.d.swings.length > 0 ? 1 : 0);
             visible: row.items.length > 0;
-            x: 16px; y: sh.r0 + self.before * 54px; width: parent.width - 32px; height: 32px;
+            x: 16px; y: root.sh-r0 + self.before * 54px; width: parent.width - 32px; height: 32px;
             Icon { x: 0; y: 0; width: 28px; height: parent.height; text: row.icon; font-size: 20px; color: #ffffffb3; }
             HorizontalLayout {
                 x: 38px; y: 0; height: 32px; alignment: start; spacing: 6px;
@@ -789,50 +786,53 @@ export component ThermostatPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- settings: the look (+ scene and cars for the neon one)
-    // the settings fades in (240 ms) and out (200 ms) instead of popping
-    property <float> settings-k: root.settings ? 1 : 0;
-    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
-    if root.settings-k > 0.001: st := Rectangle { opacity: root.settings-k;
-        property <bool> neon: root.look == 3;
-        property <length> r0: 72px;
-        property <length> need: (self.neon ? self.r0 + 40px + 54px + 40px + 54px + 32px : self.r0 + 40px + 32px) + 24px;
-        x: 0; y: root.height - self.need; width: root.width; height: self.need;
-        border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1d1d21f7;
-        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
+    // the settings: a sheet that follows the finger (DragSheet)
+    property <bool> st-neon: root.look == 3;
+    property <length> st-r0: 72px;
+    property <length> settings-need: root.st-neon ? root.st-r0 + 40px + 54px + 40px + 54px + 32px : root.st-r0 + 40px + 32px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.settings; need: root.settings-need;
+        close => { Act.act("thermo.settings-close", ""); }
+        sheet-color: #1d1d21f7; ink: #ffffff;
         Text { x: 20px; y: 22px; text: "Thermostat"; font-size: 20px; font-weight: 600; color: #ffffff; }
         Rectangle { x: parent.width - 16px - 88px - 46px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff1f;
             Icon { text: "\u{F02FD}"; font-size: 21px; color: #ffffffe6; } }
         Rectangle { x: parent.width - 16px - 88px; y: 19px; width: 88px; height: 34px; border-radius: 17px; background: Theme.text;
-            Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; } }
-        HorizontalLayout { x: 16px; y: st.r0; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.0"); on: root.look == 0; accent: Theme.accent; }
-            SheetChip { text: Words.line("ui.looks.thermostat.1"); on: root.look == 1; accent: Theme.accent; } }
-        HorizontalLayout { x: 16px; y: st.r0 + 40px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.2"); on: root.look == 2; accent: Theme.accent; }
-            SheetChip { text: Words.line("ui.looks.thermostat.3"); on: root.look == 3; accent: Theme.accent; } }
-        if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 94px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.4"); on: root.fl-scene == 0; accent: Theme.accent; }
-            SheetChip { text: Words.line("ui.looks.thermostat.5"); on: root.fl-scene == 1; accent: Theme.accent; } }
-        if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 134px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.6"); on: root.fl-scene == 2; accent: Theme.accent; }
-            SheetChip { text: Words.line("ui.looks.thermostat.7"); on: root.fl-scene == 3; accent: Theme.accent; } }
-        if st.neon: HorizontalLayout { x: 16px; y: st.r0 + 188px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.8"); on: root.fl-cars; check: true; accent: Theme.accent; } }
+            Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { clicked => { Act.act("thermo.settings-close", ""); } } }
+        HorizontalLayout { x: 16px; y: root.st-r0; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: Words.line("ui.looks.thermostat.0"); on: root.look == 0; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "0"); } } }
+            SheetChip { text: Words.line("ui.looks.thermostat.1"); on: root.look == 1; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "1"); } } } }
+        HorizontalLayout { x: 16px; y: root.st-r0 + 40px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: Words.line("ui.looks.thermostat.2"); on: root.look == 2; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "2"); } } }
+            SheetChip { text: Words.line("ui.looks.thermostat.3"); on: root.look == 3; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "3"); } } } }
+        if root.st-neon: HorizontalLayout { x: 16px; y: root.st-r0 + 94px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: Words.line("ui.looks.thermostat.4"); on: root.fl-scene == 0; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "0"); } } }
+            SheetChip { text: Words.line("ui.looks.thermostat.5"); on: root.fl-scene == 1; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "1"); } } } }
+        if root.st-neon: HorizontalLayout { x: 16px; y: root.st-r0 + 134px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: Words.line("ui.looks.thermostat.6"); on: root.fl-scene == 2; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "2"); } } }
+            SheetChip { text: Words.line("ui.looks.thermostat.7"); on: root.fl-scene == 3; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "3"); } } } }
+        if root.st-neon: HorizontalLayout { x: 16px; y: root.st-r0 + 188px; height: 32px; alignment: start; spacing: 6px;
+            SheetChip { text: Words.line("ui.looks.thermostat.8"); on: root.fl-cars; check: true; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.cars", ""); } } } }
     }
 
     // ---------------------------------------------------------------- rooms (the device picker)
-    // the picker fades in (240 ms) and out (200 ms) instead of popping
-    property <float> picker-k: root.picker ? 1 : 0;
-    animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
-    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k; background: #00000099; TouchArea { clicked => { Act.act("thermo.picker-close", ""); } } }
-    if root.picker-k > 0.001: pk := Rectangle { opacity: root.picker-k;
-        TouchArea { }
-        x: 0; y: 40px; width: root.width; height: root.height - 40px;
-        border-top-left-radius: 24px; border-top-right-radius: 24px; background: #1a1a1df7;
+    // the rooms: a sheet sized to its tiles (at most up to y 40), that follows the finger (DragSheet)
+    property <length> picker-need: min(root.height - 40px, 64px + Math.ceil(root.rooms.length / 2) * 94px + 8px);
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.picker; need: root.picker-need;
+        close => { Act.act("thermo.picker-close", ""); }
+        sheet-color: #1a1a1df7; ink: #ffffff;
         clip: true;
-        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
         Text { x: 20px; y: 20px; height: 32px; text: "Rooms"; font-size: 20px; font-weight: 600; color: #ffffff; vertical-alignment: center; }
+        // the page's look and options
+        Rectangle {
+            x: parent.width - 96px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff14;
+            Icon { text: "\u{F0493}"; font-size: 20px; color: #ffffffcc; }
+            TouchArea { clicked => { Act.act("thermo.settings", ""); } }
+        }
         Rectangle {
             x: parent.width - 52px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff14;
             Icon { text: "\u{F0156}"; font-size: 20px; color: #ffffffcc; }

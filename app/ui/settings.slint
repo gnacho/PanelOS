@@ -16,8 +16,10 @@ export global Brand {
     out property <color> surface: dark ? #121314 : #FFFFFF;
     out property <color> raised: dark ? #1d1f21 : #EBE8E1;
     out property <color> text: dark ? #F5F3EE : #101114;
-    out property <color> muted: dark ? #F5F3EE.with-alpha(0.58) : #101114.with-alpha(0.6);
-    out property <color> line: dark ? #F5F3EE.with-alpha(0.10) : #101114.with-alpha(0.10);
+    out property <color> muted: dark ? #A3A19C : #5F5E5A;
+    out property <color> line: dark ? #24262a : #DAD6CD;
+    out property <color> pressed: dark ? #2a2c2f : #DEDAD1;
+    out property <color> bad: dark ? #FF6A4D : #C7361B;
 }
 
 // the PanelOS mark: P in Morse as two rows (dot dash / dash dot)
@@ -30,62 +32,201 @@ export component Mark inherits Rectangle {
     Rectangle { x: root.unit * 8; y: root.unit * 4; width: root.unit * 2; height: root.unit * 2; border-radius: root.unit; background: Brand.signal; }
 }
 
-// Follows the finger: the shown level is the finger's while it is down, the
-// app's otherwise; `changed` reports every move (final: the finger lifted).
-component Slider inherits Rectangle {
-    in property <string> icon;
+// the slider of the shared control set (spec 28.2, touch density): a 44 px row, a 6 px track (10 px while held) with a
+// Signal fill and round caps, the thumb grows from nothing to 22 px while held, a bubble with the value above it (it
+// stays 400 ms after the release, then fades); the ends stretch a little (6 px · (1 − e^(−d/40))) and bump
+component TouchSlider inherits Rectangle {
     in property <float> value;
     callback changed(float, bool);
     property <float> drag-v;
-    property <float> shown: touch.pressed ? root.drag-v : root.value;
-    height: 52px; border-radius: 26px; background: Brand.raised;
-    Rectangle { x: 0; y: 0; width: max(52px, parent.width * root.shown); height: parent.height; border-radius: 26px; background: Brand.signal; }
-    Icon { x: 16px; y: 0; width: 24px; height: parent.height; text: root.icon; font-size: 22px; color: Brand.paper; }
+    property <bool> held: touch.pressed;
+    property <float> hk: root.held ? 1 : 0;
+    animate hk { duration: root.held ? 120ms : 160ms; easing: ease-out; }
+    // the value shown: the finger's while held (a first tap glides there in 180 ms), the app's otherwise
+    property <float> shown-raw: root.held ? root.drag-v : root.value;
+    property <bool> moving;
+    property <float> shown: root.shown-raw;
+    animate shown { duration: root.moving ? 0ms : 180ms; easing: cubic-bezier(0.33, 1, 0.68, 1); }
+    // past the ends: the finger's overshoot in px, stretched
+    property <length> over;
+    property <length> band: (root.over >= 0px ? 1 : -1) * 6px * (1 - Math.pow(2.71828, -Math.abs(root.over / 40px)));
+    animate band { duration: root.held ? 0ms : 220ms; easing: ease-out; }
+    // the bubble: shown while held and 400 ms after
+    property <bool> bubble;
+    Timer { interval: 400ms; running: !root.held && root.bubble; triggered => { root.bubble = false; } }
+    property <float> bk: root.held || root.bubble ? 1 : 0;
+    animate bk { duration: root.held ? 80ms : 200ms; easing: ease-out; }
+    height: 44px;
+    property <length> th: 6px + 4px * root.hk;
+    property <length> tx: Math.min(0px, root.band);
+    property <length> tw: root.width + Math.abs(root.band);
+    // track and fill
+    Rectangle {
+        x: root.tx; y: (root.height - root.th) / 2; width: root.tw; height: root.th; border-radius: root.th / 2;
+        background: Brand.text.with-alpha(Brand.dark ? 0.14 : 0.12);
+        Rectangle { x: 0; y: 0; width: Math.max(root.th, parent.width * root.shown); height: parent.height; border-radius: parent.border-radius;
+            background: Brand.signal; }
+    }
+    // the thumb
+    property <length> kd: 22px * root.hk;
+    if root.kd > 0.5px: Rectangle {
+        x: root.tx + root.tw * root.shown - root.kd / 2; y: (root.height - root.kd) / 2; width: root.kd; height: root.kd; border-radius: root.kd / 2;
+        background: Brand.dark ? #F5F3EE : #FFFFFF;
+        drop-shadow-blur: 3px; drop-shadow-offset-y: 1px; drop-shadow-color: #00000059;
+        border-width: 1px; border-color: #0000000f;
+    }
+    // the value bubble above the thumb
+    if root.bk > 0.01: Rectangle {
+        property <length> bw: bt.preferred-width + 16px;
+        x: Math.max(-8px, Math.min(root.width - self.bw + 8px, root.tx + root.tw * root.shown - self.bw / 2)); y: -22px;
+        width: self.bw; height: 24px; border-radius: 8px; background: Brand.text; opacity: root.bk;
+        bt := Text { text: Math.round(root.shown * 100) + "%"; font-size: 12px; font-weight: 600; color: Brand.bg; horizontal-alignment: center; vertical-alignment: center; }
+    }
     touch := TouchArea {
         pointer-event(ev) => {
             if ev.kind == PointerEventKind.down {
-                root.drag-v = max(0.01, min(1, self.mouse-x / self.width));
+                root.moving = false;
+                root.bubble = true;
+                root.over = 0px;
+                root.drag-v = Math.max(0.0, Math.min(1, self.mouse-x / self.width));
                 root.changed(root.drag-v, false);
             } else if ev.kind == PointerEventKind.up {
+                root.over = 0px;
                 root.changed(root.drag-v, true);
             }
         }
         moved => {
-            root.drag-v = max(0.01, min(1, self.mouse-x / self.width));
+            root.moving = true;
+            root.over = self.mouse-x < 0px ? self.mouse-x : self.mouse-x > self.width ? self.mouse-x - self.width : 0px;
+            root.drag-v = Math.max(0.0, Math.min(1, self.mouse-x / self.width));
             root.changed(root.drag-v, false);
         }
     }
 }
 
-component Tile inherits Rectangle {
-    in property <string> icon;
-    in property <string> label;
-    in property <string> state;
+// the brightness icon: a sun whose rays grow with the level (1 + 4·v px on 24 px) and vanish at 0
+component SunIcon inherits Rectangle {
+    in property <float> v;
+    in property <color> ink: Brand.text;
+    width: 26px; height: 26px;
+    property <float> len: 1 + 4 * root.v;
+    Rectangle { x: parent.width * 7.5 / 24; y: parent.height * 7.5 / 24; width: parent.width * 9 / 24; height: self.width; border-radius: self.width / 2;
+        background: root.ink; }
+    if root.v > 0.01: Path {
+        width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        stroke: root.ink; stroke-width: 1.8px; stroke-line-cap: round;
+        MoveTo { x: 12 + 1 * 7.2; y: 12 + 0 * 7.2; } LineTo { x: 12 + 1 * (7.2 + root.len); y: 12 + 0 * (7.2 + root.len); }
+        MoveTo { x: 12 + 0.7071 * 7.2; y: 12 + 0.7071 * 7.2; } LineTo { x: 12 + 0.7071 * (7.2 + root.len); y: 12 + 0.7071 * (7.2 + root.len); }
+        MoveTo { x: 12 + 0 * 7.2; y: 12 + 1 * 7.2; } LineTo { x: 12 + 0 * (7.2 + root.len); y: 12 + 1 * (7.2 + root.len); }
+        MoveTo { x: 12 + -0.7071 * 7.2; y: 12 + 0.7071 * 7.2; } LineTo { x: 12 + -0.7071 * (7.2 + root.len); y: 12 + 0.7071 * (7.2 + root.len); }
+        MoveTo { x: 12 + -1 * 7.2; y: 12 + 0 * 7.2; } LineTo { x: 12 + -1 * (7.2 + root.len); y: 12 + 0 * (7.2 + root.len); }
+        MoveTo { x: 12 + -0.7071 * 7.2; y: 12 + -0.7071 * 7.2; } LineTo { x: 12 + -0.7071 * (7.2 + root.len); y: 12 + -0.7071 * (7.2 + root.len); }
+        MoveTo { x: 12 + 0 * 7.2; y: 12 + -1 * 7.2; } LineTo { x: 12 + 0 * (7.2 + root.len); y: 12 + -1 * (7.2 + root.len); }
+        MoveTo { x: 12 + 0.7071 * 7.2; y: 12 + -0.7071 * 7.2; } LineTo { x: 12 + 0.7071 * (7.2 + root.len); y: 12 + -0.7071 * (7.2 + root.len); }
+    }
+}
+
+// the volume icon: a speaker whose three waves light at 0, 33 and 66 %; at 0 a Signal slash draws across it (150 ms)
+component VolumeIcon inherits Rectangle {
+    in property <float> v;
+    in property <color> ink: Brand.text;
+    width: 26px; height: 26px;
+    property <float> sk: root.v <= 0.005 ? 1 : 0;
+    animate sk { duration: 150ms; easing: ease-out; }
+    Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24; fill: root.ink;
+        MoveTo { x: 3; y: 9; } LineTo { x: 7; y: 9; } LineTo { x: 12; y: 4.5; } LineTo { x: 12; y: 19.5; } LineTo { x: 7; y: 15; } LineTo { x: 3; y: 15; } Close { } }
+    for w[i] in [1, 2, 3]: Path {
+        width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        stroke: root.ink.with-alpha(root.v > i * 0.33 + 0.005 ? 1 : 0.22); stroke-width: 1.6px;
+        MoveTo { x: 13.5 + w * 2.2; y: 12 - w * 2.6; }
+        QuadraticTo { control-x: 15 + w * 3.4; control-y: 12; x: 13.5 + w * 2.2; y: 12 + w * 2.6; }
+    }
+    if root.sk > 0.01: Path { width: parent.width; height: parent.height; viewbox-width: 24; viewbox-height: 24;
+        stroke: Brand.signal; stroke-width: 2.2px;
+        MoveTo { x: 3; y: 3; } LineTo { x: 3 + 18 * root.sk; y: 3 + 18 * root.sk; } }
+}
+
+// a shade tile (27.4): 104 × 86, raised, radius 16, the icon 26 px over a 12 px label; lit: Signal-soft ground and a
+// Signal icon; a press squishes it (0.95) and springs back with a small overshoot (M1), switching on blooms the icon (M27)
+component ShadeTile inherits Rectangle {
     in property <bool> on;
+    in property <string> label;
     callback clicked;
-    height: 60px; border-radius: 18px;
-    background: touch.pressed ? (Brand.dark ? #2a2c2f : #DEDAD1) : root.on ? Brand.signal.with-alpha(Brand.dark ? 0.22 : 0.16) : Brand.raised;
-    Icon { x: 16px; y: 0; width: 28px; height: parent.height; text: root.icon; font-size: 24px; color: root.on ? Brand.signal : Brand.text; }
-    Text { x: 56px; y: 11px; width: parent.width - 66px; text: root.label; font-size: 14px; font-weight: 700; color: Brand.text; overflow: elide; }
-    Text { x: 56px; y: 31px; width: parent.width - 66px; text: root.state; font-size: 13px; color: Brand.muted; overflow: elide; }
+    width: 104px; height: 86px;
+    property <float> sq: touch.pressed ? 0.95 : 1;
+    animate sq { duration: touch.pressed ? 60ms : 180ms; easing: cubic-bezier(0.34, 1.6, 0.64, 1); }
+    property <float> lit: root.on ? 1 : 0;
+    animate lit { duration: 160ms; easing: ease-out; }
+    property <float> bloom: root.on ? 1 : 0;
+    animate bloom { duration: 200ms; easing: cubic-bezier(0.34, 1.8, 0.64, 1); }
+    inner := Rectangle {
+        x: root.width * (1 - root.sq) / 2; y: root.height * (1 - root.sq) / 2; width: root.width * root.sq; height: root.height * root.sq;
+        border-radius: 16px;
+        background: touch.pressed ? (Brand.dark ? #2a2c2f : #DEDAD1) : Brand.raised.mix(Brand.signal, 1 - root.lit * (Brand.dark ? 0.20 : 0.13));
+        // the icon's glow when lit
+        Rectangle { x: (parent.width - 44px) / 2; y: 10px; width: 44px; height: 44px; border-radius: 22px;
+            background: Brand.signal.with-alpha(0.18 * root.bloom * (1 - Math.max(0, root.bloom - 1) * 4)); }
+        @children
+        Text { x: 6px; y: parent.height - 26px; width: parent.width - 12px; height: 16px; text: root.label; font-size: 12px; font-weight: 600;
+            color: Brand.text; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    }
     touch := TouchArea { clicked => { root.clicked(); } }
 }
 
-// A held mark: the ring fills in a second while the finger stays on it,
-// drains back when it lifts early, and `done` fires when it is full.
-component HoldMark inherits Rectangle {
+// holding the mark in the popup writes P in Morse (spec 27.5): unit 100 ms, 1.1 s in all — the first dot lights and
+// pops, the first dash grows left to right, then the second, then the last dot; the ring fills with it (an arc Path).
+// Done: a white flash, the disc clicks, `done` fires. Released early, everything runs back at double speed.
+component HoldMorse inherits Rectangle {
     callback done;
-    property <float> p: touch.pressed ? 1 : 0;
-    animate p { duration: touch.pressed ? 1000ms : 250ms; easing: linear; }
-    Timer { interval: 1000ms; running: touch.pressed; triggered => { root.done(); } }
     width: 160px; height: 160px;
-    // a ring that fills clockwise while the mark is held (60 short steps)
-    for k in 60: Rectangle {
-        property <angle> a: (k / 60) * 360deg - 90deg;
-        x: 80px + 62px * cos(self.a) - 4px; y: 80px + 62px * sin(self.a) - 4px; width: 8px; height: 8px; border-radius: 4px;
-        background: k / 60 < root.p ? Brand.signal : Brand.line; }
-    Rectangle { x: 80px - 48px; y: 80px - 48px; width: 96px; height: 96px; border-radius: 48px; background: Brand.raised;
-        Mark { x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; unit: 4px; } }
+    property <bool> holding: touch.pressed;
+    property <duration> drain: 550ms;
+    property <float> p: root.holding ? 1 : 0;
+    animate p { duration: root.holding ? 1100ms : root.drain; easing: linear; }
+    changed holding => { if !root.holding { root.drain = 550ms * root.p; } }
+    property <bool> fired;
+    property <duration> fired-t;
+    Timer { interval: 1100ms; running: root.holding && !root.fired; triggered => { root.fired = true; root.fired-t = animation-tick(); } }
+    Timer { interval: 220ms; running: root.fired; triggered => { root.fired = false; root.done(); } }
+    property <float> ft: root.fired ? (animation-tick() - root.fired-t) / 1ms : 1000;
+    property <float> t: root.p * 1100;                 // where the Morse is, in ms
+    pure function clamp01(v: float) -> float { return Math.max(0, Math.min(1, v)); }
+    pure function pop(t0: float) -> float {             // a 100 ms pop to ×1.17 and back
+        return root.t < t0 ? 1 : root.t > t0 + 100 ? 1 : 1 + 0.17 * Math.sin(180deg * (root.t - t0) / 100);
+    }
+    // the ring: track and progress, r 62, 4 px, clockwise from the top
+    Path { width: parent.width; height: parent.height; viewbox-width: 160; viewbox-height: 160; stroke: Brand.line; stroke-width: 4px;
+        MoveTo { x: 80; y: 18; } ArcTo { x: 80; y: 142; radius-x: 62; radius-y: 62; sweep: true; } ArcTo { x: 80; y: 18; radius-x: 62; radius-y: 62; sweep: true; } }
+    property <angle> a: 360deg * Math.min(0.9999, root.p);
+    if root.p > 0.002: Path { width: parent.width; height: parent.height; viewbox-width: 160; viewbox-height: 160; stroke: Brand.signal; stroke-width: 4px;
+        stroke-line-cap: round;
+        MoveTo { x: 80; y: 18; }
+        ArcTo { x: 80 + 62 * Math.sin(root.a); y: 80 - 62 * Math.cos(root.a); radius-x: 62; radius-y: 62; sweep: true; large-arc: root.p > 0.5; } }
+    // the disc: clicks ×0.94 → 1.04 → 1 when done
+    property <float> click: root.ft < 60 ? 1 - 0.06 * root.ft / 60 : root.ft < 120 ? 0.94 + 0.10 * (root.ft - 60) / 60 : root.ft < 180 ? 1.04 - 0.04 * (root.ft - 120) / 60 : 1;
+    disc := Rectangle {
+        x: 80px - 48px * root.click; y: 80px - 48px * root.click; width: 96px * root.click; height: self.width; border-radius: self.width / 2;
+        background: Brand.raised;
+        // the mark in 6 px units (60 × 36), resting at 25 %; its parts light as the Morse runs
+        property <color> dash-c: Brand.dark ? Brand.paper : Brand.ink;
+        Rectangle { x: (parent.width - 60px) / 2; y: (parent.height - 36px) / 2; width: 60px; height: 36px;
+            // dot 1 (top left), dash 1 (top right), dash 2 (bottom left), dot 2 (bottom right): resting shapes
+            Rectangle { x: 0; y: 0; width: 12px; height: 12px; border-radius: 6px; background: Brand.signal; opacity: 0.25; }
+            Rectangle { x: 24px; y: 0; width: 36px; height: 12px; border-radius: 6px; background: disc.dash-c; opacity: 0.25; }
+            Rectangle { x: 0; y: 24px; width: 36px; height: 12px; border-radius: 6px; background: disc.dash-c; opacity: 0.25; }
+            Rectangle { x: 48px; y: 24px; width: 12px; height: 12px; border-radius: 6px; background: Brand.signal; opacity: 0.25; }
+            // lit parts
+            if root.t > 0: Rectangle { property <float> s: root.pop(0); x: 6px - 6px * self.s; y: 6px - 6px * self.s; width: 12px * self.s; height: self.width;
+                border-radius: self.width / 2; background: Brand.signal; }
+            if root.t > 200: Rectangle { x: 24px; y: 0; width: 12px + 24px * root.clamp01((root.t - 200) / 300); height: 12px; border-radius: 6px; background: disc.dash-c; }
+            if root.t > 600: Rectangle { x: 0; y: 24px; width: 12px + 24px * root.clamp01((root.t - 600) / 300); height: 12px; border-radius: 6px; background: disc.dash-c; }
+            if root.t > 1000: Rectangle { property <float> s: root.pop(1000); x: 54px - 6px * self.s; y: 30px - 6px * self.s; width: 12px * self.s; height: self.width;
+                border-radius: self.width / 2; background: Brand.signal; }
+        }
+    }
+    // the flash: r 50, white @90 %, over 200 ms
+    if root.ft < 200: Rectangle { x: 30px; y: 30px; width: 100px; height: 100px; border-radius: 50px; background: #ffffff;
+        opacity: 0.9 * (1 - root.ft / 200); }
     touch := TouchArea { }
 }
 
@@ -96,13 +237,14 @@ export struct SetSection { name: string, size: string, segs: [SetSeg], rows: [Se
 
 export component SettingsLayer inherits Rectangle {
     in property <int> view;                   // 1 quick shade, 2 hold to open, 3 settings list, 4 storage, 5 restart confirm
-    in property <float> shade-pos: 1;         // the quick shade: 0 hidden above … 1 down (follows the finger)
+    in property <float> shade-pos: 1;         // the quick shade: 0 hidden above … 1 down (follows the finger; a little over 1 = the rubber band)
     in property <string> shade-title;
     in property <float> brightness;
     in property <float> volume;
     in property <bool> mic-on;
     in property <string> mic-state;
     in property <string> theme-state;
+    in property <int> theme-mode;             // 0 light, 1 dark, 2 auto
     in property <bool> dnd;
     in property <string> dnd-state;
     in property <string> sleep-state;
@@ -119,75 +261,134 @@ export component SettingsLayer inherits Rectangle {
     in property <[SetSection]> sections;
     in property <string> confirm-title;
     in property <string> confirm-line;
+    callback shade-drag(length, bool);        // a drag on the open shade: how far up (px), and whether the finger let go
 
-    // ------------------------------------------------------------------ 1 quick shade, over the current page
+    // the hold popup: a scrim (#000 @65 %) fades in over 200 ms and the card pops 0.96 → 1 with a fade
+    property <float> pop-k: root.view == 2 ? 1 : 0;
+    animate pop-k { duration: root.view == 2 ? 200ms : 150ms; easing: cubic-bezier(0.2, 0.8, 0.2, 1); }
+    property <float> sc: 0.96 + 0.04 * root.pop-k;
+    // ------------------------------------------------------------------ 1 quick shade: from the top to y 340, under the status bar
+    property <length> shade-h: 340px;
+    property <length> shade-y: (Math.min(1, root.shade-pos) - 1) * root.shade-h + Math.max(0, root.shade-pos - 1) * root.shade-h;
     if root.view == 1 || root.view == 2: Rectangle {
-        background: #000000.with-alpha(0.5 * root.shade-pos);
-        // a tap below the shade closes it
+        // the page under the shade dims to 0.45 with the shown part; a tap there closes it
+        background: #000000.with-alpha(0.45 * Math.min(1, root.shade-pos));
         TouchArea { clicked => { Act.act("shade.close", ""); } }
-        shade := Rectangle { x: 0; y: (root.shade-pos - 1) * 372px; width: parent.width; height: 360px; border-radius: 26px; background: Brand.surface;
-            Rectangle { x: 0; y: 0; width: parent.width; height: 26px; background: Brand.surface; }
-            // swallows taps between the controls; a swipe up closes the shade
-            SwipeGestureHandler {
-                handle-swipe-up: true;
-                swiped => {
-                    if self.pressed-position.y - self.current-position.y > 40px {
-                        Act.act("shade.close", "");
+        // the surface (its top part lies behind the status bar), bottom corners 22 px, the shadow
+        Rectangle { x: 0; y: root.shade-y; width: parent.width; height: root.shade-h; background: Brand.surface;
+            border-bottom-left-radius: 22px; border-bottom-right-radius: 22px;
+            drop-shadow-blur: 24px; drop-shadow-offset-y: 6px; drop-shadow-color: #00000066; }
+        // the content: clipped at y 46, it slides out from under the status bar, never across it
+        Rectangle { x: 0; y: 46px; width: parent.width; height: Math.max(0px, root.shade-y + root.shade-h - 46px); clip: true;
+            shade := Rectangle { x: 0; y: root.shade-y - 46px; width: parent.width; height: root.shade-h;
+                // a drag on the shade (anywhere but a control) closes it below 70 % shown, or with a flick up
+                SwipeGestureHandler {
+                    handle-swipe-up: true;
+                    moved => { root.shade-drag(Math.max(0px, self.pressed-position.y - self.current-position.y), false); }
+                    swiped => { root.shade-drag(Math.max(0px, self.pressed-position.y - self.current-position.y), true); }
+                    cancelled => { root.shade-drag(0px, true); }
+                    TouchArea { }
+                }
+                Text { x: 22px; y: 52px; height: 44px; text: root.shade-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
+                MarkButton { x: 416px; y: 52px; size: 44px; clicked => { Act.act("set.view", "2"); } }
+                // brightness and volume: the icon at x 20, the track from x 62 to x 460
+                SunIcon { x: 20px; y: 108px + 9px; v: root.brightness; }
+                TouchSlider { x: 62px; y: 108px; width: 398px; value: root.brightness;
+                    changed(v, final) => { Act.act(final ? "set.brightness.done" : "set.brightness", Math.max(0.01, v)); } }
+                VolumeIcon { x: 20px; y: 160px + 9px; v: root.volume; }
+                TouchSlider { x: 62px; y: 160px; width: 398px; value: root.volume;
+                    changed(v, final) => { if final { Act.act("set.volume", v); } } }
+                // the tiles: microphone, theme, do not disturb, screen off
+                mic-tile := ShadeTile { x: 20px; y: 220px; on: root.mic-on; label: root.mic-on ? "Microphone" : "Mic off"; clicked => { Act.act("set.mic", ""); }
+                    property <float> slash: root.mic-on ? 0 : 1;
+                    animate slash { duration: 160ms; easing: ease-out; }
+                    Icon { x: (parent.width - 30px) / 2; y: 14px; width: 30px; height: 30px; text: "\u{F036C}"; font-size: 26px; color: root.mic-on ? Brand.signal : Brand.text; }
+                    if mic-tile.slash > 0.01: Path { x: (parent.width - 30px) / 2; y: 14px; width: 30px; height: 30px; viewbox-width: 30; viewbox-height: 30;
+                        stroke: Brand.signal; stroke-width: 2.4px; stroke-line-cap: round;
+                        MoveTo { x: 5; y: 5; } LineTo { x: 5 + 20 * mic-tile.slash; y: 5 + 20 * mic-tile.slash; } }
+                }
+                theme-tile := ShadeTile { x: 132px; y: 220px; on: false; label: root.theme-mode == 2 ? "Theme: Auto" : root.theme-mode == 1 ? "Theme: Dark" : "Theme: Light";
+                    clicked => { Act.act("set.theme", ""); }
+                    // the icon rolls up to the next one (180 ms)
+                    property <int> cur: root.theme-mode;
+                    property <int> prev;
+                    property <duration> t0;
+                    property <bool> rolling;
+                    init => { self.prev = root.theme-mode; }
+                    changed cur => { self.rolling = true; self.t0 = animation-tick(); }
+                    Timer { interval: 200ms; running: theme-tile.rolling; triggered => { theme-tile.prev = theme-tile.cur; theme-tile.rolling = false; } }
+                    property <float> rk: self.rolling ? Math.min(1, (animation-tick() - self.t0) / 180ms) : 1;
+                    property <float> ek: 1 - (1 - self.rk) * (1 - self.rk);
+                    Rectangle { x: (parent.width - 30px) / 2; y: 14px; width: 30px; height: 30px; clip: true;
+                        if theme-tile.rolling: Icon { y: -30px * theme-tile.ek; width: 30px; height: 30px;
+                            text: theme-tile.prev == 2 ? "\u{F00E1}" : theme-tile.prev == 1 ? "\u{F0594}" : "\u{F05A8}"; font-size: 26px; color: Brand.text; }
+                        Icon { y: 30px * (1 - theme-tile.ek); width: 30px; height: 30px;
+                            text: root.theme-mode == 2 ? "\u{F00E1}" : root.theme-mode == 1 ? "\u{F0594}" : "\u{F05A8}"; font-size: 26px; color: Brand.text; }
                     }
                 }
-                TouchArea { }
+                dnd-tile := ShadeTile { x: 244px; y: 220px; on: root.dnd; label: "Do not disturb"; clicked => { Act.act("set.dnd", ""); }
+                    // the moon fills from left to right when it turns on and empties the same way (200 ms)
+                    property <float> fill: root.dnd ? 1 : 0;
+                    animate fill { duration: 200ms; easing: ease-in-out; }
+                    Icon { x: (parent.width - 30px) / 2; y: 14px; width: 30px; height: 30px; text: "\u{F0F65}"; font-size: 26px; color: Brand.text.with-alpha(0.35); }
+                    Rectangle { x: (parent.width - 30px) / 2; y: 14px; width: 30px * dnd-tile.fill; height: 30px; clip: true;
+                        Icon { x: 0; y: 0; width: 30px; height: 30px; text: "\u{F0F65}"; font-size: 26px; color: root.dnd ? Brand.signal : Brand.text; } }
+                }
+                ShadeTile { x: 356px; y: 220px; on: false; label: "Screen off"; clicked => { Act.act("set.sleep", ""); }
+                    Icon { x: (parent.width - 30px) / 2; y: 14px; width: 30px; height: 30px; text: "\u{F0D90}"; font-size: 26px; color: Brand.text; }
+                }
+                Rectangle { x: (parent.width - 36px) / 2; y: 322px; width: 36px; height: 4px; border-radius: 2px; background: Brand.text.with-alpha(0.3); }
             }
-            Text { x: 22px; y: 22px; height: 34px; text: root.shade-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
-            MarkButton { x: parent.width - 70px; y: 15px; size: 50px; clicked => { Act.act("set.view", "2"); } }
-            Slider { x: 20px; y: 80px; width: parent.width - 40px; icon: "\u{F00DF}"; value: root.brightness;
-                changed(v, final) => { Act.act(final ? "set.brightness.done" : "set.brightness", v); } }
-            Slider { x: 20px; y: 142px; width: parent.width - 40px; icon: "\u{F057E}"; value: root.volume;
-                changed(v, final) => { if final { Act.act("set.volume", v); } } }
-            Tile { x: 20px; y: 206px; width: (parent.width - 50px) / 2; icon: root.mic-on ? "\u{F036C}" : "\u{F036D}"; label: "Microphone"; state: root.mic-state; on: root.mic-on;
-                clicked => { Act.act("set.mic", ""); } }
-            Tile { x: 30px + (parent.width - 50px) / 2; y: 206px; width: (parent.width - 50px) / 2; icon: "\u{F0594}"; label: "Theme"; state: root.theme-state; on: false;
-                clicked => { Act.act("set.theme", ""); } }
-            Tile { x: 20px; y: 276px; width: (parent.width - 50px) / 2; icon: root.dnd ? "\u{F009B}" : "\u{F009A}"; label: "Do not disturb"; state: root.dnd-state; on: root.dnd;
-                clicked => { Act.act("set.dnd", ""); } }
-            Tile { x: 30px + (parent.width - 50px) / 2; y: 276px; width: (parent.width - 50px) / 2; icon: "\u{F0F34}"; label: "Screen off"; state: root.sleep-state; on: false;
-                clicked => { Act.act("set.sleep", ""); } }
-            Rectangle { x: (parent.width - 44px) / 2; y: parent.height - 14px; width: 44px; height: 5px; border-radius: 3px; background: Brand.line.with-alpha(0.5); }
         }
-        // ------------------------------------------------------------------ 2 hold the mark to open the settings
-        if root.view == 2: Rectangle { background: #000000a6;
+        // ------------------------------------------------------------------ 2 tap the mark, then hold it in the popup
+        if root.pop-k > 0.01: Rectangle { background: #000000.with-alpha(0.65 * root.pop-k);
             TouchArea { clicked => { Act.act("set.view", "1"); } }
-            Rectangle { x: 40px; y: 120px; width: 400px; height: 250px; border-radius: 26px; background: Brand.surface;
+            Rectangle { x: 240px - 200px * root.sc; y: 240px - 130px * root.sc; width: 400px * root.sc; height: 260px * root.sc;
+                opacity: root.pop-k; border-radius: 26px; background: Brand.surface; border-width: 1px; border-color: Brand.line;
                 TouchArea { }
-                Text { x: 24px; y: 22px; width: parent.width - 48px; text: root.lock-title; font-size: 23px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; horizontal-alignment: center; }
-                HoldMark { x: 200px - 80px; y: 136px - 80px; done => { Act.act("set.view", "3"); } }
-                Text { x: 24px; y: 212px; width: parent.width - 48px; text: "Hold the mark"; font-size: 14px; color: Brand.muted; horizontal-alignment: center; }
-            } }
+                Text { x: 24px; y: 22px; width: parent.width - 48px; text: root.lock-title; font-size: 23px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text;
+                    horizontal-alignment: center; }
+                HoldMorse { x: (parent.width - 160px) / 2; y: 60px * root.sc; done => { Act.act("set.view", "3"); } }
+                Text { x: 24px; y: 222px * root.sc; width: parent.width - 48px; text: "Hold the mark"; font-size: 14px; color: Brand.muted; horizontal-alignment: center; }
+            }
+        }
     }
 
-    // ------------------------------------------------------------------ 3 the settings list
+    // ------------------------------------------------------------------ 3 the settings list, under the status bar
+    property <float> list-k: root.view == 3 || root.view == 5 ? 1 : 0;
+    animate list-k { duration: 300ms; easing: cubic-bezier(0.34, 1.25, 0.64, 1); }
     if root.view == 3 || root.view == 5: Rectangle {
         background: Brand.bg;
         TouchArea { }
-        Mark { x: 22px; y: 22px; unit: 2.4px; }
-        Text { x: 60px; y: 12px; height: 34px; text: root.title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
-        Icon { x: parent.width - 48px; y: 10px; width: 36px; height: 36px; text: "\u{F0156}"; font-size: 24px; color: Brand.muted;
-            TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("shade.close", ""); } } }
-        // the rows scroll when they are more than fit above the tagline
-        Flickable { x: 0; y: 56px; width: parent.width; height: parent.height - 56px - 40px;
-            content-height: max(self.height, root.rows.length * 48px);
-        for r[i] in root.rows: Rectangle {
-            x: 16px; y: i * 48px; width: parent.width - 32px; height: 44px; border-radius: 12px;
-            background: row-touch.pressed ? Brand.raised : Brand.surface;
-            row-touch := TouchArea { clicked => { Act.act("set.row", i); } }
-            Icon { x: 12px; y: 0; width: 26px; height: parent.height; text: r.icon; font-size: 21px; color: r.danger ? Brand.signal : Brand.text; }
-            Text { x: 48px; y: 0; width: 170px; height: parent.height; text: r.label; font-size: 15px; font-weight: 600; color: r.danger ? Brand.signal : Brand.text; vertical-alignment: center; }
-            Text { x: 200px; y: 0; width: parent.width - 236px; height: parent.height; text: r.value; font-size: 13px; color: Brand.muted; horizontal-alignment: right;
-                vertical-alignment: center; overflow: elide; }
-            if !r.danger: Icon { x: parent.width - 30px; y: 0; width: 22px; height: parent.height; text: "\u{F0142}"; font-size: 20px; color: Brand.muted; }
+        property <length> lift: (1 - root.list-k) * 60px;
+        // the title row: the mark, "Settings", close
+        Mark { x: 24px; y: 52px + 22px - 9px + parent.lift; unit: 3px; }
+        Text { x: 60px; y: 52px + parent.lift; height: 44px; text: root.title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
+        Rectangle { x: 420px; y: 52px + parent.lift; width: 44px; height: 44px; border-radius: 22px; background: close-ta.pressed ? Brand.pressed : Brand.raised;
+            Icon { text: "\u{F0156}"; font-size: 22px; color: Brand.text; }
+            close-ta := TouchArea { clicked => { Act.act("shade.close", ""); } } }
+        // the rows on one card: 52 px each, a line between them; the card scrolls when it is taller than the room
+        property <length> card-h: Math.min(root.rows.length * 52px + 28px, parent.height - 106px - 40px);
+        Rectangle {
+            x: 16px; y: 106px + parent.lift; width: 448px; height: parent.card-h; border-radius: 18px; background: Brand.surface; border-width: 1px; border-color: Brand.line;
+            clip: true;
+            Flickable { x: 0; y: 14px; width: parent.width; height: parent.height - 28px;
+                viewport-height: Math.max(self.height, root.rows.length * 52px);
+                for r[i] in root.rows: Rectangle {
+                    x: 14px; y: i * 52px; width: parent.width - 28px; height: 52px;
+                    background: row-touch.pressed ? Brand.raised : transparent;
+                    row-touch := TouchArea { clicked => { Act.act("set.row", i); } }
+                    if i > 0: Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: Brand.line; }
+                    Rectangle { x: 0; y: 10px; width: 32px; height: 32px; border-radius: 10px; background: Brand.raised;
+                        Icon { text: r.icon; font-size: 19px; color: r.danger ? Brand.bad : Brand.muted; } }
+                    Text { x: 46px; y: 0; width: 180px; height: parent.height; text: r.label; font-size: 15px; font-weight: 500; color: r.danger ? Brand.bad : Brand.text;
+                        vertical-alignment: center; overflow: elide; }
+                    Text { x: 226px; y: 0; width: parent.width - 226px - (r.danger ? 4px : 30px); height: parent.height; text: r.value; font-size: 13px; color: Brand.muted;
+                        horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+                    if !r.danger: Icon { x: parent.width - 24px; y: 0; width: 22px; height: parent.height; text: "\u{F0142}"; font-size: 20px; color: Brand.muted; }
+                }
+            }
         }
-        }
-        if root.rows.length * 48px > root.height - 96px: Rectangle { x: 0; y: root.height - 40px - 24px; width: root.width; height: 24px;
-            background: @linear-gradient(180deg, Brand.bg.with-alpha(0) 0%, Brand.bg 100%); }
         Text { x: 16px; y: parent.height - 30px; width: parent.width - 32px; text: root.tagline; font-size: 12px; color: Brand.muted; horizontal-alignment: center; }
         // ------------------------------------------------------------------ 5 restart: are you sure
         if root.view == 5: Rectangle { background: #000000a6;

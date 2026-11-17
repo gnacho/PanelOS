@@ -3,7 +3,7 @@
 // page lists them, unread first. Critical alerts (smoke, CO, water) always take the whole screen in plain red, whatever the
 // look, and keep sounding until someone holds the button: the funky looks are for info and warnings only.
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, GlowText, Crawl } from "widgets.slint";
+import { Icon, GlowText, Crawl, DragSheet } from "widgets.slint";
 
 export struct InfoNote {
     title: string,
@@ -277,14 +277,12 @@ export component InfoPage inherits Rectangle {
     if root.look == 0 && root.card: NoteCard { x: 16px; y: root.height - self.height - 24px; width: 448px; n: root.card-note; index: root.card-index; count: root.card-count; }
 
     // ---------------------------------------------------------------- the page's sheet: the look
-    // the settings fades in (240 ms) and out (200 ms) instead of popping
-    property <float> settings-k: root.settings ? 1 : 0;
-    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
-        property <length> need: 72px + 2 * 52px - 12px + 26px;
-        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+    // the settings: a sheet that follows the finger (DragSheet)
+    property <length> settings-need: 72px + 2 * 52px - 12px + 26px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.settings; need: root.settings-need;
+        close => { Act.act("info.settings-close", ""); }
         Text { x: 24px; y: 24px; height: 28px; text: "Notifications"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 146px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }

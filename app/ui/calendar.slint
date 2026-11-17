@@ -4,7 +4,7 @@
 // next-event widget too), with Edit where the calendar allows it. The panel keeps the last view, across restarts too.
 // Weeks start on Monday, times are 24-hour; the app writes every label (relative times like "in 4 h 15 min" too).
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, Toggle, Crawl } from "widgets.slint";
+import { Icon, Toggle, Crawl, DragSheet } from "widgets.slint";
 import { Keyboard } from "overlays.slint";
 
 export struct CalEvent {
@@ -455,18 +455,14 @@ export component CalendarPage inherits Rectangle {
                     vertical-alignment: center; overflow: elide; } } } }
 
     // ---------------------------------------------------------------- the page's sheet: the view
-    // the settings fades in (240 ms) and out (200 ms) instead of popping
-    property <float> settings-k: root.settings ? 1 : 0;
-    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080;
-        TouchArea { clicked => { Act.act("cal.settings-close", ""); } } }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
-        property <length> need: 72px + (root.look == 0 ? 3 : 2) * 52px - 12px + 26px;
-        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+    // the settings: a sheet that follows the finger (DragSheet)
+    property <length> settings-need: 72px + (root.look == 0 ? 3 : 2) * 52px - 12px + 26px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.settings; need: root.settings-need;
+        close => { Act.act("cal.settings-close", ""); }
         Text { x: 24px; y: 24px; height: 28px; text: "Calendar"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 110px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
-        TouchArea {}
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center;
             TouchArea { x: -12px; y: -10px; width: parent.width + 24px; height: parent.height + 20px; clicked => { Act.act("cal.settings-close", ""); } } }
         HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
@@ -485,17 +481,14 @@ export component CalendarPage inherits Rectangle {
 
     // ---------------------------------------------------------------- a day's events (a tap on a day in the month grid, the wall calendar
     // or a week column): a list sized to its content, a tap on one opens its details over it
-    property <float> day-k: root.day-sheet ? 1 : 0;
-    animate day-k { duration: root.day-sheet ? 240ms : 200ms; easing: ease-out; }
-    if root.day-k > 0.001: Rectangle { opacity: root.day-k; background: #00000080; TouchArea { clicked => { Act.act("cal.day-sheet-close", ""); } } }
-    if root.day-k > 0.001: Rectangle { opacity: root.day-k;
-        property <length> need: min(root.height - 60px, 72px + max(40px, dsr.preferred-height) + 20px);
-        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
-        TouchArea { }
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+    property <length> day-need: min(root.height - 60px, 72px + max(40px, dsr.preferred-height) + 20px);
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.day-sheet; need: root.day-need;
+        close => { Act.act("cal.day-sheet-close", ""); }
         Text { x: 24px; y: 24px; width: parent.width - 48px; height: 28px; text: root.day-sheet-title; font-size: 18px; font-weight: 600; color: Theme.text;
             vertical-alignment: center; overflow: elide; }
-        Flickable { x: 24px; y: 64px; width: parent.width - 48px; height: parent.need - 64px - 12px; content-height: dsr.preferred-height;
+        Flickable { x: 24px; y: 64px; width: parent.width - 48px; height: root.day-need - 64px - 12px; content-height: dsr.preferred-height;
             dsr := VerticalLayout { width: parent.width; spacing: 6px; alignment: start;
                 for e in root.day-sheet-events: Rectangle { height: 52px; border-radius: 12px; background: Theme.surface-raised; opacity: e.past ? 0.55 : 1;
                     TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.day-sheet-title + " · " + e.time; root.detail = true; } }
@@ -510,15 +503,12 @@ export component CalendarPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- an event's details (tap on an event, or the home page's next-event widget)
-    // the detail fades in (240 ms) and out (200 ms) instead of popping
-    property <float> detail-k: root.detail ? 1 : 0;
-    animate detail-k { duration: root.detail ? 240ms : 200ms; easing: ease-out; }
-    if root.detail-k > 0.001: Rectangle { opacity: root.detail-k; background: #00000080; TouchArea { clicked => { root.detail = false; } } }
-    if root.detail-k > 0.001: Rectangle { opacity: root.detail-k;
-        property <length> need: dl.preferred-height + 24px;
-        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
-        TouchArea { }
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+    // the detail: a sheet that follows the finger (DragSheet)
+    property <length> detail-need: dl.preferred-height + 24px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.detail; need: root.detail-need;
+        close => { root.detail = false; }
         dl := VerticalLayout { x: 24px; y: 24px; width: parent.width - 48px; spacing: 6px; alignment: start;
             HorizontalLayout { spacing: 8px; height: 20px; alignment: start;
                 VerticalLayout { alignment: center; Rectangle { width: 10px; height: 10px; border-radius: 5px; background: root.detail-ev.tint; } }

@@ -2,7 +2,7 @@
 // moment, then moves down), due dates and notes under the item, the completed items folded under a header, a list picker,
 // adding with the keyboard. Which lists show is set in the HA integration.
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, GlowText } from "widgets.slint";
+import { Icon, GlowText, DragSheet } from "widgets.slint";
 import { Keyboard } from "overlays.slint";
 
 export struct TodoItem {
@@ -451,17 +451,12 @@ export component TodoPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- the chip's sheet: the lists, the look
-    // the sheet fades in (240 ms) and out (200 ms) instead of popping
-    property <float> picker-k: root.picker ? 1 : 0;
-    animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
-    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k; background: #00000080;
-        TouchArea { clicked => { Act.act("todo.picker-close", ""); } } }
-    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k;
-        property <length> rows: root.lists.length * 56px;
-        property <length> need: 64px + self.rows + 44px + 2 * 52px + 14px;
-        x: 0; y: max(0px, root.height - self.need); width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
-        TouchArea { }
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+    property <length> picker-rows: root.lists.length * 56px;
+    property <length> picker-need: 64px + root.picker-rows + 44px + 2 * 52px + 14px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.picker; need: root.picker-need;
+        close => { Act.act("todo.picker-close", ""); }
         Text { x: 24px; y: 24px; height: 28px; text: "Lists"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center;
             TouchArea { x: -12px; y: -10px; width: parent.width + 24px; height: parent.height + 20px; clicked => { Act.act("todo.picker-close", ""); } } }
@@ -476,12 +471,12 @@ export component TodoPage inherits Rectangle {
             if i == root.sel: Icon { x: parent.width - 34px; y: 0; width: 22px; height: parent.height; text: "\u{F012C}"; font-size: 20px; color: Theme.accent; }
             TouchArea { clicked => { Act.act("todo.pick", i); } }
         }
-        Text { x: 24px; y: 64px + parent.rows + 8px; height: 28px; text: "Look"; font-size: 15px; font-weight: 600; color: Theme.muted; vertical-alignment: center; }
-        HorizontalLayout { x: 24px; y: 64px + parent.rows + 44px; height: 40px; spacing: 8px; alignment: start;
+        Text { x: 24px; y: 64px + root.picker-rows + 8px; height: 28px; text: "Look"; font-size: 15px; font-weight: 600; color: Theme.muted; vertical-alignment: center; }
+        HorizontalLayout { x: 24px; y: 64px + root.picker-rows + 44px; height: 40px; spacing: 8px; alignment: start;
             LookChip { text: Words.line("ui.looks.todo.0"); on: root.look == 0; TouchArea { clicked => { Act.act("todo.look", "0"); } } }
             LookChip { text: Words.line("ui.looks.todo.1"); on: root.look == 1; TouchArea { clicked => { Act.act("todo.look", "1"); } } }
             LookChip { text: Words.line("ui.looks.todo.2"); on: root.look == 2; TouchArea { clicked => { Act.act("todo.look", "2"); } } } }
-        HorizontalLayout { x: 24px; y: 64px + parent.rows + 96px; height: 40px; spacing: 8px; alignment: start;
+        HorizontalLayout { x: 24px; y: 64px + root.picker-rows + 96px; height: 40px; spacing: 8px; alignment: start;
             LookChip { text: Words.line("ui.looks.todo.3"); on: root.look == 3; TouchArea { clicked => { Act.act("todo.look", "3"); } } }
             LookChip { text: Words.line("ui.looks.todo.4"); on: root.look == 4; TouchArea { clicked => { Act.act("todo.look", "4"); } } } }
     }

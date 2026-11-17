@@ -701,13 +701,22 @@ export component AppWindow inherits Window {
         moved => {
             if !root.shade-pulling {
                 root.act("shade.peek", "");
+                root.pull-t = animation-tick();
+                root.pull-last = 0px;
+                root.pull-v = 0;
             }
             root.shade-pulling = true;
             root.shade-pull = self.current-position.y - self.pressed-position.y;
+            let dt = (animation-tick() - root.pull-t) / 1ms;
+            if dt >= 16 {
+                root.pull-v = root.pull-v * 0.4 + 0.6 * ((root.shade-pull - root.pull-last) / 1px) / dt;
+                root.pull-last = root.shade-pull;
+                root.pull-t = animation-tick();
+            }
         }
         swiped => {
             root.shade-pulling = false;
-            if self.current-position.y - self.pressed-position.y > 110px {
+            if self.current-position.y - self.pressed-position.y > 136px || root.pull-v > 0.5 {
                 root.act("shade.open", "");
             }
         }
@@ -1173,9 +1182,19 @@ export component AppWindow inherits Window {
     // and open when let go far enough (or flicked), else slide back.
     property <bool> shade-pulling;
     property <length> shade-pull;
-    property <float> shade-pos: root.shade-pulling ? max(0, min(1, root.shade-pull / 360px))
+    property <bool> shade-closing;          // a drag up on the open shade
+    property <length> shade-up;
+    property <duration> pull-t;
+    property <length> pull-last;
+    property <float> pull-v;                 // px per ms, + downwards
+    pure function shade-band(d: length) -> float {
+        // past fully open: 24 px · (1 − e^(−d / 80 px)), as a share of the shade's 340 px
+        return 24px * (1 - Math.pow(2.71828, -(d / 80px))) / 340px;
+    }
+    property <float> shade-pos: root.shade-pulling ? (root.shade-pull <= 340px ? max(0, root.shade-pull / 340px) : 1 + root.shade-band(root.shade-pull - 340px))
+        : root.shade-closing ? max(0, 1 - root.shade-up / 340px)
         : (root.set-view == 1 || root.set-view == 2) ? 1 : 0;
-    animate shade-pos { duration: root.shade-pulling ? 0ms : 240ms; easing: cubic-bezier(0.2, 0.8, 0.25, 1); }
+    animate shade-pos { duration: root.shade-pulling || root.shade-closing ? 0ms : 300ms; easing: cubic-bezier(0.22, 1, 0.36, 1); }
     SwipeGestureHandler {
         y: 0;
         height: 56px;
@@ -1184,13 +1203,22 @@ export component AppWindow inherits Window {
         moved => {
             if !root.shade-pulling {
                 root.act("shade.peek", "");
+                root.pull-t = animation-tick();
+                root.pull-last = 0px;
+                root.pull-v = 0;
             }
             root.shade-pulling = true;
             root.shade-pull = self.current-position.y - self.pressed-position.y;
+            let dt = (animation-tick() - root.pull-t) / 1ms;
+            if dt >= 16 {
+                root.pull-v = root.pull-v * 0.4 + 0.6 * ((root.shade-pull - root.pull-last) / 1px) / dt;
+                root.pull-last = root.shade-pull;
+                root.pull-t = animation-tick();
+            }
         }
         swiped => {
             root.shade-pulling = false;
-            if self.current-position.y - self.pressed-position.y > 110px {
+            if self.current-position.y - self.pressed-position.y > 136px || root.pull-v > 0.5 {
                 root.act("shade.open", "");
             }
         }
@@ -1265,6 +1293,49 @@ export component AppWindow inherits Window {
         lock-title: root.set-lock-title; hold: root.set-hold; title: root.set-title; rows: root.set-rows; tagline: root.set-tagline;
         page-title: root.set-page-title; page-sub: root.set-page-sub; used: root.set-used; used-text: root.set-used-text; bars: root.set-bars; sections: root.set-sections;
         confirm-title: root.set-confirm-title; confirm-line: root.set-confirm-line;
+        theme-mode: root.theme-mode;
+        shade-drag(up, done) => {
+            if !done {
+                if !root.shade-closing {
+                    root.pull-t = animation-tick();
+                    root.pull-last = 0px;
+                    root.pull-v = 0;
+                }
+                root.shade-closing = true;
+                root.shade-up = up;
+                let dt = (animation-tick() - root.pull-t) / 1ms;
+                if dt >= 16 {
+                    root.pull-v = root.pull-v * 0.4 + 0.6 * ((root.pull-last - up) / 1px) / dt;
+                    root.pull-last = up;
+                    root.pull-t = animation-tick();
+                }
+            } else {
+                let shown = 1 - up / 340px;
+                root.shade-closing = false;
+                if root.shade-up > 4px && (shown < 0.7 || root.pull-v < -0.5) {
+                    root.act("shade.close", "");
+                }
+                root.shade-up = 0px;
+            }
+        }
+    }
+    // the status bar stays readable over the shade and the settings (drawn above them, theme colours there)
+    if root.set-view > 0 || root.shade-pos > 0.002: StatusBar {
+        x: 16px;
+        y: 10px;
+        width: root.width - 32px;
+        hint: root.wake-hint;
+        mic-muted: root.mic-muted;
+        speaker-muted: root.speaker-muted;
+        dnd: root.dnd-on;
+        listening: root.voice-on && root.voice-state == 1;
+        notes: root.info-notes.length;
+        timers: root.timers;
+        problem: !root.connected;
+        quiet: root.screensaver-on;
+        on-k: root.set-view >= 3 ? 0 : (root.status-on ? 1 : root.on-k) * (1 - min(1, root.shade-pos));
+        left-chips: root.left-k > 0.5;
+        left-k: root.left-k;
     }
 
     // ---- system screens ----

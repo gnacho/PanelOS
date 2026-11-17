@@ -236,6 +236,14 @@ fn with_state<R>(f: impl FnOnce(&mut UiState) -> R) -> R {
 }
 
 /// The panel's accent (the brand's Signal colour unless the integration sets one).
+/// The music views' accent: the cover's colour (a grey cover's own tone), the panel's without a cover.
+fn cover_accent(s: &UiState) -> slint::Color {
+    if s.art.is_some() { s.art_accent.unwrap_or_else(|| accent(s)) } else { accent(s) }
+}
+
+/// The turntable's woods (the integration's list, in its order).
+const WOODS: [&str; 7] = ["walnut", "oak", "cherry", "beech", "pine", "pear", "scandi-oak"];
+
 fn accent(s: &UiState) -> slint::Color {
     s.panel_config
         .as_ref()
@@ -526,7 +534,7 @@ fn update_clock(ui: &AppWindow) {
         }
         // The music position moves on while a player plays: its own properties;
         // the rest of the widget's data only when it changed.
-        let mut music = pages::home_music(&s.states, &media_entity(s), s.art.as_ref(), accent(s));
+        let mut music = pages::home_music(&s.states, &media_entity(s), s.art.as_ref(), cover_accent(s));
         if music.playing && !really_playing(s, &media_entity(s)) {
             music.playing = false;
         }
@@ -733,7 +741,7 @@ fn refresh_pages(ui: &AppWindow) {
         }
         // Music page
         let player = media_entity(s);
-        let cover_accent = if s.art.is_some() { s.art_accent.unwrap_or(a) } else { a };
+        let cover_accent = cover_accent(s);
         let mut music = pages::home_music(&s.states, &player, s.art.as_ref(), cover_accent);
         if music.playing && !really_playing(s, &player) {
             music.playing = false;
@@ -808,6 +816,15 @@ fn refresh_pages(ui: &AppWindow) {
     // and again when the wood or the cassette changes
     let looks = page_looks(ui, "music");
     let wood = with_state(|s| page_option(s, "music", "wood").and_then(|v| v.as_str().map(str::to_string))).unwrap_or_else(|| "walnut".into());
+    // the music sheet: what the record holds, cut off or scroll, the speed, the wood (and its swatches, once)
+    ui.set_music_holds(with_state(|s| page_option(s, "music", "holds").and_then(|v| v.as_i64())).unwrap_or(0) as i32);
+    ui.set_music_scroll(with_state(|s| page_option(s, "music", "scroll").and_then(|v| v.as_bool())).unwrap_or(false));
+    ui.set_music_scroll_speed(with_state(|s| page_option(s, "music", "scroll_speed").and_then(|v| v.as_i64())).unwrap_or(3) as f32);
+    ui.set_music_wood(WOODS.iter().position(|w| *w == wood).unwrap_or(0) as i32);
+    if slint::Model::row_count(&ui.get_music_woods()) == 0 {
+        let sw: Vec<slint::Image> = WOODS.iter().map(|w| quick::picture(&format!("music/tt/sw-{w}.png"))).collect();
+        ui.set_music_woods(ModelRc::new(VecModel::from(sw)));
+    }
     thread_local!(static MUSIC_ART: RefCell<String> = const { RefCell::new(String::new()) });
     let half = looks.contains(&4) && !looks.contains(&3);
     let key = format!("{wood}|{half}|{}|{}", looks.contains(&2), looks.iter().any(|l| *l == 3 || *l == 4));
@@ -2843,6 +2860,37 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
                 open_temporary_page(ui, kind);
             }
         }
+        // the pages' settings sheets (look and options): open and close
+        "music.settings" => {
+            ui.set_music_picker(false);
+            ui.set_music_settings(true);
+        }
+        "music.settings-close" => ui.set_music_settings(false),
+        "music.look" => page_set(ui, "music", Some(value.parse().unwrap_or(0)), Value::Null),
+        "music.holds" => page_set(ui, "music", None, json!({ "holds": value.parse::<i64>().unwrap_or(0) })),
+        "music.scroll" => page_set(ui, "music", None, json!({ "scroll": value == "1" })),
+        "music.speed" => page_set(ui, "music", None, json!({ "scroll_speed": value.parse::<i64>().unwrap_or(3).clamp(1, 5) })),
+        "music.wood" => {
+            if let Some(id) = WOODS.get(value.parse::<usize>().unwrap_or(0)) {
+                page_set(ui, "music", None, json!({ "wood": id }));
+            }
+        }
+        "thermo.settings" => {
+            ui.set_thermo_picker(false);
+            ui.set_thermo_settings(true);
+        }
+        "thermo.settings-close" => ui.set_thermo_settings(false),
+        "thermo.look" => page_set(ui, "thermostat", Some(value.parse().unwrap_or(0)), Value::Null),
+        // the neon look's scene and cars are the synthwave background's (shared with the home page)
+        "thermo.scene" => page_set(ui, "home", None, json!({ "scene": value.parse::<i64>().unwrap_or(0) })),
+        "thermo.cars" => {
+            let on = with_state(|s| page_option(s, "home", "cars").and_then(|v| v.as_bool()).unwrap_or(true));
+            page_set(ui, "home", None, json!({ "cars": !on }));
+        }
+        "cam.settings" => ui.set_cam_settings(true),
+        "cam.settings-close" => ui.set_cam_settings(false),
+        "info.settings" => ui.set_info_settings(true),
+        "info.settings-close" => ui.set_info_settings(false),
         w if w.starts_with("set.") => shade::act(ui, w, value),
         w if w.starts_with("quick.") => quick::act(ui, w, value),
         w if w.starts_with("thermo.") => thermo::act(ui, w, value),
@@ -3470,6 +3518,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let bg = img.as_ref().map(|b| cam::rgba(&cam::soft(&cam::shrink(b, 18))));
         let tint = img.as_ref().and_then(|b| cam::cover_accent(&cam::shrink(b, 32)));
         let record = img.as_ref().map(|b| cam::cover_record(&cam::shrink(b, 32)));
+        if let (Some(t), Some(r)) = (tint, record) {
+            eprintln!(
+                "nspanel-app: cover colours: accent #{:02x}{:02x}{:02x}, record #{:02x}{:02x}{:02x}",
+                t.0, t.1, t.2, r.0, r.1, r.2
+            );
+        }
         let img = img.map(|b| cam::rgba(&b));
         let weak = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {

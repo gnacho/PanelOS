@@ -6,7 +6,7 @@
 // The software renderer can't rotate images or clip to a circle, so the vinyl hole is a thick round
 // border over the square cover, and the tone arm / tape run are paths computed here.
 import { Theme, Act } from "theme.slint";
-import { Icon, Glyph, PlayGlyph, GlowText, Marquee } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText, Marquee, DragSheet } from "widgets.slint";
 
 export struct MusicPlayer {
     name: string,       // "Kitchen speaker"
@@ -757,17 +757,14 @@ export component MusicPage inherits Rectangle {
     }
 
     // settings: look, what the record / tape holds, long titles (cut off or scroll, speed)
-    // the settings fades in (240 ms) and out (200 ms) instead of popping
-    property <float> settings-k: root.settings ? 1 : 0;
-    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
-        // as tall as its rows need (header 72 px, rows 54 px apart, 24 px under the last); the page shows above it
-        property <int> rows: 2 + (root.style >= 2 ? 1 : 0) + (root.style == 2 ? 1 : 0) + (root.scroll ? 1 : 0);
-        x: 0; y: root.height - self.height; width: root.width; height: 72px + self.rows * 54px - 22px + 24px;
-        border-top-left-radius: 24px; border-top-right-radius: 24px;
-        background: #1d1d21f7;
-        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
+    // the settings: a sheet that follows the finger (DragSheet)
+    // as tall as its rows need (header 72 px, rows 54 px apart, 24 px under the last); the page shows above it
+    property <int> settings-rows: 2 + (root.style >= 2 ? 1 : 0) + (root.style == 2 ? 1 : 0) + (root.scroll ? 1 : 0);
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.settings; need: 72px + root.settings-rows * 54px - 22px;
+        close => { Act.act("music.settings-close", ""); }
+        sheet-color: #1d1d21f7; ink: #ffffff;
         Text { x: 20px; y: 22px; text: "Music"; font-size: 20px; font-weight: 600; color: #ffffff; }
         Rectangle {
             x: parent.width - 16px - 88px - 46px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff1f;
@@ -776,6 +773,7 @@ export component MusicPage inherits Rectangle {
         Rectangle {
             x: parent.width - 16px - 88px; y: 19px; width: 88px; height: 34px; border-radius: 17px; background: Theme.text;
             Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; }
+            TouchArea { clicked => { Act.act("music.settings-close", ""); } }
         }
         Rectangle {
             x: 16px; y: 72px; width: parent.width - 16px; height: 32px; clip: true;
@@ -785,6 +783,7 @@ export component MusicPage inherits Rectangle {
                     width: lt.preferred-width + 22px; height: 32px; border-radius: 16px;
                     background: i == root.style ? root.acc : transparent; border-width: i == root.style ? 0px : 1px; border-color: #ffffff40;
                     lt := Text { x: 11px; width: self.preferred-width; height: parent.height; text: l; font-size: 13px; font-weight: 500; color: #ffffff; vertical-alignment: center; }
+                    TouchArea { clicked => { Act.act("music.look", i); } }
                 }
             }
         }
@@ -797,6 +796,7 @@ export component MusicPage inherits Rectangle {
                 width: lh.preferred-width + 26px; height: 32px; border-radius: 16px;
                 background: i == root.holds ? root.acc : transparent; border-width: i == root.holds ? 0px : 1px; border-color: #ffffff40;
                 lh := Text { x: 13px; width: self.preferred-width; height: parent.height; text: l; font-size: 14px; font-weight: 500; color: #ffffff; vertical-alignment: center; }
+                TouchArea { clicked => { Act.act("music.holds", i); } }
             }
         }
         HorizontalLayout {
@@ -805,6 +805,7 @@ export component MusicPage inherits Rectangle {
                 width: ls.preferred-width + 26px; height: 32px; border-radius: 16px;
                 background: (i == 1) == root.scroll ? root.acc : transparent; border-width: (i == 1) == root.scroll ? 0px : 1px; border-color: #ffffff40;
                 ls := Text { x: 13px; width: self.preferred-width; height: parent.height; text: l; font-size: 14px; font-weight: 500; color: #ffffff; vertical-alignment: center; }
+                TouchArea { clicked => { Act.act("music.scroll", i); } }
             }
         }
         // turntable: the wood of the counter it stands on (photo swatches)
@@ -815,6 +816,7 @@ export component MusicPage inherits Rectangle {
                 Image { width: parent.width; height: parent.height; source: w; image-fit: cover; }
                 Rectangle { x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; border-radius: 4px;
                     border-width: i == root.wood ? 2px : 0px; border-color: #ffffff; }
+                TouchArea { clicked => { Act.act("music.wood", i); } }
             }
         }
         // scroll speed: slow .. fast in five steps
@@ -827,23 +829,30 @@ export component MusicPage inherits Rectangle {
                 Rectangle { width: parent.width * (root.scroll-speed - 1) / 4; border-radius: 2px; background: root.acc; x: 0; }
                 for i in 5: Rectangle { x: parent.width * i / 4 - 2px; y: -3px; width: 4px; height: 10px; border-radius: 2px; background: i <= root.scroll-speed - 1 ? root.acc : #ffffff59; }
                 Rectangle { x: parent.width * (root.scroll-speed - 1) / 4 - 9px; y: -7px; width: 18px; height: 18px; border-radius: 9px; background: #ffffff; }
+                TouchArea {
+                    y: -14px; height: parent.height + 28px;
+                    clicked => { Act.act("music.speed", Math.round(Math.max(0, Math.min(1, self.mouse-x / self.width)) * 4) + 1); }
+                }
             }
         }
     }
 
     // player picker: tap a row = show that player here (remembered); ⇄ = move the music there; + = play there too
-    // the picker fades in (240 ms) and out (200 ms) instead of popping
-    property <float> picker-k: root.picker ? 1 : 0;
-    animate picker-k { duration: root.picker ? 240ms : 200ms; easing: ease-out; }
-    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k; background: #00000080; TouchArea { clicked => { Act.act("music.picker-close", ""); } } }
-    if root.picker-k > 0.001: Rectangle { opacity: root.picker-k;
-        x: 0; y: 88px; width: root.width; height: root.height - 88px;
-        TouchArea { }
-        border-top-left-radius: 24px; border-top-right-radius: 24px;
-        background: #1d1d21f7;
+    // the picker: a sheet sized to its players (at most up to y 88), that follows the finger (DragSheet)
+    property <length> picker-need: min(root.height - 88px, 64px + root.players.length * 52px + 16px);
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.picker; need: root.picker-need;
+        close => { Act.act("music.picker-close", ""); }
+        sheet-color: #1d1d21f7; ink: #ffffff;
         clip: true;
-        Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: #ffffff40; }
         Text { x: 20px; y: 22px; text: "Play on"; font-size: 20px; font-weight: 600; color: #ffffff; }
+        // the page's look and options
+        Rectangle {
+            x: parent.width - 140px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff14;
+            Icon { text: "\u{F0493}"; font-size: 20px; color: #ffffffcc; }
+            TouchArea { clicked => { Act.act("music.settings", ""); } }
+        }
         Rectangle {
             x: parent.width - 96px; y: 18px; width: 36px; height: 36px; border-radius: 18px;
             Icon { text: "\u{F02FD}"; font-size: 20px; color: #ffffff99; }
@@ -855,7 +864,7 @@ export component MusicPage inherits Rectangle {
         }
         // the players scroll when they do not all fit
         Flickable {
-            x: 0; y: 64px; width: parent.width; height: parent.height - 64px;
+            x: 0; y: 64px; width: parent.width; height: root.picker-need - 64px;
             viewport-height: max(self.height, root.players.length * 52px + 16px);
         for p[i] in root.players: Rectangle {
             x: 12px; y: i * 52px; width: parent.width - 24px; height: 48px; border-radius: 14px;

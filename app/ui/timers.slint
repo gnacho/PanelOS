@@ -9,7 +9,7 @@
 // Images are drawn at their exact size (the renderer scales without filtering). Coloured shapes are a
 // white mask (colorize = the colour) with a grey + alpha shading layer on top.
 import { Theme, Act, Clock, Words } from "theme.slint";
-import { Icon, Glyph, PlayGlyph, GlowText } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText, DragSheet } from "widgets.slint";
 import { FlapCard } from "panels.slint";
 import { Keyboard } from "overlays.slint";
 
@@ -785,18 +785,14 @@ export component TimersPage inherits Rectangle {
     // ---------------------------------------------------------------- one timer's sheet: its ring and time, +1 min, pause / go on,
     // cancel (a tap on it where several run); the scrim closes it
     property <bool> sheet-on: !root.ringing && root.mode == 1 && root.sheet >= 0 && root.sheet < root.n;
-    property <float> sheet-k: root.sheet-on ? 1 : 0;
-    animate sheet-k { duration: root.sheet-on ? 240ms : 200ms; easing: ease-out; }
     property <TimerItem> st: root.sheet >= 0 && root.sheet < root.n ? root.timers[root.sheet]
         : { label: "", remaining: 0, total: 0, running: false, tint: #ffffff };
     // the timer's colour as the page shows it (the synthwave scene's neon for its place, else its own)
     property <color> st-tint: root.theme == 3 ? root.sw-rings[root.sw-scene * 4 + Math.mod(Math.max(0, root.sheet), 4)] : root.st.tint;
-    if root.sheet-k > 0.001: Rectangle { opacity: root.sheet-k; background: #00000080;
-        TouchArea { clicked => { Act.act("timers.sheet-close", ""); } } }
-    if root.sheet-k > 0.001: Rectangle { opacity: root.sheet-k;
-        x: 0; y: root.height - 330px; width: root.width; height: 354px; border-radius: 24px; background: TFg.c.red > 128 ? #17181b : #ffffff;
-        TouchArea { }
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: TFg.c.with-alpha(0.3); }
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.sheet-on; need: 330px; close => { Act.act("timers.sheet-close", ""); }
+        sheet-color: TFg.c.red > 128 ? #17181b : #ffffff; ink: TFg.c;
         Text { x: 24px; y: 22px; width: parent.width - 48px; height: 28px; text: root.name(root.st.label); font-size: 18px; font-weight: 600;
             color: root.st-tint.mix(TFg.c, 0.55); horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
         Ring { x: (parent.width - 170px) / 2; y: 58px; width: 170px; height: 170px; stroke: 10px; track: TFg.c.with-alpha(0.12);

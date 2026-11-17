@@ -1,6 +1,124 @@
 // Small building blocks: icon text, round buttons, chips, toggles, sliders.
 
-import { Theme, Clock } from "theme.slint";
+import { Theme, Clock, Act } from "theme.slint";
+
+// A bottom sheet that follows the finger (spec 26): its scrim, the handle and the sheet; the content goes in as
+// children (drawn from the sheet's top, `need` high). It opens with a small spring, follows a drag on the handle
+// strip and the header (top 64 px) 1:1, stretches at most 24 px above its height (rubber band), and on release
+// closes (a flick down faster than 0.5 px/ms, or pulled past min(30 % of its height, 120 px)) or springs back
+// from where the finger left it. The scrim fades with the visible part; a tap on it closes the sheet.
+export component DragSheet inherits Rectangle {
+    in property <bool> open;
+    in property <length> need;                   // the sheet's height (sized to its content)
+    in property <color> sheet-color: Theme.surface;
+    in property <color> ink: Theme.text;          // the handle's colour (the sheet's text colour)
+    callback close();                            // a tap on the scrim, or the sheet dragged away
+    in property <bool> dismissable: true;        // false: it follows the finger with the rubber band and springs back
+    in property <float> scrim-alpha: 0.5;
+    in property <length> grab: 64px;             // the strip at the top that drags the sheet
+    out property <bool> shown: root.open || root.close-k < 0.999;
+    // open: the M3 spring (300 ms, a 3 px overshoot); close: 200 ms ease-in
+    property <float> open-k: root.open ? 1 : 0;
+    animate open-k { duration: root.open ? 300ms : 0ms; easing: cubic-bezier(0.34, 1.25, 0.64, 1); }
+    property <float> close-k: root.open ? 0 : 1;
+    animate close-k { duration: root.open ? 0ms : 200ms; easing: cubic-bezier(0.4, 0, 1, 1); }
+    property <length> travel: root.need + 24px;
+    property <length> slide: root.open ? (1 - root.open-k) * root.travel : root.close-k * root.travel;
+    // the drag: the finger's offset (down +), the rubber band above; after release it moves to its target
+    property <bool> held;
+    property <bool> snap;                        // set the drag without motion (a fresh opening)
+    property <length> drag;
+    property <duration> drag-ms: 300ms;
+    animate drag { duration: root.held || root.snap ? 0ms : root.drag-ms; easing: cubic-bezier(0.22, 1, 0.36, 1); }
+    property <length> last-y;
+    property <duration> last-t;
+    property <float> vel;                        // px per ms, + downwards, over the last movement
+    property <bool> leaving;
+    changed open => {
+        if root.open {
+            root.snap = true;
+            root.drag = 0px;
+            root.leaving = false;
+            root.snap = false;
+        }
+    }
+    pure function band(d: length) -> length {
+        // above the sheet's height: 24 px · (1 − e^(−d / 80 px))
+        return -24px * (1 - Math.pow(2.71828, -(d / 80px)));
+    }
+    Timer {
+        interval: root.drag-ms + 20ms;
+        running: root.leaving;
+        triggered => {
+            root.leaving = false;
+            root.close();
+        }
+    }
+    property <length> visible-h: Math.max(0px, root.need - root.slide - Math.max(0px, root.drag));
+    Rectangle {
+        visible: root.shown;
+        background: #000000;
+        opacity: root.scrim-alpha * Math.min(1, root.visible-h / Math.max(1px, root.need));
+        TouchArea {
+            enabled: !root.held;
+            clicked => { if root.dismissable { root.close(); } }
+        }
+    }
+    sheet := Rectangle {
+        visible: root.shown;
+        x: 0; y: root.height - root.need + root.slide + root.drag; width: root.width; height: root.need + 24px;
+        border-radius: 24px; background: root.sheet-color;
+        TouchArea { }
+        // the handle: 36 × 4 at 30 %, 52 × 5 at 55 % while held
+        property <bool> wide: root.held;
+        Rectangle {
+            property <float> hk: sheet.wide ? 1 : 0;
+            animate hk { duration: sheet.wide ? 120ms : 160ms; easing: ease-out; }
+            x: (parent.width - (36px + 16px * self.hk)) / 2; y: 8px - 0.5px * self.hk;
+            width: 36px + 16px * self.hk; height: 4px + 1px * self.hk; border-radius: 2.5px;
+            background: root.ink.with-alpha(0.3 + 0.25 * self.hk);
+        }
+        grab-ta := TouchArea {
+            x: 0; y: 0; width: parent.width; height: root.grab;
+            pointer-event(e) => {
+                if e.kind == PointerEventKind.down {
+                    root.held = true;
+                    root.last-y = self.mouse-y;
+                    root.last-t = animation-tick();
+                    root.vel = 0;
+                }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) && root.held {
+                    root.held = false;
+                    // the decision: a flick down, or far enough down → close; else back to the sheet's height
+                    if root.dismissable && (root.vel > 0.5 || root.drag > Math.min(root.need * 0.3, 120px)) {
+                        let remaining = root.travel - root.drag;
+                        root.drag-ms = root.vel > 0.8 ? Math.max(90ms, Math.min(200ms, (remaining / 1px) / root.vel * 1ms)) : 200ms;
+                        root.drag = root.travel;
+                        root.leaving = true;
+                    } else {
+                        root.drag-ms = Math.abs(root.vel) > 0.8 ? 220ms : 300ms;
+                        root.drag = 0px;
+                    }
+                }
+            }
+            moved => {
+                if root.held {
+                    let dy = self.mouse-y - self.pressed-y;
+                    let raw = root.dismissable ? dy : Math.min(dy, 24px);
+                    root.drag = raw >= 0 ? raw : root.band(-raw);
+                    // velocity over the latest movement (at least 16 ms apart), smoothed
+                    let dt = (animation-tick() - root.last-t) / 1ms;
+                    if dt >= 16 {
+                        root.vel = root.vel * 0.4 + 0.6 * ((self.mouse-y - root.last-y) / 1px) / dt;
+                        root.last-y = self.mouse-y;
+                        root.last-t = animation-tick();
+                    }
+                }
+            }
+        }
+        @children
+    }
+}
 
 // A news crawl: the text rolls on from right to left without end, drawn twice for a seamless loop. A new text
 // joins at the tail (never under the eye); a new `epoch` starts it afresh (bumped while its page is out of sight).

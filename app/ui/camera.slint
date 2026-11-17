@@ -2,7 +2,7 @@
 // (also the camera picker), and the visitor overlay (doorbell / someone at the door) above any panel.
 // The app scales every frame to the size it is shown at (the software renderer scales images without filtering).
 import { Theme, Act } from "theme.slint";
-import { Icon, GlowText } from "widgets.slint";
+import { Icon, GlowText, DragSheet } from "widgets.slint";
 
 export struct CamItem {
     name: string,
@@ -185,14 +185,12 @@ export component CameraPage inherits Rectangle {
     }
 
     // ---------------------------------------------------------------- settings sheet
-    // the settings fades in (240 ms) and out (200 ms) instead of popping
-    property <float> settings-k: root.settings ? 1 : 0;
-    animate settings-k { duration: root.settings ? 240ms : 200ms; easing: ease-out; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k; background: #00000080; }
-    if root.settings-k > 0.001: Rectangle { opacity: root.settings-k;
-        property <length> need: 72px + 2 * 62px + 26px;
-        x: 0; y: root.height - self.need; width: root.width; height: self.need + 24px; border-radius: 24px; background: Theme.surface;
-        Rectangle { x: (parent.width - 36px) / 2; y: 8px; width: 36px; height: 4px; border-radius: 2px; background: Theme.faint; }
+    // the settings: a sheet that follows the finger (DragSheet)
+    property <length> settings-need: 72px + 2 * 62px + 26px;
+    DragSheet {
+        width: parent.width; height: parent.height;
+        open: root.settings; need: root.settings-need;
+        close => { Act.act("cam.settings-close", ""); }
         Text { x: 24px; y: 24px; height: 28px; text: "Cameras"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 132px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
