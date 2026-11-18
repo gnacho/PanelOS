@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.0.5
+
+**Upgrading from 0.0.4**: update the panel and the integration together ([docs/home_assistant.md](docs/home_assistant.md#upgrading-from-004)); the new interface runs from the UI bundle and the web bundle ([docs/app.md](docs/app.md#build-run-develop)).
+
+### A new interface on the GPU
+
+- **Drawn on the GPU**: Skia on OpenGL ES (Mesa Panfrost) through GBM, with page flips; the app and the pictures and fonts of its pages come as a UI bundle, and the image's own app takes over when the bundle is missing.
+- **Pages side by side without an end**: a status bar with the wake hint and one centred group of marks (microphone off, speaker off, timers, the bell), page dots that stick together and tear during a swipe, the timer island with each running timer's ring, temporary pages for what the list lacks.
+- **Quick shade in two steps**: brightness with automatic brightness, volume, tiles (microphone, theme, do not disturb, screen off), what runs now (timers, the newest notifications); the settings list behind the PanelOS mark (Wi-Fi, Home Assistant, display, voice, sound, storage, touch calibration, restart).
+- **One control set** with the PanelOS page: segmented controls, dropdowns, switches, check boxes, sliders with a value bubble, buttons; every sheet follows the finger, and tall ones open at medium height and go up to full.
+- **Light, dark and automatic**, changing smoothly; the PanelOS palette, type and mark everywhere.
+
+### Pages and their looks
+
+- **Custom page**: widgets on a 4 × 4 grid (clock, date, weather now, next event, forecast curve, hourly and daily forecast, music) over a living weather background (photos, drawn scenes, a line drawing, a plain ground) or a synthwave night drive with neon letters, palms in the wind, cars and a patrol car; several custom pages, each with its own background and widgets. Taps on the scenes do things there: a shooting star, a car in a lane, a car shoved aside, a city window lit or dark, trees shaking, a flag flapping.
+- **Clock faces**: digital, big digits, round, square, minimal, numerals, wandering, split-flap, the time in words, nixie tubes on a walnut plinth, an LCD quartz watch and a twin-bell alarm clock; on the clock page, as a widget and on the screensaver.
+- **Weather**: cards, or a living photo of the sky as it is now.
+- **Music**: plain with the cover behind, full cover, a turntable (arm to seek, the record in the cover's colour, platter spinning up and coasting down), a cassette and half a cassette; player picker, moving music to another player, grouping.
+- **Timers, alarms and a stopwatch**: plain, kitchen timer, hourglass, synthwave and flip clock looks; the stopwatch as a chronograph, a timing tower, an LCD sports watch or nixie tubes; the alarms as a twin-bell clock, a sunrise, a clock radio or a 24-hour dial; a sheet per timer (+1 min, pause, cancel), alarms with days, label and sound.
+- **Thermostat**: a dial, a remote control, a wall thermostat and a neon one; room by room, with fan, swing and presets.
+- **Quick controls**: tiles with a details sheet, a mixing desk with faders and meters, a flight deck with toggle levers and lamps.
+- **Cameras**: one big or all of them; the doorbell wakes the panel with the visitor on screen and, with a lock, hold to open.
+- **Calendar**: agenda, day, three days, week and month, a departure board, a tear-off calendar and a wall calendar written in pen; event details from every view.
+- **To-do lists**: plain, a shop receipt, a terminal, label tapes and a notepad in handwriting; adding with a description and a due date, ticking and unticking, several lists.
+- **Notifications**: a list, fridge notes, a pager and the evening news.
+- **Every look moves in its own way**: digits that roll, fill or flip, nixie afterglow, LCD segments that lag, the hourglass turning over, the turntable's arm, a receipt that feeds, new notifications sliding, slapping, buzzing or breaking in, a lamp test, and many more small motions across every page.
+
+### Over the pages
+
+- **New notifications** in a window in the notifications page's look: several in one window, OK marks read, Dismiss removes; kept for a while or until answered.
+- **Status screens and critical alerts** from the integration's rules: in their own colour, folded into a strip; a critical alert sounds until held.
+- **Do not disturb** with what it lets through; the **screensaver** inside its window (dark room, times, sunset to sunrise, always), never while a timer runs.
+- **Voice view** in four looks (plain, terminal, comic, oscilloscope): listening, listening for more, not understood, thinking, the answer typed as it is spoken; the oscilloscope draws the sound itself.
+- **Keyboard** with accented letters on a long press, Latin and Cyrillic letters, a capital at the start.
+
+### Voice, timers and sound
+
+- **Timers live in Home Assistant**: started and changed on the panel or by voice from any device of the house (the panel named by its room), the same timers everywhere.
+- **A spoken stop over a ringing timer or alarm**: the panel hears its own Stop and the wake words and checks short phrases with speech recognition, outside any conversation.
+- **Sounds**: timers, alarms and critical alerts ring with a chosen sound (the panel's own, uploaded ones, or music from Music Assistant for alarms, rising from quiet).
+- **The panel is a media player** in Home Assistant (music and announcements streamed to its speaker).
+
+### Home Assistant
+
+- **The PanelOS page rebuilt**: every panel with its live screen beside its settings; pages in swipe order with each look shown as the panel draws it, options per page, a widget editor with sizes and styles, alerts and status screens shared by all panels, voice, display, device, copy settings to other panels, add a panel; wide, medium and phone layouts, explanations behind (i) buttons.
+- **PanelOS notifications**: a notify entity per panel and the `panelos.notify` action (title, message, icon, level, a picture, up to three buttons that fire `panelos_notification_action`, until answered).
+- **Voice tools** for agents that use the Assist API: start, cancel and list a panel's timers by its room.
+- **Sounds and alarms** on the page: a sound picker with listening, uploads (MP3, WAV, OGG, FLAC), the panel's alarms.
+- Own critical alerts started by a device or an automation (`panelos.critical_alert`, `panelos.clear_critical_alert`); status screens started by automations.
+
+### Connection
+
+- Keep-alive with Home Assistant every second and a link watch that reconnects a link that says connected but carries nothing.
+- The last settings from the integration are kept on the panel and used at start.
+- Roaming also judges the link's quality and avoids a poor access point for two hours; Wi-Fi power save always off.
+
 ## 0.0.4
 
 **Upgrading from 0.0.3**: the integration is now `panelos` instead of `nspanel_pro`. Write the new image to the panel, install PanelOS in Home Assistant, remove the old NSPanel Pro integration and its `custom_components/nspanel_pro` folder, restart Home Assistant and add PanelOS ([docs/home_assistant.md](docs/home_assistant.md#upgrading-from-003)).

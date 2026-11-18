@@ -2,37 +2,33 @@
 
 ## Core
 
-- Render a Home Assistant dashboard natively (no browser): pages, swipe between pages, tap to act, drag to set values.
+- Its own interface for Home Assistant, drawn on the GPU (no browser): pages side by side without an end, a status bar, a quick shade, sheets that follow the finger; tap to act, drag to set values. Pages: custom (a living weather background or a synthwave scene with widgets), weather, clock, music, timers / alarms / stopwatch, thermostat, quick controls, cameras, calendar, to-do, notifications; set per panel on the PanelOS page in Home Assistant.
 - Connect to Home Assistant over the WebSocket API; pairing by the QR-code login (OAuth), no token typing (see docs/decisions.md).
 - First start on the panel: Home Assistant found on the network (mDNS) or its address typed on a keypad.
 - Announced over mDNS like any ESPHome device, so Home Assistant discovers the panel (inside one network segment).
 - Outages: the panel keeps trying for good, shows what it waits for, and comes back by itself; no 1970 time on the screen.
-- Wi-Fi: while idle, about every 30 minutes, the panel moves to an access point of the same network that is at least 10 dB stronger.
+- Wi-Fi: while idle, about every 30 minutes, the panel moves to an access point of the same network that is at least 10 dB stronger, and away from one whose link is poor; power save is always off.
 
 ## Look and feel
 
-- The present look is a first working version; the design will be redone from scratch, so for now function comes first and nothing is polished.
+- The PanelOS look on every screen (its palette, type and mark), light, dark or automatic; one set of controls, shared with the PanelOS page in Home Assistant. Every page comes in several looks, and each look moves in its own way.
 - **Boot screen:** the PanelOS logo already in the bootloader (`assets/bootlogo.bmp`), then the own boot animation instead of kernel text, rendered pixel-exact from `assets/logo.svg` and `assets/logotype.svg` (`tools/splash/`). The logotype (white letters, the red logo as the first A) turns into the round logo, the white line draws itself, then the small logotype and the slogan appear under the logo. Until Wi-Fi is up and the app has the clock and the first Home Assistant data, a light band runs across the dimmed small logotype; then the UI takes over with current content. Power on to the dashboard in about 12 s (stock firmware: about 53 s). Details and timings in docs/bringup.md.
 
-- The app does not run Home Assistant's card code. It reads the content: the dashboard configuration (which cards, which entities, order, titles) and the entity states, and draws everything itself. So the look is entirely the app's own.
-- Default look close to Home Assistant's default theme; further themes selectable on the panel (and from Home Assistant).
-- Option to check: follow the theme selected in Home Assistant (theme variables such as primary colour, card background, text colours, read over the WebSocket API).
+- The app does not run Home Assistant's card code: it reads the entity states and draws everything itself, so the look is entirely the app's own. Home Assistant dashboards can still be shown in a web view (dashboard mode, secondary).
 - Icons: entity icons (`mdi:...`) from the Material Design Icons set that Home Assistant uses; selectable icon sets, including own icon sets (SVG files). Each icon set's licence is checked before it ships.
 
-## Added after the first dashboard version
+## Screens over the pages
 
-- Dashboard edits appear on the panel at once (the app reloads on `lovelace_updated`).
-- Details layer instead of plain toggles: light brightness, colour temperature, colour; shutter position; climate modes, fan, preset, swing; media volume, source.
-- Dark / light / auto theme.
-- Screensaver: clock or screen off, wake on touch or approach.
-- Settings screen, with the same settings as ESPHome entities in Home Assistant.
+- Status screens and critical alerts from the integration's rules, the doorbell, new notifications in a window, do not disturb.
+- Screensaver: a clock face or the screen off, wake on touch or approach.
+- Settings list (Wi-Fi, Home Assistant, display, voice, sound, storage, touch calibration, restart), with the same settings as entities in Home Assistant.
 
 ## Hardware
 
 - Proximity: learn the resting level and its noise, wake the screen after two consecutive readings above the signal of a hand at the wake distance (45 cm); also report presence.
 - Ambient light: report illuminance; automatic brightness (minimum in the dark, maximum at about 500 lx, logarithmic curve in between, smoothed).
 - Backlight: 1000 levels, from 0.8 % up, smooth fades, and full off for sleep.
-- Screensaver: clock, weather, optional photo; wakes on touch, approach or a Home Assistant command.
+- Screensaver: a clock face (date, weather and the next event optional); wakes on touch, approach or a Home Assistant command.
 - Audio: touch click, announcements generated by Home Assistant TTS, volume control.
 - Voice: Assist satellite over the ESPHome native API with on-device wake words and echo cancellation (see docs/app.md).
 - Diagnostics: Wi-Fi signal, SoC temperature, app version.

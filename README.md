@@ -2,7 +2,7 @@
 
 Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running its own native interface for Home Assistant (**Rust + Slint**, drawn on the GPU) and a voice satellite. No browser, no cloud.
 
-Version **0.0.4** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
+Version **0.0.5** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0-or-later ([LICENSE](LICENSE)).
 
 ## Supported devices
 
@@ -20,12 +20,13 @@ PanelOS draws its own interface on the panel's GPU: no browser, no web page, eve
 
 **Pages for everything you use, each in looks with character.**
 - **Music**: a clean cover, the cover full screen, a turntable whose arm follows the track and whose record takes the cover's colour, a cassette and half a cassette; pick any player of the house, move the music to another one or play in several rooms at once.
-- **Timers, alarms and a stopwatch**: a plain ring, a kitchen timer, an hourglass, a flip clock or a synthwave sunset; quick starts, your own lengths, alarms for chosen days.
+- **Timers, alarms and a stopwatch**: a plain ring, a kitchen timer, an hourglass, a flip clock or a synthwave sunset; the stopwatch as a chronograph, a timing tower, an LCD sports watch or nixie tubes, the alarms as a twin-bell clock, a sunrise, a clock radio or a 24-hour dial; quick starts, your own lengths, alarms for chosen days, and timers set by voice from any room.
 - **Thermostat**: a dial, a remote control, a wall thermostat with slide switches, or a neon one; room by room.
 - **Cameras**: one big or all of them, and when the doorbell rings the panel wakes with the visitor on screen, and with a lock, hold to open.
 - **Calendar**: agenda, day, three days, week and month, or a departure board, a tear-off calendar and a wall calendar with your events written in pen.
 - **To-do lists**: a plain list, a shop receipt, a terminal, embossed label tapes, or a yellow notepad in handwriting where every letter comes out a little different.
 - **Notifications**: a list, sticky notes on a fridge, a 90s pager, or the evening news.
+- **Clock**: digital or analog faces, a split-flap board, the time in words, nixie tubes, an LCD quartz watch or a twin-bell alarm clock; on its own page, as a widget and on the screensaver.
 - **Quick controls**: tiles, a mixing desk with faders, or a flight deck with toggle switches.
 
 **It tells you what matters.** Status screens show what happens at home (someone in the bathroom, a call going on, the robot vacuum at work) in their own colour, with a few words; a swipe folds one into a strip on top. A critical alert (smoke, CO, gas, water) takes the whole screen in red and keeps sounding until someone holds the button. Do not disturb lets through what you choose.

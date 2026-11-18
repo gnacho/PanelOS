@@ -2857,7 +2857,7 @@ dependencies = [
 
 [[package]]
 name = "nspanel-app"
-version = "0.0.4"
+version = "0.0.5"
 dependencies = [
  "alsa",
  "cc",

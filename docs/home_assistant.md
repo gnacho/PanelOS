@@ -52,6 +52,13 @@ The Marketplace is built into Home Assistant since 2026.11 (it replaces HACS).
 5. From the unpacked ZIP, copy the folder `custom_components/panelos` into that `custom_components` folder. The result is `config/custom_components/panelos`, with the `__init__.py` and `manifest.json` files directly inside.
 6. Restart Home Assistant: **Settings → System**, the power icon at the top right, **Restart Home Assistant**.
 
+## Upgrading from 0.0.4
+
+Update the panel and the integration together: the new interface uses the integration's newer requests (timers through Home Assistant, PanelOS notifications, page settings from the panel).
+
+1. Write the new image to the panel (install guide, "Updating later") and put the UI bundle and the web bundle on it (`docs/app.md`, "Build, run, develop").
+2. Copy the new `custom_components/panelos` folder to Home Assistant and restart it. The settings stay; the PanelOS page loads its new version by itself.
+
 ## Upgrading from 0.0.3
 
 Up to PanelOS 0.0.3 the integration was called NSPanel Pro (`nspanel_pro`); since 0.0.4 it is PanelOS (`panelos`), and the panel is a device of its own.
