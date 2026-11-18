@@ -56,6 +56,8 @@ pub enum FromApi {
 /// bits): the voice view's halo and trace read it.
 pub static MIC_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 /// The last 100 ms of the microphone and of the panel's own sound (16 kHz): the oscilloscope look draws the sound itself.
+/// Set while the voice view shows: the microphone's level and trace are then kept up to date outside a run too.
+pub static METER_ON: AtomicBool = AtomicBool::new(false);
 pub static MIC_TRACE: std::sync::Mutex<std::collections::VecDeque<i16>> = std::sync::Mutex::new(std::collections::VecDeque::new());
 pub static OUT_TRACE: std::sync::Mutex<std::collections::VecDeque<i16>> = std::sync::Mutex::new(std::collections::VecDeque::new());
 const TRACE_KEEP: usize = 1600;
@@ -459,7 +461,7 @@ pub enum Sound {
 }
 
 /// Speech over a ringing timer: this many dB over what is left of the ring after the echo canceller...
-const RING_SPEECH_DB: f64 = 10.0;
+const RING_SPEECH_DB: f64 = 8.0;
 /// ...for this many 10 ms frames (net) starts a piece of speech...
 const RING_SPEECH_FRAMES: u32 = 6;
 /// ...which ends after this many frames under RING_SPEECH_END dB over the ring, at most RING_SPEECH_MAX frames
@@ -555,7 +557,7 @@ impl RingEar {
                 eprintln!("nspanel-app: voice: speech over the ring ({over:+.1} dB over its echo, {floor:.0} dB)");
             }
         }
-        if self.reported.elapsed() > Duration::from_secs(5) {
+        if self.reported.elapsed() > Duration::from_secs(5) && self.peak > f64::MIN {
             self.reported = Instant::now();
             eprintln!(
                 "nspanel-app: voice: ring echo {:.0} dB (room {room:.0} dB), loudest {:+.1} dB over it, {} pieces of speech",
@@ -579,6 +581,7 @@ fn hear_over_ring(samples: Vec<i16>, tx: &mpsc::Sender<String>) {
     let tx = tx.clone();
     std::thread::spawn(move || {
         let t0 = Instant::now();
+        dump_ring_piece(&samples);
         match crate::stt::recognize(&samples) {
             Ok(text) => {
                 eprintln!(
@@ -592,6 +595,34 @@ fn hear_over_ring(samples: Vec<i16>, tx: &mpsc::Sender<String>) {
         }
         BUSY.fetch_sub(1, Ordering::SeqCst);
     });
+}
+
+/// Development: when the folder /tmp/nspanel-ring-dump exists, every piece sent to the speech recognition over a ring
+/// is also written there (16 kHz mono WAV, the last 20 kept), to compare recognition settings afterwards.
+fn dump_ring_piece(samples: &[i16]) {
+    let dir = std::path::Path::new("/tmp/nspanel-ring-dump");
+    if !dir.is_dir() {
+        return;
+    }
+    static N: AtomicU32 = AtomicU32::new(0);
+    let n = N.fetch_add(1, Ordering::SeqCst);
+    let _ = std::fs::remove_file(dir.join(format!("piece-{:03}.wav", (n + 1000 - 20) % 1000)));
+    let data: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
+    let mut wav = Vec::with_capacity(44 + data.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&16000u32.to_le_bytes());
+    wav.extend_from_slice(&32000u32.to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&data);
+    let _ = std::fs::write(dir.join(format!("piece-{:03}.wav", n % 1000)), wav);
 }
 
 /// Longest sound the panel plays from a file (an answer or announcement).
@@ -1163,10 +1194,10 @@ pub fn spawn(
                         match kind {
                             // STT VAD start
                             11 => {
-                                if follow_up_run && !speech_seen {
+                                if !speech_seen {
                                     speech_seen = true;
                                     eprintln!(
-                                        "nspanel-app: voice: follow-up speech after {} ms (Home Assistant)",
+                                        "nspanel-app: voice: speech after {} ms (Home Assistant)",
                                         stream_start.elapsed().as_millis()
                                     );
                                 }
@@ -1434,6 +1465,14 @@ pub fn spawn(
                     eprintln!("nspanel-app: voice: '{text}' is not a stop phrase");
                 }
             }
+            if METER_ON.load(Ordering::Relaxed) && state != State::Streaming {
+                let rms = if muted { 0.0 } else { (chunk.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / chunk.len().max(1) as f64).sqrt() };
+                let db = 20.0 * (rms / 32768.0).max(1e-9).log10();
+                MIC_LEVEL.store((((db + 60.0) / 40.0).clamp(0.0, 1.0) as f32).to_bits(), Ordering::Relaxed);
+                if !muted {
+                    keep_trace(&MIC_TRACE, chunk.iter().copied());
+                }
+            }
             match state {
                 State::Idle => {
                     let speaking =
@@ -1553,27 +1592,29 @@ pub fn spawn(
                     }
                 }
                 State::Streaming => {
-                    if follow_up_run && !speech_seen && test_audio.is_none() {
+                    // after the wake word too: nobody speaking within FOLLOW_UP_SILENCE ends the listening
+                    if !speech_seen && test_audio.is_none() {
                         if detector.speech(chunk) {
                             speech_seen = true;
                             eprintln!(
-                                "nspanel-app: voice: follow-up speech after {} ms (panel)",
+                                "nspanel-app: voice: speech after {} ms (panel)",
                                 stream_start.elapsed().as_millis()
                             );
                         } else if stream_start.elapsed() > FOLLOW_UP_SILENCE {
                             // Nobody spoke: abort the run (Home Assistant drops it, no answer).
                             eprintln!(
-                                "nspanel-app: voice: no speech in the follow-up window ({} s; room {:.0} dB, loudest {:+.1} dB over it), listening ended",
+                                "nspanel-app: voice: no speech within {} s (room {:.0} dB, loudest {:+.1} dB over it), listening ended",
                                 FOLLOW_UP_SILENCE.as_secs(),
                                 detector.floor,
                                 detector.peak
                             );
                             let _ = to_api.send(ToApi::Stop);
                             state = State::Idle;
-                            follow_up_run = false;
                             quiet_until = Some(Instant::now() + Duration::from_secs(3));
                             engine.reset();
-                            ui(VoiceUi::Idle);
+                            // an empty follow-up just closes; after a wake word the panel says it heard nothing
+                            ui(if follow_up_run { VoiceUi::Idle } else { VoiceUi::NotUnderstood });
+                            follow_up_run = false;
                             continue;
                         }
                     }

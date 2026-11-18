@@ -37,6 +37,8 @@ pub enum Command {
     Timer { action: String, timer_id: String, seconds: u32, name: String },
     /// An answer to one of PanelOS's notifications (ok, read, dismiss, button with its index).
     Notification { id: String, answer: String, button: Option<i32> },
+    /// Any other websocket command of Home Assistant (its type and data; the id is added).
+    Raw(Value),
 }
 
 pub enum Event {
@@ -309,6 +311,11 @@ fn session(
                     if !entity_id.is_empty() {
                         msg["target"] = json!({ "entity_id": entity_id });
                     }
+                    send_json(&mut ws, &msg)?;
+                }
+                Command::Raw(mut msg) => {
+                    next_id += 1;
+                    msg["id"] = json!(next_id);
                     send_json(&mut ws, &msg)?;
                 }
                 Command::Reload => return Ok(()),

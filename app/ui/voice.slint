@@ -134,7 +134,7 @@ export component VoicePage inherits Rectangle {
             x: root.jump + parent.width * (1 - term.sx) / 2; y: parent.height * (1 - term.sy) / 2; width: parent.width * term.sx; height: parent.height * term.sy; clip: true;
             Rectangle { x: -parent.x + root.jump; y: -parent.y; width: 480px; height: 480px;
                 for t[i] in [
-                    { y: 12px, s: "PanelOS " + root.version + " · " + root.assistant, dim: true },
+                    { y: 12px, s: "PanelOS " + root.version + (root.assistant == "" ? "" : " · " + root.assistant), dim: true },
                     { y: 32px, s: "MODE " + term.mode + (root.listening ? "   MIC [" + term.bar + "]" : ""), dim: false },
                     { y: 52px, s: "-------------------------------------------", dim: true },
                 ]: Text { x: 22px; y: t.y; text: t.s; font-family: "DejaVu Sans Mono"; font-size: 14px; color: term.ink.with-alpha(t.dim ? 0.55 : 0.9); overflow: elide; width: 436px; }
@@ -169,17 +169,25 @@ export component VoicePage inherits Rectangle {
     property <image> prev-dots;
     property <image> cur-dots;
     property <duration> wipe-t0: -10s;
-    changed dots => { root.prev-dots = root.cur-dots; root.cur-dots = root.dots; root.wipe-t0 = animation-tick(); }
-    property <float> wipe: clamp((animation-tick() - root.wipe-t0) / 250ms, 0, 1);
+    // (the times below follow the animation clock only while their motion runs: afterwards they stand, so the
+    // bubbles stay cached layers over the swaying halftone)
+    property <bool> wipe-anim;
+    changed dots => { root.prev-dots = root.cur-dots; root.cur-dots = root.dots; root.wipe-t0 = animation-tick(); root.wipe-anim = true; }
+    Timer { interval: 300ms; running: root.wipe-anim; triggered => { root.wipe-anim = false; } }
+    property <float> wipe: root.wipe-anim ? clamp((animation-tick() - root.wipe-t0) / 250ms, 0, 1) : 1;
     property <length> sway: 10px * Math.sin(360deg * root.ot / 6000);
     property <duration> hb-t0;
     property <bool> hb-on: root.look == 2 && (root.heard != "" || root.listening || root.state == 6);
-    changed hb-on => { if root.hb-on { root.hb-t0 = animation-tick(); } }
-    property <float> hb-t: (animation-tick() - root.hb-t0) / 1ms;
+    property <bool> hb-anim;
+    changed hb-on => { if root.hb-on { root.hb-t0 = animation-tick(); root.hb-anim = true; } }
+    Timer { interval: 1200ms; running: root.hb-anim; triggered => { root.hb-anim = false; } }
+    property <float> hb-t: root.hb-anim ? (animation-tick() - root.hb-t0) / 1ms : 100000;
     property <duration> ab-t0;
     property <bool> ab-on: root.answer != "";
-    changed ab-on => { if root.ab-on { root.ab-t0 = animation-tick(); } }
-    property <float> ab-t: (animation-tick() - root.ab-t0) / 1ms;
+    property <bool> ab-anim;
+    changed ab-on => { if root.ab-on { root.ab-t0 = animation-tick(); root.ab-anim = true; } }
+    Timer { interval: 1200ms; running: root.ab-anim; triggered => { root.ab-anim = false; } }
+    property <float> ab-t: root.ab-anim ? (animation-tick() - root.ab-t0) / 1ms : 100000;
     pure function pop(t: float) -> float { (0.9 + 0.1 * Jelly.edge(t, 80, 230)) * Jelly.wobble(t, 0.06) }
     pure function puff(t: float) -> float { t <= 0 ? 0 : t < 84 ? 1.15 * t / 84 : t < 120 ? 1.15 - 0.15 * (t - 84) / 36 : 1 }
     if root.look == 2: Rectangle {
@@ -190,14 +198,16 @@ export component VoicePage inherits Rectangle {
             Image { x: -10px + root.sway; y: -10px + root.sway; width: 500px; height: 500px; source: root.dots; } }
         // the caption box on top: the state
         Rectangle { x: 18px; y: 16px; width: min(cap.preferred-width + 28px, parent.width - 36px); height: 38px; background: #fff7d6; border-width: 3px; border-color: #111111;
+            cache-rendering-hint: true;   // over the swaying halftone: drawn once, not every frame
             cap := Text { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; text: root.line.to-uppercase(); font-size: 16px; font-weight: 800; color: #111111;
                 vertical-alignment: center; overflow: elide; } }
         // the person's words: a bubble with its tail to the bottom left (it pops from there)
         if root.hb-on: hb-box := Rectangle { x: 22px; y: 78px; width: parent.width - 120px; height: min(hb.preferred-height, 84px) + 30px;
             transform-scale-x: root.pop(root.hb-t); transform-scale-y: root.pop(root.hb-t); transform-origin: { x: 50px, y: self.height };
-            Rectangle { background: #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
-            hb := Text { x: 18px; y: 15px; width: parent.width - 36px; height: parent.height - 30px; text: root.heard != "" ? root.heard.to-uppercase() : root.state == 6 ? "? ? ?" : "";
-                font-size: 18px; font-weight: 800; color: #111111; wrap: word-wrap; overflow: elide; vertical-alignment: center; }
+            Rectangle { cache-rendering-hint: true;
+                Rectangle { background: #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
+                hb := Text { x: 18px; y: 15px; width: parent.width - 36px; height: parent.height - 30px; text: root.heard != "" ? root.heard.to-uppercase() : root.state == 6 ? "? ? ?" : "";
+                    font-size: 18px; font-weight: 800; color: #111111; wrap: word-wrap; overflow: elide; vertical-alignment: center; } }
             // waiting for words: three dots bounce one after another (6 px, 0.9 s)
             if root.heard == "" && root.state != 6: Rectangle { x: 18px; y: 15px; height: parent.height - 30px;
                 for k in 3: Text { x: k * 18px; y: -6px * max(0, Math.sin(360deg * (root.ot - k * 150) / 900)); height: parent.height; text: "•";
@@ -210,11 +220,13 @@ export component VoicePage inherits Rectangle {
                 for k in 6: Rectangle { x: parent.width + 8px + Math.mod(k * 7, 11) * 1px; y: 10px + k * 14px; width: 14px + Math.mod(k * 5, 9) * 1px; height: 3px; background: #111111; } }
         }
         // the panel's answer: a bubble from the bottom right (or a thought cloud while thinking)
-        if root.answer != "": Rectangle { x: 80px; y: parent.height - self.height - 54px; width: parent.width - 102px; height: min(ab.preferred-height, 200px) + 34px;
+        if root.answer != "" && root.state != 2: Rectangle { x: 80px; y: parent.height - self.height - 54px; width: parent.width - 102px; height: min(ab.preferred-height, 200px) + 34px;
             transform-scale-x: root.pop(root.ab-t); transform-scale-y: root.pop(root.ab-t); transform-origin: { x: self.width - 56px, y: self.height };
+            Rectangle { cache-rendering-hint: true;
             Rectangle { background: root.state == 4 ? #ff6b6b : #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
             ab := Text { x: 18px; y: 17px; width: parent.width - 36px; height: parent.height - 34px; text: root.answer.to-uppercase(); font-weight: 800; color: #111111;
                 font-size: root.answer.character-count > 120 ? 16px : 20px; wrap: word-wrap; overflow: elide; vertical-alignment: center; }
+            }
             Path { x: parent.width - 74px; y: parent.height - 3px; width: 36px; height: 34px; viewbox-width: 36; viewbox-height: 34; fill: root.state == 4 ? #ff6b6b : #ffffff;
                 stroke: #111111; stroke-width: 3px; commands: "M 6 0 L 34.5 0 L 33 32.5 Z"; }
             Rectangle { x: parent.width - 66px; y: parent.height - 3px; width: 25px; height: 3px; background: root.state == 4 ? #ff6b6b : #ffffff; }

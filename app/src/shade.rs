@@ -184,6 +184,7 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                 s.settings.save();
                 let _ = s.device_notify.send(());
             });
+            ui.set_speaker_muted(percent == 0);
             fill(ui);
         }
         "set.mic" => {
@@ -194,6 +195,8 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                 s.settings.save();
                 let _ = s.device_notify.send(());
             });
+            // the hint line follows at once (not with the next refresh)
+            crate::refresh_hint(ui);
             fill(ui);
         }
         "set.theme" => {

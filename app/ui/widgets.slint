@@ -165,7 +165,13 @@ export component DragSheet inherits Rectangle {
                 }
             }
         }
-        @children
+        // a sideways drag on the sheet belongs to the sheet: it neither turns the page under it nor ends as a tap on
+        // a row (the gesture takes it from the rows)
+        SwipeGestureHandler {
+            width: parent.width; height: parent.height;
+            handle-swipe-left: true; handle-swipe-right: true;
+            @children
+        }
     }
 }
 
@@ -680,13 +686,16 @@ export component Dropdown inherits Rectangle {
     border-width: pop-open ? 1px : 0px;
     border-color: Theme.accent.with-alpha(0.45);
     property <bool> pop-open;
+    // the menu opens upwards by itself when it would not fit under the field on the 480 px screen
+    property <length> menu-h: Math.min(8, root.options.length) * 48px + 12px;
+    property <bool> opens-up: root.up || root.absolute-position.y + root.height + 6px + root.menu-h > 480px;
     Text { x: 16px; y: 0; width: parent.width - 52px; height: parent.height; text: root.selected >= 0 && root.selected < root.options.length ? root.options[root.selected] : root.placeholder;
         font-size: 15px; font-weight: 500; color: root.selected >= 0 ? Theme.text : Theme.muted; vertical-alignment: center; overflow: elide; }
     Icon { x: parent.width - 36px; y: 0; width: 24px; height: parent.height; text: root.pop-open ? "\u{F0143}" : "\u{F0140}"; font-size: 22px; color: Theme.muted; }
     TouchArea { clicked => { root.pop-open = true; menu.show(); } }
     menu := PopupWindow {
         x: 0;
-        y: root.up ? -(Math.min(8, root.options.length) * 48px + 12px) - 6px : root.height + 6px;
+        y: root.opens-up ? -root.menu-h - 6px : root.height + 6px;
         width: root.width;
         close-policy: close-on-click-outside;
         Rectangle {

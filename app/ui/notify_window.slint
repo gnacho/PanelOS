@@ -109,7 +109,8 @@ export component NotifWindow inherits Rectangle {
     property <duration> back-t0;
     property <bool> backing;
     Timer { interval: 520ms; running: root.backing; triggered => { root.backing = false; } }
-    property <length> dx: hold-ta.pressed ? root.sw-dx : root.backing ? root.back-from * (1 - Jelly.edge((animation-tick() - root.back-t0) / 1ms, 70, 220)) : 0px;
+    // (the pager device stays put while a sideways swipe steps its messages)
+    property <length> dx: root.look == 2 ? 0px : hold-ta.pressed ? root.sw-dx : root.backing ? root.back-from * (1 - Jelly.edge((animation-tick() - root.back-t0) / 1ms, 70, 220)) : 0px;
     pure function c-of(i: int) -> string { root.count > 1 ? (i + 1) + " of " + root.count : "" }
     // the area under the status bar: y 46–480, its centre at y 263
     property <length> cy: 263px;
@@ -150,7 +151,7 @@ export component NotifWindow inherits Rectangle {
             }
         }
         moved => {
-            if root.count > 1 && root.look != 2 {
+            if root.count > 1 {
                 root.sw-dx = self.mouse-x - self.pressed-x;
                 if animation-tick() > root.sw-lt { root.sw-v = 0.5 * root.sw-v + 0.5 * (self.mouse-x - root.sw-last) / 1px / ((animation-tick() - root.sw-lt) / 1ms); }
                 root.sw-last = self.mouse-x; root.sw-lt = animation-tick();

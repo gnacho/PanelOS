@@ -147,7 +147,21 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     };
     ui.set_thermo_look(slot.variant);
     let entities = crate::page_entities(s, "thermostat");
-    let devices: Vec<ClimateDev> = entities.iter().map(|id| device(id, s.states.get(id))).collect();
+    let devices: Vec<ClimateDev> = entities
+        .iter()
+        .map(|id| {
+            let mut d = device(id, s.states.get(id));
+            // a value just set stays shown until Home Assistant reports it (or 5 s pass)
+            if let Some(t) = pending(id) {
+                if (d.target - t).abs() < 0.01 {
+                    PENDING.with(|p| p.borrow_mut().remove(id));
+                } else {
+                    d.target = t;
+                }
+            }
+            d
+        })
+        .collect();
     if devices.is_empty() {
         return;
     }
@@ -162,6 +176,19 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     ui.set_thermo_sel(sel as i32);
 }
 
+thread_local! {
+    /// Targets set on the panel that Home Assistant has not reported back yet: (value, when).
+    static PENDING: std::cell::RefCell<std::collections::HashMap<String, (f32, std::time::Instant)>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn pending(id: &str) -> Option<f32> {
+    PENDING.with(|p| p.borrow().get(id).filter(|(_, at)| at.elapsed() < std::time::Duration::from_secs(5)).map(|(t, _)| *t))
+}
+
+fn set_pending(id: &str, t: f32) {
+    PENDING.with(|p| p.borrow_mut().insert(id.to_string(), (t, std::time::Instant::now())));
+}
+
 /// Taps on the page (`thermo.*`).
 pub fn act(ui: &AppWindow, what: &str, value: &str) {
     let (entities, states) = with_state(|s| (crate::page_entities(s, "thermostat"), s.states.clone()));
@@ -173,7 +200,11 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
     match what {
         "thermo.minus" | "thermo.plus" => {
             let d = device(&id, st);
-            let t = (d.target + if what == "thermo.plus" { d.step } else { -d.step }).clamp(d.tmin, d.tmax);
+            // quick presses count one by one: the next step starts from the value just set, not from Home Assistant's
+            // state that has not caught up yet
+            let base = pending(&id).unwrap_or(d.target);
+            let t = (base + if what == "thermo.plus" { d.step } else { -d.step }).clamp(d.tmin, d.tmax);
+            set_pending(&id, t);
             call("set_temperature", &id, json!({"temperature": t}));
             // Shown at once; Home Assistant's new state follows.
             let devs = ui.get_thermo_devices();
@@ -187,6 +218,7 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             let d = device(&id, st);
             let v: f32 = value.parse().unwrap_or(d.target);
             let t = ((v / d.step).round() * d.step).clamp(d.tmin, d.tmax);
+            set_pending(&id, t);
             call("set_temperature", &id, json!({"temperature": t}));
             let devs = ui.get_thermo_devices();
             if let Some(mut cur) = slint::Model::row_data(&devs, sel) {

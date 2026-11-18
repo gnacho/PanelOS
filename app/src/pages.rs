@@ -511,15 +511,28 @@ pub fn parse_color(s: &str) -> Option<Color> {
 }
 
 /// The music widget's data (and the music page's) for a media player.
+thread_local! {
+    /// When each player was last seen to start playing (wall clock, s), and the state it had before.
+    static PLAY_SEEN: std::cell::RefCell<HashMap<String, f64>> = std::cell::RefCell::new(HashMap::new());
+    static LAST_STATE: std::cell::RefCell<HashMap<String, String>> = std::cell::RefCell::new(HashMap::new());
+}
+
 pub fn home_music(states: &HashMap<String, EntityState>, player: &str, art: Option<&slint::Image>, accent: Color) -> HomeMusic {
     let Some(p) = states.get(player) else { return HomeMusic { accent, ..Default::default() } };
+    // a start (paused / idle -> playing) noted when it is first seen
+    let before = LAST_STATE.with(|m| m.borrow_mut().insert(player.to_string(), p.state.clone()));
+    if p.state == "playing" && before.as_deref().is_some_and(|b| b != "playing") {
+        PLAY_SEEN.with(|m| m.borrow_mut().insert(player.to_string(), now_f()));
+    }
     let active = shows_track(p);
     let mut pos = attr_f64(p, "media_position").unwrap_or(0.0);
     if p.state == "playing" {
         // The position is reported at its update time; it moves on since (to the millisecond: the views
-        // run it on smoothly between updates).
+        // run it on smoothly between updates). A track that has just started again keeps its position until the
+        // player reports a fresh one: an update time from before the pause would count the paused time too.
         if let Some(at) = attr_str(p, "media_position_updated_at").and_then(parse_iso_f) {
-            pos += (now_f() - at).max(0.0);
+            let from = PLAY_SEEN.with(|m| m.borrow().get(player).copied()).map_or(at, |seen| at.max(seen));
+            pos += (now_f() - from).max(0.0);
         }
     }
     let dur = attr_f64(p, "media_duration").unwrap_or(0.0);
@@ -644,21 +657,28 @@ thread_local! {
     pub static TIMER_COLOURS: std::cell::RefCell<Vec<Color>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// A timer's own colour: by its place in the arrival order (colourful mode), else the panel's accent.
+pub fn timer_tint(seq: u64, accent: Color, colourful: bool) -> Color {
+    let own = TIMER_COLOURS.with(|c| c.borrow().clone());
+    let k = seq as usize;
+    if !colourful {
+        accent
+    } else if !own.is_empty() {
+        own[k % own.len()]
+    } else {
+        let c = TIMER_TINTS[k % TIMER_TINTS.len()];
+        Color::from_rgb_u8((c >> 16) as u8, (c >> 8) as u8, c as u8)
+    }
+}
+
 /// The timers page's list.
 pub fn timer_items(timers: &HashMap<String, Timer>, accent: Color, colourful: bool) -> Vec<TimerItem> {
-    let own = TIMER_COLOURS.with(|c| c.borrow().clone());
     ordered_timers(timers)
         .iter()
         .map(|(_, t)| {
-            let k = t.seq as usize;
-            let tint = if !colourful {
-                accent
-            } else if !own.is_empty() {
-                own[k % own.len()]
-            } else {
-                let c = TIMER_TINTS[k % TIMER_TINTS.len()];
-                Color::from_rgb_u8((c >> 16) as u8, (c >> 8) as u8, c as u8)
-            };
+            let tint = timer_tint(t.seq as u64, accent, colourful);
+            // the last minute of a running timer: its ring and time turn the alert colour (as on the island)
+            let tint = if t.active && t.remaining_exact() < 60.0 { Color::from_rgb_u8(0xff, 0x5a, 0x5f) } else { tint };
             TimerItem {
                 label: t.name.clone().into(),
                 remaining: t.remaining_exact(),

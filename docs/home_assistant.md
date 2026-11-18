@@ -164,7 +164,7 @@ Every value the panel sends is a row in the recorder's database (history, logboo
 
 | Option | Default | Range | How it is measured |
 |---|---|---|---|
-| Illuminance | 15 % | 1–100 % | Checked twice a second; the step is a share of the last value sent, and at least a third of the percentage in lux (5 lx at 15 %), so the noise of a dark room is not sent. A light switched on shows up at once. |
+| Illuminance | 15 % | 1–100 % | Checked twice a second; the step is a share of the last value sent and at least 5 lx, so the noise of a dark room is not sent. At most one change is sent in 10 seconds, and the value again every 10 minutes. |
 | SoC temperature | 1.0 °C | 0.1–10 °C | Read every minute, averaged over about five minutes (the sensor works in steps of about 0.45 °C and flips between neighbouring steps). |
 | Wi-Fi signal | 3 dB | 1–20 dB | Read every minute, averaged over about five minutes. |
 

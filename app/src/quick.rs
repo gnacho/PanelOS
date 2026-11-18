@@ -137,7 +137,6 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         // The desk's and the deck's panels and parts (loaded once).
         ui.set_quick_mixer_panel(picture("quick/mixer-panel.png"));
         ui.set_quick_fader(picture("quick/fader.png"));
-        ui.set_quick_deck_panel(picture("quick/deck-panel2.png"));
         ui.set_quick_toggle_up(picture("quick/toggle3d-up.png"));
         ui.set_quick_toggle_down(picture("quick/toggle3d-down.png"));
         // the lever's throw: 9 frames, down … up
@@ -153,6 +152,11 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     }
     let entities = crate::page_entities(s, "quick");
     let mut list = tiles(&s.states, &entities, crate::accent(s));
+    // the flight deck's plate: its finger wear under the levers' places (they are centred by their number)
+    let n = list.len().clamp(1, 8);
+    if DECK_N.with(|d| d.replace(n)) != n {
+        ui.set_quick_deck_panel(picture(&format!("quick/deck-panel-{n}.png")));
+    }
     // the mixing desk: a tiny label tape under each fader (the integration's tape text, else the
     // name's last word), coloured by kind
     let looks = crate::page_looks(ui, "quick");
@@ -164,7 +168,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
                 .and_then(|v| v.as_str())
                 .map(str::to_string)
                 .filter(|v| !v.is_empty())
-                .unwrap_or_else(|| t.name.split_whitespace().last().unwrap_or("").chars().take(7).collect());
+                .unwrap_or_else(|| short_name(&t.name, &room));
             let tint = match id.split('.').next().unwrap_or("") {
                 "climate" | "fan" | "water_heater" => crate::draw::Tint::Green,
                 "media_player" => crate::draw::Tint::Red,
@@ -189,6 +193,24 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     if ui.get_quick_sheet() {
         details(ui, ui.get_quick_sheet_index().max(0) as usize);
     }
+}
+
+thread_local! {
+    /// The number of levers the deck's plate was drawn for.
+    static DECK_N: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// A control's label when none is set in the integration: its whole name, without the panel's room in front
+/// ("Living room shutter left" -> "SHUTTER LEFT"); the tape cuts it where it does not fit.
+fn short_name(name: &str, room: &str) -> String {
+    let n = name.trim();
+    let r = room.trim().to_lowercase();
+    let rest: String = if !r.is_empty() && n.to_lowercase().starts_with(&format!("{r} ")) {
+        n.chars().skip(r.chars().count() + 1).collect()
+    } else {
+        n.to_string()
+    };
+    rest.trim().to_uppercase()
 }
 
 /// The line under the tiles: all off, some on, all on.

@@ -253,8 +253,12 @@ export component QuickPage inherits Rectangle {
         Image { x: 0; y: 0; width: 480px; height: 480px; source: root.mixer-panel; }
         Text { x: 20px; y: 46px; width: 300px; height: 28px; text: root.title; font-size: 18px; font-weight: 700; color: #e9ecef; vertical-alignment: center; overflow: elide; }
         Text { x: parent.width - 160px; y: 46px; width: 140px; height: 28px; text: root.mood; font-size: 12px; color: #adb5bd; horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
+        // the channels sit in the middle; with few of them the strips get wider steps (up to 84 px; 8 fill the desk)
+        property <int> nt: max(1, root.tiles.length);
+        property <length> pitch: min(84px, 448px / desk.nt);
+        property <length> x0: (480px - (desk.nt * desk.pitch - (desk.pitch - 52px))) / 2;
         for t[i] in root.tiles: ch := Rectangle {
-            x: 16px + i * 56px; y: 80px; width: 52px; height: 372px;
+            x: desk.x0 + i * desk.pitch; y: 80px; width: 52px; height: 372px;
             property <color> lit: t.gone ? #495057 : t.tint;
             property <bool> two: !t.dim && !t.gone;              // a plain switch: the fader has two places only
             Rectangle { x: 6px; y: 4px; width: 40px; height: 26px; border-radius: 4px; background: t.on ? ch.lit : #2b2f33; border-width: 1px; border-color: #0b0c0d;
@@ -330,7 +334,8 @@ export component QuickPage inherits Rectangle {
             Timer { interval: 60ms; running: ch.snapping; triggered => { ch.snapping = false; } }
             property <length> snap: ch.snapping && animation-tick() - ch.snap-t0 < 40ms ? 1px : 0px;
             if !t.gone && (t.dim || ch.two): Image { x: 4px; y: 140px + (1 - ch.level) * 170px - 13px + ch.snap; width: 44px; height: 30px; source: root.fader; }
-            Text { x: 0; y: 318px; width: parent.width; text: t.short; font-family: "DejaVu Sans Mono"; font-size: 12px; color: t.on ? #e9ecef : #868e96; horizontal-alignment: center; }
+            Text { x: -(desk.pitch - 52px) / 2 + 2px; y: 318px; width: desk.pitch - 4px; text: t.short; font-family: "DejaVu Sans Mono"; font-size: 12px; color: t.on ? #e9ecef : #868e96;
+                horizontal-alignment: center; overflow: elide; }
             if t.has-tape: Image { x: (parent.width - self.width) / 2; y: 334px + (34px - self.height) / 2;
                 width: t.tape.width * 1px; height: t.tape.height * 1px; source: t.tape; }
         }
@@ -348,9 +353,16 @@ export component QuickPage inherits Rectangle {
             vertical-alignment: center; overflow: elide; letter-spacing: 1px; }
         Text { x: 52px; y: 52px; width: 286px; height: 26px; text: root.title.to-uppercase(); font-size: 13px; font-weight: 800; color: #25282b;
             vertical-alignment: center; overflow: elide; letter-spacing: 1px; }
+        // the levers: rows of at most four (5 = 3 + 2, 6 = 3 + 3, 7 = 4 + 3), each row centred, one row in the middle of
+        // the plate; the plate's wear lies under these places (quick/deck-panel-N.png for N levers)
+        property <int> nt: min(8, root.tiles.length);
+        property <int> r0: deck.nt <= 4 ? deck.nt : deck.nt <= 6 ? 3 : 4;
+        pure function row-n(row: int) -> int { row == 0 ? deck.r0 : deck.nt - deck.r0 }
+        pure function cell-x(row: int, col: int) -> length { (480px - (deck.row-n(row) * 112px - 8px)) / 2 + col * 112px }
+        pure function cell-y(row: int) -> length { deck.nt <= 4 ? 188px : 104px + row * 168px }
         // painted group brackets
         for g in root.groups: Rectangle {
-            x: max(36px, 26px + g.start * 112px); y: 95px + g.row * 168px; width: min(444px, 20px + (g.start + g.count) * 112px - 14px) - self.x; height: 10px;
+            x: deck.cell-x(g.row, g.start) + 6px; y: deck.cell-y(g.row) - 9px; width: g.count * 112px - 20px; height: 10px;
             gt := Text { x: (parent.width - self.preferred-width) / 2; y: -6px; text: g.name; font-size: 10px; font-weight: 800; color: #eceff1d9; letter-spacing: 1px; }
             Rectangle { x: 0; y: 0; width: gt.x - 6px; height: 1.5px; background: #eceff1c0; }
             Rectangle { x: gt.x + gt.preferred-width + 6px; y: 0; width: parent.width - self.x; height: 1.5px; background: #eceff1c0; }
@@ -358,7 +370,9 @@ export component QuickPage inherits Rectangle {
             Rectangle { x: parent.width - 1.5px; y: 0; width: 1.5px; height: 7px; background: #eceff1c0; }
         }
         for t[i] in root.tiles: dk := Rectangle {
-            x: 20px + mod(i, 4) * 112px; y: 104px + floor(i / 4) * 168px; width: 104px; height: 156px;
+            property <int> drow: i < deck.r0 ? 0 : 1;
+            x: deck.cell-x(self.drow, i < deck.r0 ? i : i - deck.r0); y: deck.cell-y(self.drow); width: 104px; height: 156px;
+            visible: i < 8;
             property <float> lit: deck.lamp-test || ((dk.pending ? dk.to-up : t.on) && !t.gone) ? 1 : 0;
             // put out from outside (all off): left to right, 30 ms apart; a lamp of one's own throw goes out at once
             animate lit { duration: 100ms; delay: !dk.throwing && !dk.pending && !t.on ? i * 30ms : 0ms; easing: ease-out; }

@@ -206,6 +206,19 @@ fn patrol_went() {
 /// The scene clock's step (seconds): a whole number of the scenes' 40 s loops.
 const SCENE_WRAP_S: f32 = 1200.0;
 
+thread_local! {
+    /// The timers page's scene while its option says "random" (a new one each time the page is opened).
+    static TIMERS_RANDOM: std::cell::Cell<usize> = std::cell::Cell::new(random() as usize % 4);
+}
+
+/// The timers page was opened: a random scene picks a new one (never the same twice in a row).
+pub fn timers_opened() {
+    TIMERS_RANDOM.with(|r| {
+        let next = (r.get() + 1 + random() as usize % 3) % 4;
+        r.set(next);
+    });
+}
+
 /// Updates the scenes that are in use (once a second).
 pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     // any page on the list with a synthwave look (a kind may be there more than once)
@@ -243,9 +256,18 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
         // the beach's dawn view (the other scenes have none)
         ui.set_home_fl_back_c(if scene == 2 { pic("dawn", false) } else { slint::Image::default() });
         ui.set_home_fl_floor_c(if scene == 2 { pic("dawn", true) } else { slint::Image::default() });
-        ui.set_timers_sw_scene(scene as i32);
-        ui.set_timers_sw_back(crate::quick::picture(&format!("timers/sw/scene-{scene}-back.png")));
-        ui.set_timers_sw_floor(crate::quick::picture(&format!("timers/sw/scene-{scene}-floor.png")));
+    }
+    // the timers page's own scene (its option; -1 = a new random one every time the page is opened; none = the
+    // home page's)
+    let tscene = match crate::page_option(s, "timers", "scene").and_then(|v| v.as_i64()) {
+        Some(-1) => TIMERS_RANDOM.with(|r| r.get()),
+        Some(n) => n.clamp(0, 3) as usize,
+        None => scene,
+    };
+    if ui.get_timers_sw_scene() != tscene as i32 || ui.get_timers_sw_back().size().width == 0 {
+        ui.set_timers_sw_scene(tscene as i32);
+        ui.set_timers_sw_back(crate::quick::picture(&format!("timers/sw/scene-{tscene}-back.png")));
+        ui.set_timers_sw_floor(crate::quick::picture(&format!("timers/sw/scene-{tscene}-floor.png")));
     }
     if (ui.get_home_fl_mix() - mix).abs() > 0.004 {
         ui.set_home_fl_mix(mix);

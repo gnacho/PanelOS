@@ -9,7 +9,7 @@
 // waiting, none when off; so from across the room it is clear whether something is merely set or busy.
 // The device chip (top right) opens the rooms; the extra options (fan, swing, preset) open a sheet.
 // The app gives every text and decides what the device can do.
-import { Icon, GlowText, DragSheet, Dropdown, Segmented, Toggle, RollDigit } from "widgets.slint";
+import { Icon, GlowText, DragSheet, Dropdown, Segmented, Toggle, RollDigit, MarkButton } from "widgets.slint";
 import { Theme, Act, Words } from "theme.slint";
 
 export struct ClimateDev {
@@ -533,8 +533,12 @@ component Slide inherits Rectangle {
     if !root.vertical: Text { x: 0; y: 0; width: root.width; height: 14px; text: root.title; font-size: 10px; font-weight: 800; letter-spacing: 1.5px;
         color: root.print.with-alpha(0.75); horizontal-alignment: center; }
     if !root.vertical: Rectangle { x: (root.width - root.run - 24px) / 2; y: 22px; width: root.run + 24px; height: 14px; border-radius: 7px; background: root.slot; }
+    // long labels (VERTICAL, HORIZONTAL …) get room: wider, every second one a line lower, so none runs into the next
+    pure function label-len(i: int) -> int { i < 0 || i >= root.n ? 0 : (root.codes.length > 0 ? TK.caps[root.codes[i]] : root.stops[i]).character-count }
     for i in (root.vertical ? 0 : root.n): Text {
-        x: (root.width - root.run) / 2 + i * root.step - 24px; y: 42px; width: 48px; height: 14px;
+        property <bool> crowded: root.label-len(i) > 6 || root.label-len(i - 1) > 6 || root.label-len(i + 1) > 6;
+        x: (root.width - root.run) / 2 + i * root.step - (self.crowded ? 44px : 24px); y: 42px + (self.crowded && Math.mod(i, 2) == 1 ? 13px : 0px);
+        width: self.crowded ? 88px : 48px; height: 14px;
         text: root.codes.length > 0 ? TK.caps[root.codes[i]] : root.stops[i]; font-size: 10px; font-weight: 800; letter-spacing: 0.5px;
         color: i == root.cur ? root.hot : root.print.with-alpha(0.5); horizontal-alignment: center; vertical-alignment: center;
     }
@@ -902,12 +906,8 @@ export component ThermostatPage inherits Rectangle {
         sheet-color: Theme.surface; ink: Theme.text;
         clip: true;
         Text { x: 20px; y: 20px; height: 32px; text: "Rooms"; font-size: 20px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
-        // the page's look and options
-        Rectangle {
-            x: parent.width - 96px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: Theme.surface-raised;
-            Icon { text: "\u{F0493}"; font-size: 20px; color: Theme.text; }
-            TouchArea { clicked => { Act.act("thermo.settings", ""); } }
-        }
+        // the page's look and options: the settings button (the PanelOS mark, never a gear)
+        MarkButton { x: parent.width - 96px; y: 18px; size: 36px; clicked => { Act.act("thermo.settings", ""); } }
         Rectangle {
             x: parent.width - 52px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: Theme.surface-raised;
             Icon { text: "\u{F0156}"; font-size: 20px; color: Theme.text; }

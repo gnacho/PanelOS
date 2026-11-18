@@ -30,6 +30,11 @@ pub struct Note {
 }
 
 thread_local! {
+    /// The pager picture's finish now shown.
+    static PAGER_FINISH: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+}
+
+thread_local! {
     static NOTES: std::cell::RefCell<HashMap<String, Note>> = std::cell::RefCell::new(HashMap::new());
     /// The note open (its id), the pager's first list row.
     static OPEN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
@@ -350,10 +355,18 @@ fn show_window(ui: &AppWindow) {
         ui.set_info_pager_led(crate::quick::picture("info/pager-led.png"));
     }
     ui.set_info_clock(crate::pages::local_format(now(), "%H:%M").into());
-    ui.set_pop_look(look);
-    ui.set_pop_count(rows.len() as i32);
-    ui.set_pop_index(at as i32);
-    ui.set_pop_note(rows[at].clone());
+    if ui.get_pop_look() != look {
+        ui.set_pop_look(look);
+    }
+    if ui.get_pop_count() != rows.len() as i32 {
+        ui.set_pop_count(rows.len() as i32);
+    }
+    if ui.get_pop_index() != at as i32 {
+        ui.set_pop_index(at as i32);
+    }
+    if ui.get_pop_note() != rows[at] {
+        ui.set_pop_note(rows[at].clone());
+    }
     if let Some(m) = crate::pages::update_rows(&ui.get_pop_notes(), rows) {
         ui.set_pop_notes(m);
     }
@@ -446,12 +459,14 @@ fn close_window(ui: &AppWindow) {
 
 /// The notifications page (only when the panel has one).
 pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
+    let unread = NOTES.with(|n| n.borrow().values().filter(|n| n.unread).count()) as i32;
+    if ui.get_info_unread() != unread {
+        ui.set_info_unread(unread);
+    }
     // the window follows the list (a notification dismissed elsewhere leaves it)
+    // (and a fridge note's picture drawn after the window opened comes in)
     if ui.get_pop_on() {
-        let gone = WIN.with(|w| NOTES.with(|n| w.borrow().iter().any(|id| !n.borrow().contains_key(id))));
-        if gone {
-            show_window(ui);
-        }
+        show_window(ui);
     }
     let pages = ui.get_pages();
     let Some(slot) = (0..slint::Model::row_count(&pages)).filter_map(|i| slint::Model::row_data(&pages, i)).find(|p| p.kind == "info")
@@ -494,10 +509,14 @@ pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
     }
     // the pager's and the news look's clock and lines; the pager's body and the fridge door
     ui.set_info_clock(crate::pages::local_format(now(), "%H:%M").into());
-    if slot.variant == 2 && ui.get_info_pager_body().size().width == 0 {
+    if slot.variant == 2 {
+        // the pager's finish: loaded again whenever it changes
         let finish = crate::page_option(_s, "info", "finish").and_then(|v| v.as_str().map(str::to_string)).unwrap_or_else(|| "graphite".into());
-        ui.set_info_pager_body(crate::quick::picture(&format!("info/pager-{finish}.png")));
-        ui.set_info_pager_led(crate::quick::picture("info/pager-led.png"));
+        if PAGER_FINISH.with(|f| *f.borrow() != finish) || ui.get_info_pager_body().size().width == 0 {
+            ui.set_info_pager_body(crate::quick::picture(&format!("info/pager-{finish}.png")));
+            ui.set_info_pager_led(crate::quick::picture("info/pager-led.png"));
+            PAGER_FINISH.with(|f| *f.borrow_mut() = finish);
+        }
     }
     if slot.variant == 1 {
         let door = if slint::ComponentHandle::global::<crate::Theme>(ui).get_dark() { "info/door-dark.png" } else { "info/door-light.png" };

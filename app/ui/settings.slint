@@ -416,9 +416,10 @@ export component SettingsLayer inherits Rectangle {
                     if i > 0: Rectangle { x: 0; y: 0; width: parent.width; height: 1px; background: Brand.line; }
                     Rectangle { x: 0; y: 10px; width: 32px; height: 32px; border-radius: 10px; background: Brand.raised;
                         Icon { text: r.icon; font-size: 19px; color: r.danger ? Brand.bad : Brand.muted; } }
-                    Text { x: 46px; y: 0; width: 180px; height: parent.height; text: r.label; font-size: 15px; font-weight: 500; color: r.danger ? Brand.bad : Brand.text;
-                        vertical-alignment: center; overflow: elide; }
-                    Text { x: 226px; y: 0; width: parent.width - 226px - (r.danger ? 4px : 30px); height: parent.height; text: r.value; font-size: 13px; color: Brand.muted;
+                    rl := Text { x: 46px; y: 0; width: self.preferred-width; height: parent.height; text: r.label; font-size: 15px; font-weight: 500; color: r.danger ? Brand.bad : Brand.text;
+                        vertical-alignment: center; }
+                    // the value takes the rest of the row
+                    Text { x: rl.x + rl.width + 12px; y: 0; width: parent.width - self.x - (r.danger ? 4px : 30px); height: parent.height; text: r.value; font-size: 13px; color: Brand.muted;
                         horizontal-alignment: right; vertical-alignment: center; overflow: elide; }
                     if !r.danger: Icon { x: parent.width - 24px; y: 0; width: 22px; height: parent.height; text: "\u{F0142}"; font-size: 20px; color: Brand.muted; }
                 }
@@ -449,12 +450,13 @@ export component SettingsLayer inherits Rectangle {
     if root.view == 4: Rectangle {
         background: Brand.bg;
         TouchArea { }
-        Icon { x: 12px; y: 10px; width: 36px; height: 36px; text: "\u{F0141}"; font-size: 26px; color: Brand.text;
+        // under the status bar, at the settings list's title row
+        Icon { x: 16px; y: 56px; width: 36px; height: 36px; text: "\u{F0141}"; font-size: 26px; color: Brand.text;
             TouchArea { x: -8px; y: -8px; width: parent.width + 16px; height: parent.height + 16px; clicked => { Act.act("set.view", "3"); } } }
-        Text { x: 52px; y: 12px; height: 34px; text: root.page-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
-        Text { x: 20px; y: 50px; width: parent.width - 40px; text: root.page-sub; font-size: 13px; color: Brand.muted; }
+        Text { x: 56px; y: 52px; height: 44px; text: root.page-title; font-size: 21px; font-family: "Space Grotesk"; font-weight: 500; color: Brand.text; vertical-alignment: center; }
+        Text { x: 20px; y: 98px; width: parent.width - 40px; text: root.page-sub; font-size: 13px; color: Brand.muted; }
         // more sections than fit: the list scrolls
-        Flickable { x: 16px; y: 76px; width: parent.width - 32px; height: parent.height - 84px;
+        Flickable { x: 16px; y: 124px; width: parent.width - 32px; height: parent.height - 132px;
             viewport-height: max(self.height, col.preferred-height);
         col := VerticalLayout { width: parent.width; spacing: 10px; alignment: start;
             for sec in root.sections: Rectangle {

@@ -199,6 +199,11 @@ pub struct UiState {
     art_record: Option<slint::Color>,
     /// When a layer opened by a show request closes by itself.
     show_until: Option<Instant>,
+    /// When the light level was last sent to Home Assistant.
+    last_lux_report: Instant,
+    /// Play / pause pressed on the panel: (playing, when, the position then) until the player reports it (at most 3 s),
+    /// so the time neither runs on after a pause nor jumps after a play while the player catches up.
+    music_hold: Option<(bool, Instant, f32)>,
     /// Split-flap clock: the digits shown before the last change, and when it changed.
     digits: [String; 4],
     prev_digits: [String; 4],
@@ -418,6 +423,20 @@ fn weather_entity(s: &UiState) -> String {
     if e.is_empty() { s.settings.weather_entity.clone() } else { e }
 }
 
+/// A play / pause pressed on the panel holds until the player reports it (or 3 s): the shown state and, while
+/// paused, the position stay where the press left them.
+fn apply_music_hold(s: &mut UiState, music: &mut HomeMusic) {
+    let Some((want, at, pos)) = s.music_hold else { return };
+    if music.playing == want || at.elapsed() >= Duration::from_secs(3) {
+        s.music_hold = None;
+        return;
+    }
+    music.playing = want;
+    if !want {
+        music.pos = pos;
+    }
+}
+
 fn media_entity(s: &UiState) -> String {
     // The player picked on the panel (remembered), else the music page's, else the integration's.
     if !s.settings.music_player.is_empty() {
@@ -547,6 +566,9 @@ fn update_clock(ui: &AppWindow) {
         // when the minute turns (and at the start).
         data.seconds = 0.0;
         if ui.get_clock() != data {
+            // the thermostat remote's own clock (hours and minutes as numbers)
+            ui.set_thermo_clock_h(data.hh.parse().unwrap_or(0));
+            ui.set_thermo_clock_m(data.mm.parse().unwrap_or(0));
             ui.set_clock(data);
             let wall = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
             ui.invoke_sync_seconds(wall.rem_euclid(60.0) as f32);
@@ -576,13 +598,15 @@ fn update_clock(ui: &AppWindow) {
             s.timers.iter().filter(|(_, t)| t.own && t.active && t.remaining() == 0).map(|(id, _)| id.clone()).collect();
         for id in done {
             if let Some(t) = s.timers.remove(&id) {
-                ring_timer(ui, s, t.name);
+                let tint = pages::timer_tint(t.seq as u64, accent(s), ui.get_timers_colourful());
+                ring_timer(ui, s, t.name, tint);
                 RANG.with(|r| r.set(true));
             }
         }
         // The music position moves on while a player plays: its own properties;
         // the rest of the widget's data only when it changed.
         let mut music = pages::home_music(&s.states, &media_entity(s), s.art.as_ref(), cover_accent(s));
+        apply_music_hold(s, &mut music);
         if music.playing && !really_playing(s, &media_entity(s)) {
             music.playing = false;
         }
@@ -648,6 +672,7 @@ fn update_clock(ui: &AppWindow) {
                 s.ringing = None;
                 s.ringing_flag.store(false, Ordering::SeqCst);
                 ui.set_timers_ringing(false);
+                RING_OVER.with(|r| r.set(true));
                 None
             }
             Some(started) => {
@@ -665,9 +690,10 @@ fn update_clock(ui: &AppWindow) {
     if RANG.with(|r| r.replace(false)) {
         wake(ui);
         // the ringing screen is the timers page's: a temporary one when the list has none
-        if !go_to_page(ui, "timers") {
-            open_temporary_page(ui, "timers");
-        }
+        visit_page(ui, "timers");
+    }
+    if RING_OVER.with(|r| r.replace(false)) {
+        end_visit(ui);
     }
 }
 
@@ -676,9 +702,43 @@ thread_local! {
     static TIMER_SHEET_CLOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// A timer the panel runs reached zero during this clock update.
     static RANG: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A view shown by Home Assistant ran out of time (back to the page before at the next tick).
+    static SHOW_OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// A ring ended by itself (its minute passed) during this clock update.
+    static RING_OVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Weather, home widgets, music page and people from the current states.
+/// The status bar's hint line: one of the wake word's lines, kept until the wake word changes (a new one every 10
+/// min); with the microphone muted one of its own lines instead, a new one each time it gets muted.
+fn wake_hint_text(s: &mut UiState) -> String {
+    if s.settings.mic_muted {
+        if s.muted_hint.is_empty() {
+            s.muted_hint = texts::fresh("voice.muted");
+        }
+        s.muted_hint.clone()
+    } else if s.wake_phrase.is_empty() {
+        s.muted_hint.clear();
+        String::new()
+    } else {
+        s.muted_hint.clear();
+        let stale = s.wake_hint_at.is_none_or(|t| t.elapsed() > Duration::from_secs(600));
+        if s.wake_hint.0 != s.wake_phrase || stale {
+            s.wake_hint = (s.wake_phrase.clone(), texts::fresh("voice.wake").replace("{wake}", &s.wake_phrase));
+            s.wake_hint_at = Some(Instant::now());
+        }
+        s.wake_hint.1.clone()
+    }
+}
+
+/// Sets the hint line now (after the microphone was muted or unmuted).
+pub fn refresh_hint(ui: &AppWindow) {
+    let hint = with_state(|s| wake_hint_text(s));
+    if ui.get_wake_hint().as_str() != hint {
+        ui.set_wake_hint(hint.into());
+    }
+}
+
 fn refresh_pages(ui: &AppWindow) {
     let (art, music_entity) = with_state(|s| {
         let theme = page_option(s, "home", "theme")
@@ -771,25 +831,7 @@ fn refresh_pages(ui: &AppWindow) {
             ui.set_people(ModelRc::new(VecModel::from(people)));
         }
         ui.set_show_people(s.panel_config.as_ref().and_then(|c| c.get("show_people")).and_then(Value::as_bool).unwrap_or(true));
-        // The wake hint: one of its lines, kept until the wake word changes.
-        // with the microphone muted one of its own lines instead, a new one each time it gets muted
-        let hint = if s.settings.mic_muted {
-            if s.muted_hint.is_empty() {
-                s.muted_hint = texts::fresh("voice.muted");
-            }
-            s.muted_hint.clone()
-        } else if s.wake_phrase.is_empty() {
-            s.muted_hint.clear();
-            String::new()
-        } else {
-            s.muted_hint.clear();
-            let stale = s.wake_hint_at.is_none_or(|t| t.elapsed() > Duration::from_secs(600));
-            if s.wake_hint.0 != s.wake_phrase || stale {
-                s.wake_hint = (s.wake_phrase.clone(), texts::fresh("voice.wake").replace("{wake}", &s.wake_phrase));
-                s.wake_hint_at = Some(Instant::now());
-            }
-            s.wake_hint.1.clone()
-        };
+        let hint = wake_hint_text(s);
         if ui.get_wake_hint().as_str() != hint {
             ui.set_wake_hint(hint.into());
         }
@@ -800,6 +842,7 @@ fn refresh_pages(ui: &AppWindow) {
         if music.playing && !really_playing(s, &player) {
             music.playing = false;
         }
+        apply_music_hold(s, &mut music);
         ui.set_music_title(music.title.clone());
         ui.set_music_artist(music.artist.clone());
         ui.set_music_playing(music.playing);
@@ -1068,10 +1111,67 @@ fn go_to_page(ui: &AppWindow, kind: &str) -> bool {
     let pages = ui.get_pages();
     match (0..pages.row_count()).find(|&i| pages.row_data(i).is_some_and(|p| p.kind == kind)) {
         Some(i) => {
+            if ui.get_page() != i as i32 {
+                close_page_sheets(ui);
+            }
             ui.set_page(i as i32);
             true
         }
         None => false,
+    }
+}
+
+/// Leaving a page closes its sheets, editors and keyboard views (they never wait on a page nobody sees, and never
+/// hide the dots of the others).
+fn close_page_sheets(ui: &AppWindow) {
+    ui.set_quick_sheet(false);
+    ui.set_thermo_sheet(false);
+    ui.set_thermo_picker(false);
+    ui.set_thermo_settings(false);
+    ui.set_music_picker(false);
+    ui.set_music_settings(false);
+    ui.set_cal_detail(false);
+    ui.set_cal_settings(false);
+    ui.set_cal_day_sheet(false);
+    ui.set_timers_quick(false);
+    ui.set_timers_sheet(-1);
+    ui.set_timers_settings(false);
+    ui.set_todo_picker(false);
+    ui.set_cam_settings(false);
+    ui.set_info_settings(false);
+    ui.set_home_bg_sheet(false);
+    ui.set_home_settings(-1);
+}
+
+thread_local! {
+    /// A visit the panel made by itself (a ring, a show request): (the page it came from, the page it went to).
+    static VISIT: std::cell::Cell<Option<(i32, i32)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Goes to a page by itself (a timer rings, Home Assistant asks for a view) and remembers where it came from, so
+/// `end_visit` can go back there.
+fn visit_page(ui: &AppWindow, kind: &str) {
+    let from = ui.get_page();
+    let known = VISIT.with(|v| v.get());
+    if !go_to_page(ui, kind) {
+        open_temporary_page(ui, kind);
+    }
+    let to = ui.get_page();
+    // a second visit on top of one keeps the first page to go back to
+    let from = known.map_or(from, |(f, _)| f);
+    if to != from {
+        VISIT.with(|v| v.set(Some((from, to))));
+    }
+}
+
+/// The visit is over (the ring stopped, the shown view's time ran out): back to the page from before, unless someone
+/// paged meanwhile.
+fn end_visit(ui: &AppWindow) {
+    if let Some((from, to)) = VISIT.with(|v| v.take()) {
+        let temp = with_state(|s| s.temp_page);
+        if ui.get_page() == to || temp.is_some_and(|t| t as i32 == ui.get_page()) {
+            ui.set_page(from);
+        }
     }
 }
 
@@ -1145,9 +1245,7 @@ fn handle_timer(ui: &AppWindow, kind: i32, id: String, name: String, left: u32, 
     }
     if finished {
         wake(ui);
-        if !go_to_page(ui, "timers") {
-            open_temporary_page(ui, "timers");
-        }
+        visit_page(ui, "timers");
     }
     update_clock(ui);
 }
@@ -1192,8 +1290,10 @@ fn handle_timer_state(ui: &AppWindow, kind: i32, id: String, name: String, left:
                 if s.timers.get(&id).is_some_and(|t| t.own) {
                     return false;
                 }
-                let name = s.timers.remove(&id).map(|t| t.name).unwrap_or(name);
-                ring_timer(ui, s, name);
+                let gone = s.timers.remove(&id);
+                let tint = pages::timer_tint(gone.as_ref().map_or(0, |t| t.seq as u64), accent(s), ui.get_timers_colourful());
+                let name = gone.map(|t| t.name).unwrap_or(name);
+                ring_timer(ui, s, name, tint);
                 true
             }
             _ => false,
@@ -1381,7 +1481,9 @@ fn loop_sound(s: &mut UiState, want: Option<String>) {
     s.looping = want;
 }
 
-fn ring_timer(ui: &AppWindow, s: &mut UiState, name: String) {
+fn ring_timer(ui: &AppWindow, s: &mut UiState, name: String, tint: slint::Color) {
+    // the ringing screen in the timer's own colour (8.8)
+    ui.set_timers_ring_tint(tint);
     s.ring_tone = timer_tone(ui, s);
     s.ringing = Some(Instant::now());
     s.ringing_flag.store(true, Ordering::SeqCst);
@@ -1550,6 +1652,7 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
 /// An alarm rings: its screen and its sound (looping until stopped, at most a minute).
 fn ring_alarm(ui: &AppWindow, s: &mut UiState, time: String, label: String, tone: String) {
     s.ring_tone = format!("{tone}|birds");
+    ui.set_timers_ring_tint(accent(s));
     s.ringing = Some(Instant::now());
     s.ringing_flag.store(true, Ordering::SeqCst);
     ui.set_timers_ring_alarm(true);
@@ -1586,6 +1689,7 @@ fn stop_ringing(ui: &AppWindow, why: &str) {
         }
     });
     ui.set_timers_ringing(false);
+    end_visit(ui);
 }
 
 /// The voice view's status line for a state (listen, think, reply, more,
@@ -1598,8 +1702,10 @@ fn voice_line(ui: &AppWindow, state: &str) -> String {
         _ => format!("voice.{state}"),
     };
     let line = texts::fresh(&place);
-    if line.is_empty() {
-        texts::fresh(&format!("voice.{state}"))
+    let line = if line.is_empty() { texts::fresh(&format!("voice.{state}")) } else { line };
+    // the terminal draws its own "// " in front of the status line
+    if ui.get_voice_look() == 1 {
+        line.trim_start_matches('/').trim_start().to_string()
     } else {
         line
     }
@@ -1670,6 +1776,7 @@ fn voice_view(ui: &AppWindow, state: i32) {
 /// ripple, the TRIG lamp: over 0.38, again below 0.25, at most one in 280 ms) and the oscilloscope's trace with its
 /// afterglow (the microphone while listening, the ripple while thinking, the panel's own sound while answering).
 fn voice_meter(ui: &AppWindow, on: bool) {
+    voice::METER_ON.store(on, Ordering::Relaxed);
     METER.with(|t| {
         if !on {
             t.stop();
@@ -2104,12 +2211,19 @@ fn handle_show(ui: &AppWindow, v: &Value) {
             }
         }
         "media" => {
-            go_to_page(ui, "music");
+            if seconds > 0 {
+                visit_page(ui, "music");
+            } else {
+                go_to_page(ui, "music");
+            }
         }
         other => {
             ui.set_dashboard_mode(with_state(|s| s.settings.display_mode == "dashboard") && ui.get_web_active());
-            if !go_to_page(ui, other) {
-                go_to_page(ui, "home");
+            let kind = if ui.get_pages().iter().any(|p| p.kind == other) { other } else { "home" };
+            if seconds > 0 {
+                visit_page(ui, kind);
+            } else {
+                go_to_page(ui, kind);
             }
         }
     }
@@ -2144,6 +2258,11 @@ pub fn page_set(ui: &AppWindow, kind: &str, variant: Option<i32>, options: Value
         }
     }
     send(Command::PageSet { index, variant, options });
+}
+
+/// A websocket command of Home Assistant that is not a service call (`todo/item/move` …).
+pub fn send_raw(msg: Value) {
+    send(Command::Raw(msg));
 }
 
 fn call(domain: &str, service: &str, entity_id: &str, data: Value) {
@@ -2564,8 +2683,12 @@ fn report_value(sent: Option<f64>, avg: Option<f64>, step: f64, per_unit: f64) -
 /// Copies what Home Assistant sees (ESPHome API) from the UI state.
 fn report_device(s: &mut UiState) {
     let reporting = s.settings.reporting;
+    // light: a change of at least the step, at most once in 10 s; and every 10 minutes even without a change
+    let since = s.last_lux_report.elapsed();
     let lux_changed = match (s.lux, s.last_reported_lux) {
-        (Some(now), Some(before)) => (now - before).abs() > reporting.lux_step(before),
+        (Some(now), Some(before)) => {
+            ((now - before).abs() >= reporting.lux_step(before) && since >= Duration::from_secs(10)) || since >= Duration::from_secs(600)
+        }
         (a, b) => a.is_some() != b.is_some(),
     };
     let periodic = s.last_report.elapsed() > Duration::from_secs(60);
@@ -2598,6 +2721,7 @@ fn report_device(s: &mut UiState) {
     if lux_changed {
         d.lux = s.lux.map(|l| l.round());
         s.last_reported_lux = s.lux;
+        s.last_lux_report = Instant::now();
     }
     if periodic {
         s.soc_temp_avg = smooth(s.soc_temp_avg, hw::soc_temperature());
@@ -2687,8 +2811,38 @@ fn update_theme(ui: &AppWindow, s: &mut UiState) {
     if s.dark != Some(dark) {
         // Auto changed it by itself (the light, the sun): the calmer change; a switch by someone: the quicker one
         ui.set_theme_slow(s.dark.is_some() && s.settings.theme == "auto" && s.theme_mode_seen.as_deref() == Some("auto"));
+        let first = s.dark.is_none();
         s.dark = Some(dark);
-        ui.global::<Theme>().set_dark(dark);
+        if first {
+            ui.global::<Theme>().set_dark(dark);
+        } else {
+            // a picture of the screen first, then the switch under it: the picture fades out over the new look
+            let weak = ui.as_weak();
+            let switched = std::rc::Rc::new(std::cell::Cell::new(false));
+            let done = switched.clone();
+            platform::request_screen(move |w, h, rgb| {
+                let Some(ui) = weak.upgrade() else { return };
+                if done.replace(true) {
+                    return;
+                }
+                if rgb.len() >= (w * h * 3) as usize {
+                    let pic = slint::SharedPixelBuffer::<slint::Rgb8Pixel>::clone_from_slice(&rgb[..(w * h * 3) as usize], w, h);
+                    ui.set_theme_shot(slint::Image::from_rgb8(pic));
+                    ui.invoke_theme_fade();
+                }
+                ui.global::<Theme>().set_dark(dark);
+            });
+            // no picture within 1.2 s (the screen is not being drawn): the switch without the crossfade
+            let weak = ui.as_weak();
+            slint::Timer::single_shot(Duration::from_millis(1200), move || {
+                if let Some(ui) = weak.upgrade() {
+                    if !switched.replace(true) {
+                        eprintln!("nspanel-app: theme: no picture of the screen, switched without the crossfade");
+                        ui.global::<Theme>().set_dark(dark);
+                    }
+                }
+            });
+        }
     }
     s.theme_mode_seen = Some(s.settings.theme.clone());
 }
@@ -2745,6 +2899,9 @@ fn update_web(ui: &AppWindow, s: &mut UiState) {
 
 /// Runs twice a second: theme, screensaver, proximity wake, backlight target.
 fn tick(ui: &AppWindow) {
+    if SHOW_OVER.with(|o| o.replace(false)) {
+        end_visit(ui);
+    }
     update_connection_screens(ui);
     with_state(|s| update_web(ui, s));
     let result = with_state(|s| {
@@ -2755,6 +2912,7 @@ fn tick(ui: &AppWindow) {
             s.show_until = None;
             ui.set_strip_on(false);
             ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
+            SHOW_OVER.with(|o| o.set(true));
         }
         let idle = platform::idle_time();
         // Proximity test view: on while the file exists. Its first line is
@@ -2988,7 +3146,12 @@ fn on_setting(ui: &AppWindow, key: &str, value: &str) {
                 s.wake_phrase = wake_phrase(&s.settings.wake_words);
             }
             "volume" => {
-                s.settings.volume = value.parse::<u8>().unwrap_or(80).min(100);
+                let new = value.parse::<u8>().unwrap_or(80).min(100);
+                // muted from Home Assistant: the speaker mark's tap goes back to the level before
+                if new == 0 && s.settings.volume > 0 {
+                    s.vol_before_mute = s.settings.volume;
+                }
+                s.settings.volume = new;
                 hw::set_volume(s.settings.volume);
                 ui.set_speaker_muted(s.settings.volume == 0);
                 // Short sound at the new level (also for changes from Home Assistant).
@@ -2998,6 +3161,8 @@ fn on_setting(ui: &AppWindow, key: &str, value: &str) {
                 s.settings.mic_muted = value == "true";
                 s.mic_muted.store(s.settings.mic_muted, Ordering::SeqCst);
                 ui.set_mic_muted(s.settings.mic_muted);
+                let hint = wake_hint_text(s);
+                ui.set_wake_hint(hint.into());
             }
             "dashboard_index" => {
                 if let Some((url, _)) = value.parse::<usize>().ok().and_then(|i| s.dashboards.get(i)) {
@@ -3092,6 +3257,14 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
         "info.look" => page_set(ui, "info", Some(value.parse().unwrap_or(0)), Value::Null),
         "music.holds" => page_set(ui, "music", None, json!({ "holds": value.parse::<i64>().unwrap_or(0) })),
         "music.scroll" => page_set(ui, "music", None, json!({ "scroll": value == "1" })),
+        "music.blur" => {
+            ui.set_music_cover_blur(value == "1");
+            page_set(ui, "music", None, json!({ "cover_blur": value == "1" }));
+        }
+        "music.cover-bg" => {
+            ui.set_music_cs_cover(value == "1");
+            page_set(ui, "music", None, json!({ "cover_bg": value == "1" }));
+        }
         "music.speed" => page_set(ui, "music", None, json!({ "scroll_speed": value.parse::<i64>().unwrap_or(3).clamp(1, 5) })),
         "music.wood" => {
             if let Some(id) = WOODS.get(value.parse::<usize>().unwrap_or(0)) {
@@ -3136,6 +3309,8 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
                     // views show its real state again
                     let mut m = ui.get_home_music();
                     m.playing = !m.playing;
+                    let held = (m.playing, Instant::now(), m.pos);
+                    with_state(|s| s.music_hold = Some(held));
                     ui.set_music_playing(m.playing);
                     ui.set_home_music(m);
                     let weak = ui.as_weak();
@@ -3450,6 +3625,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             art_tx: None,
             art: None,
             show_until: None,
+            last_lux_report: Instant::now(),
+            music_hold: None,
             digits: Default::default(),
             prev_digits: Default::default(),
             flip_at: None,
@@ -3543,6 +3720,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         platform::note_activity();
         // Pages that fetch while on screen (cameras) start or stop.
         if let Some(ui) = weak.upgrade() {
+            close_page_sheets(&ui);
+            if ui.get_pages().row_data(now as usize).is_some_and(|p| p.kind == "timers") {
+                synth::timers_opened();
+            }
             leave_temporary_page(&ui, now);
             with_state(|s| cam::refresh(&ui, s));
             reroll_lines(ui.as_weak());
@@ -3666,9 +3847,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ui.set_voice_heard(a.get(1).and_then(Value::as_str).unwrap_or("").into());
                 ui.set_voice_answer(a.get(2).and_then(Value::as_str).unwrap_or("").into());
                 let st = a.first().and_then(Value::as_i64).unwrap_or(0) as i32;
-                // the look from the integration's settings, as a real voice run takes it
+                // the look from the integration's settings, as a real voice run takes it; the lines, the meter and the
+                // follow-up drain as in a real run (nothing left over from an earlier turn)
                 voice_view(&ui, st.max(1));
+                ui.set_voice_detail("".into());
+                let place = match st { 2 => "think", 3 => "reply", 4 => "fail", 5 => "more", 6 => "again", _ => "listen" };
+                ui.set_voice_line(voice_line(&ui, place).into());
+                if st == 3 {
+                    type_answer(&ui, a.get(2).and_then(Value::as_str).unwrap_or(""));
+                } else {
+                    ui.set_voice_typed("".into());
+                }
+                if st == 2 {
+                    THINK_T0.with(|t| t.set(Some(Instant::now())));
+                }
                 ui.set_voice_state(st.max(1));
+                follow_up_drain(&ui, st == 5);
+                voice_meter(&ui, st > 0);
                 ui.set_voice_on(st > 0);
             }
             // Measurements: another page in the web view, or a scripted scroll

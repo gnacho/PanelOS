@@ -105,16 +105,23 @@ component TimeText inherits Text {
 component NixieTube inherits Rectangle {
     in property <int> d;
     in property <int> n;                  // which tube (its own flicker)
+    in property <bool> steady;            // a running stopwatch: no flicker and no fade (the digits change too fast to see them)
     width: 54px; height: 140px;
     property <[string]> nx: ["M18 2 C30 2 34 16 34 36 C34 56 30 70 18 70 C6 70 2 56 2 36 C2 16 6 2 18 2 Z", "M11 13 L19 3 L19 70", "M4 16 C4 6 11 2 18 2 C27 2 32 8 32 17 C32 30 18 40 4 70 L33 70", "M4 4 L31 4 L16 30 C27 29 33 37 33 49 C33 62 26 70 17 70 C9 70 4 66 3 60", "M26 70 L26 2 L3 50 L34 50", "M31 3 L8 3 L5 32 C9 28 13 27 18 27 C28 27 33 35 33 48 C33 62 26 70 17 70 C9 70 4 66 3 60", "M28 6 C25 3 22 2 18 2 C8 2 3 14 3 40 C3 60 9 70 18 70 C27 70 33 62 33 52 C33 42 27 34 18 34 C10 34 4 40 3 48", "M3 3 L33 3 L13 70", "M18 34 C9 34 5 28 5 18 C5 8 11 2 18 2 C25 2 31 8 31 18 C31 28 27 34 18 34 C8 34 3 42 3 52 C3 63 10 70 18 70 C26 70 33 63 33 52 C33 42 28 34 18 34 Z", "M8 66 C11 69 14 70 18 70 C28 70 33 58 33 32 C33 12 27 2 18 2 C9 2 3 10 3 20 C3 30 9 38 18 38 C26 38 32 32 33 24"];
-    property <float> f: 0.94 + 0.06 * Math.abs(Math.sin(1rad * (animation-tick() / 37ms + root.n * 1.7)) * Math.sin(1rad * (animation-tick() / 91ms + root.n)));
+    // the glow's unsteadiness, 12 times a second (not every frame)
+    property <float> ft;
+    Timer { interval: 80ms; running: !root.steady; triggered => { root.ft = animation-tick() / 1ms; } }
+    property <[image]> glow: [@image-url("timers/nixie/digit-0.png"), @image-url("timers/nixie/digit-1.png"), @image-url("timers/nixie/digit-2.png"), @image-url("timers/nixie/digit-3.png"), @image-url("timers/nixie/digit-4.png"), @image-url("timers/nixie/digit-5.png"), @image-url("timers/nixie/digit-6.png"), @image-url("timers/nixie/digit-7.png"), @image-url("timers/nixie/digit-8.png"), @image-url("timers/nixie/digit-9.png")];
+    property <[image]> core: [@image-url("timers/nixie/digit-0-core.png"), @image-url("timers/nixie/digit-1-core.png"), @image-url("timers/nixie/digit-2-core.png"), @image-url("timers/nixie/digit-3-core.png"), @image-url("timers/nixie/digit-4-core.png"), @image-url("timers/nixie/digit-5-core.png"), @image-url("timers/nixie/digit-6-core.png"), @image-url("timers/nixie/digit-7-core.png"), @image-url("timers/nixie/digit-8-core.png"), @image-url("timers/nixie/digit-9-core.png")];
+    property <int> dd: root.d >= 0 && root.d <= 9 ? root.d : 0;
+    property <float> f: 0.94 + 0.06 * Math.abs(Math.sin(1rad * (root.ft / 37 + root.n * 1.7)) * Math.sin(1rad * (root.ft / 91 + root.n)));
     // a digit change (25.T9): the old cathode dies over 120 ms while the new one lights over 60 ms
     property <int> cur: -1;
     property <int> old: -1;
     property <duration> t0;
     property <bool> fading;
     init => { root.cur = root.d; }
-    changed d => { root.old = root.cur; root.cur = root.d; root.t0 = animation-tick(); root.fading = true; }
+    changed d => { root.old = root.cur; root.cur = root.d; root.t0 = animation-tick(); root.fading = !root.steady; }
     Timer { interval: 130ms; running: root.fading; triggered => { root.fading = false; } }
     property <float> since: root.fading ? (animation-tick() - root.t0) / 1ms : 1000;
     property <float> new-k: max(0.5, clamp(root.since / 60, 0, 1));
@@ -122,22 +129,24 @@ component NixieTube inherits Rectangle {
     Rectangle { x: 0; y: 0; width: 54px; height: 132px; border-radius: 26px; border-width: 1px; border-color: #ffffff29; clip: true;
         background: @linear-gradient(90deg, #ffffff05 0%, #ffffff0f 22%, #ffffff04 50%, #ffffff0b 100%);
         Rectangle { x: 6px; y: 20px; width: 42px; height: 96px; background: @radial-gradient(circle, #ff6e14.with-alpha(0.22 * root.f) 0%, #ff6e1400 70%); }
-        for g[i] in root.nx: Path { visible: i != root.d; x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
-            stroke: #7a6655; stroke-width: 1.5px; stroke-line-cap: round; stroke-line-join: round; opacity: 0.32; commands: g; }
-        if root.old-k > 0: Rectangle {
-            for w[i] in [{ s: 11px, c: #ff5a00, o: 0.16 }, { s: 6px, c: #ff7a1a, o: 0.42 }, { s: 3px, c: #ffb066, o: 0.9 }, { s: 1.2px, c: #fff0dc, o: 1.0 }]: Path {
-                x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
-                stroke: w.c; stroke-width: w.s; stroke-line-cap: round; stroke-line-join: round; opacity: w.o * root.old-k * (i < 3 ? root.f : 1);
-                commands: root.nx[root.old]; }
-        }
-        for w[i] in [{ s: 11px, c: #ff5a00, o: 0.16 }, { s: 6px, c: #ff7a1a, o: 0.42 }, { s: 3px, c: #ffb066, o: 0.9 }, { s: 1.2px, c: #fff0dc, o: 1.0 }]: Path {
-            x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
-            stroke: w.c; stroke-width: w.s; stroke-line-cap: round; stroke-line-join: round; opacity: w.o * root.new-k * (i < 3 ? root.f : 1);
-            commands: root.d >= 0 && root.d <= 9 ? root.nx[root.d] : root.nx[0]; }
+        // the ten faint cathodes: drawn once into their own layer (the lit digit covers its own)
+        Rectangle { cache-rendering-hint: true;
+            for g[i] in root.nx: Path { x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
+                stroke: #7a6655; stroke-width: 1.5px; stroke-line-cap: round; stroke-line-join: round; opacity: 0.32; commands: g; } }
+        // the digit going out (the same pictures as the lit one)
+        if root.old-k > 0: Image { x: 3px; y: 24px; width: 48px; height: 84px; source: root.glow[root.old]; opacity: root.old-k * root.f; }
+        if root.old-k > 0: Image { x: 3px; y: 24px; width: 48px; height: 84px; source: root.core[root.old]; opacity: root.old-k; }
+        // the lit digit: its glow (flickering) and its core, pictures of the four strokes (tools/nixie_digits.py): a
+        // textured quad each, where four wide strokes per digit and frame kept the running stopwatch under 30 fps
+        Image { x: 3px; y: 24px; width: 48px; height: 84px; source: root.glow[root.dd]; opacity: root.steady ? 1 : root.new-k * root.f; }
+        Image { x: 3px; y: 24px; width: 48px; height: 84px; source: root.core[root.dd]; opacity: root.steady ? 1 : root.new-k; }
+        // the anode mesh and the glass highlights in front: drawn once
+        Rectangle { cache-rendering-hint: true;
         Path { x: 0; y: 0; width: 54px; height: 132px; viewbox-width: 54; viewbox-height: 132; stroke: #b08a6a; stroke-width: 0.6px; opacity: 0.32;
             commands: "M 43.0 14.0 L 47.0 18.0 M 11.0 14.0 L 7.0 18.0 M 34.0 14.0 L 47.0 27.0 M 20.0 14.0 L 7.0 27.0 M 25.0 14.0 L 47.0 36.0 M 29.0 14.0 L 7.0 36.0 M 16.0 14.0 L 47.0 45.0 M 38.0 14.0 L 7.0 45.0 M 7.0 14.0 L 47.0 54.0 M 47.0 14.0 L 7.0 54.0 M 7.0 23.0 L 47.0 63.0 M 47.0 23.0 L 7.0 63.0 M 7.0 32.0 L 47.0 72.0 M 47.0 32.0 L 7.0 72.0 M 7.0 41.0 L 47.0 81.0 M 47.0 41.0 L 7.0 81.0 M 7.0 50.0 L 47.0 90.0 M 47.0 50.0 L 7.0 90.0 M 7.0 59.0 L 47.0 99.0 M 47.0 59.0 L 7.0 99.0 M 7.0 68.0 L 47.0 108.0 M 47.0 68.0 L 7.0 108.0 M 7.0 77.0 L 47.0 117.0 M 47.0 77.0 L 7.0 117.0 M 7.0 86.0 L 39.0 118.0 M 47.0 86.0 L 15.0 118.0 M 7.0 95.0 L 30.0 118.0 M 47.0 95.0 L 24.0 118.0 M 7.0 104.0 L 21.0 118.0 M 47.0 104.0 L 33.0 118.0 M 7.0 113.0 L 12.0 118.0 M 47.0 113.0 L 42.0 118.0"; }
         Rectangle { x: 9px; y: 8px; width: 5px; height: 96px; border-radius: 3px; background: #ffffff21; }
         Rectangle { x: 20px; y: 2px; width: 14px; height: 6px; border-radius: 3px; background: #ffffff1a; }
+        }
     }
     Rectangle { x: 4px; y: 128px; width: 46px; height: 12px; border-radius: 3px; background: #121010; border-width: 1px; border-color: #2a2522; }
 }
@@ -173,6 +182,10 @@ component NeonRing inherits Rectangle {
 
 // Neon lettering: a soft coloured glow, a thin dark rim that follows the glyphs, a white core.
 component NeonText inherits Rectangle {
+    // a text that changes every second (a running time) is drawn directly; any other is drawn once into a layer
+    // (rebuilding a layer every second cost a 40-50 ms frame each second over the moving scene)
+    in property <bool> live;
+    cache-rendering-hint: !root.live;
     in property <string> text;
     in property <length> size: 52px;
     in property <int> weight: 300;
@@ -197,6 +210,8 @@ component RoundButton inherits Rectangle {
     in property <color> ink: TFg.c;
     in property <bool> outline;
     in property <color> line: TFg.c.with-alpha(0.30);
+    in property <length> ring-w;       // a ring around the round button (its own, so it squishes with it)
+    in property <color> ring-c;
     in property <string> act;          // what a tap does (Act), with `act-value`
     in property <string> act-value;
     width: self.size; height: self.size;
@@ -206,7 +221,7 @@ component RoundButton inherits Rectangle {
     Rectangle {
         x: root.size * (1 - root.sq) / 2; y: self.x; width: root.size * root.sq; height: self.width; border-radius: self.width / 2;
         background: root.outline ? transparent : root.fill;
-        border-width: root.outline ? 1.5px : 0px; border-color: root.line;
+        border-width: root.ring-w > 0 ? root.ring-w : root.outline ? 1.5px : 0px; border-color: root.ring-w > 0 ? root.ring-c : root.line;
     }
     // play / pause morph into each other (M13); every other icon as it is
     property <bool> pp: root.icon == "\u{F040A}" || root.icon == "\u{F03E4}";
@@ -242,10 +257,10 @@ component TimerControls inherits HorizontalLayout {
     alignment: center; spacing: 20px;
     VerticalLayout { alignment: center; Pill { act: "timers.add"; act-value: root.index; text: "+1 min"; h: 44px; ink: root.neon ? #ffffff : TFg.c; fill: root.neon ? #00000059 : TFg.c.with-alpha(0.12); line: root.neon ? root.tint.with-alpha(0.7) : transparent; } }
     RoundButton { size: root.play; icon-size: root.play * 0.52; fill: root.neon ? #00000059 : root.tint; ink: root.neon ? root.tint.mix(#ffffff, 0.6) : #ffffff; outline: false;
-        border-width: root.neon ? 2px : 0px; border-color: root.tint;
+        ring-w: root.neon ? 2px : 0px; ring-c: root.tint;
         icon: root.running ? "\u{F03E4}" : "\u{F040A}"; act: "timers.toggle"; act-value: root.index; }
     VerticalLayout { alignment: center; RoundButton { act: "timers.cancel"; act-value: root.index; size: 44px; icon-size: 22px; fill: root.neon ? #00000059 : transparent; outline: !root.neon; ink: root.neon ? #ffffff : TFg.c;
-        border-width: 1.5px; border-color: root.neon ? root.tint.with-alpha(0.6) : TFg.c.with-alpha(0.30); icon: "\u{F0156}"; } }
+        ring-w: 1.5px; ring-c: root.neon ? root.tint.with-alpha(0.6) : TFg.c.with-alpha(0.30); icon: "\u{F0156}"; } }
 }
 
 // a settings chip
@@ -826,14 +841,14 @@ export component TimersPage inherits Rectangle {
 
         // one timer: a big tube, the controls at the bottom
         if root.n == 1: Rectangle {
-            cache-rendering-hint: true;   // over the moving scene: drawn once a second, not every frame
+            // (no layer around the whole timer: its static texts are layers of their own, the time and the ring live)
             property <TimerItem> t: root.timers[0];
-            property <color> g: root.sw-rings[root.sw-scene * 4];
+            property <color> g: self.t.running && self.t.remaining < 60 ? #ff5a5f : root.sw-rings[root.sw-scene * 4];
             NeonRing { x: (root.width - 212px) / 2; y: root.top + 8px; width: 212px; height: 212px; stroke: 8px; glow: parent.g; paused: !parent.t.running;
                 fr: parent.t.total > 0 ? parent.t.remaining / parent.t.total : 0; }
             NeonText { x: (root.width - 160px) / 2; y: root.top + 58px; width: 160px; height: 24px; text: root.name(parent.t.label); size: 17px; weight: 600;
                 glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.45); }
-            NeonText { x: 0; y: root.top + 84px; width: root.width; height: 62px; text: root.clock(parent.t.remaining); size: parent.t.remaining >= 3600 ? 42px : 54px; weight: 400;
+            NeonText { live: true; x: 0; y: root.top + 84px; width: root.width; height: 62px; text: root.clock(parent.t.remaining); size: parent.t.remaining >= 3600 ? 42px : 54px; weight: 400;
                 glow: parent.g; rim: root.deep; }
             NeonText { x: 0; y: root.top + 146px; width: root.width; height: 20px; text: parent.t.running ? "of " + root.clock(parent.t.total) : "PAUSED"; size: 13px; weight: 600;
                 glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.6); }
@@ -841,34 +856,35 @@ export component TimersPage inherits Rectangle {
         }
         // two timers: tubes side by side, small controls under each
         if root.n == 2: Rectangle {
-            cache-rendering-hint: true;   // over the moving scene: drawn once a second, not every frame
+            // (no layer around the whole timer: its static texts are layers of their own, the time and the ring live)
             for t[i] in root.timers: tc := Rectangle {
-                property <color> g: root.sw-rings[root.sw-scene * 4 + i];
+                property <color> g: t.running && t.remaining < 60 ? #ff5a5f : root.sw-rings[root.sw-scene * 4 + i];
                 x: 22px + i * 230px; y: root.top + 12px; width: 206px; height: 300px;
                 NeonRing { x: 8px; y: 0; width: 190px; height: 190px; stroke: 7px; glow: parent.g; paused: !t.running; fr: t.total > 0 ? t.remaining / t.total : 0; }
                 TouchArea { x: 8px; y: 0; width: 190px; height: 190px; clicked => { Act.act("timers.sheet", i); } }
                 NeonText { x: 28px; y: 50px; width: 150px; height: 22px; text: root.name(t.label); size: 15px; weight: 600; glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.45); }
-                NeonText { x: 0; y: 72px; width: 206px; height: 50px; text: root.clock(t.remaining); size: t.remaining >= 3600 ? 32px : 40px; weight: 400; glow: parent.g; rim: root.deep; }
+                NeonText { live: true; x: 0; y: 72px; width: 206px; height: 50px; text: root.clock(t.remaining); size: t.remaining >= 3600 ? 32px : 40px; weight: 400; glow: parent.g; rim: root.deep; }
                 NeonText { x: 0; y: 122px; width: 206px; height: 18px; text: t.running ? "of " + root.clock(t.total) : "PAUSED"; size: 12px; weight: 600; glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.6); }
                 HorizontalLayout {
-                    x: 0; y: 206px; width: 206px; height: 52px; alignment: center; spacing: 14px;
-                    RoundButton { size: 52px; icon-size: 28px; fill: #00000059; border-width: 2px; border-color: tc.g; ink: tc.g.mix(#ffffff, 0.6); icon: t.running ? "\u{F03E4}" : "\u{F040A}"; act: "timers.toggle"; act-value: i; }
-                    VerticalLayout { alignment: center; RoundButton { size: 40px; icon-size: 20px; fill: #00000059; border-width: 1.5px; border-color: tc.g.with-alpha(0.6); icon: "\u{F0156}"; act: "timers.cancel"; act-value: i; } }
+                    x: 0; y: 206px; width: 206px; height: 52px; alignment: center; spacing: 10px;
+                    VerticalLayout { alignment: center; Pill { act: "timers.add"; act-value: i; text: "+1 min"; h: 40px; ink: #ffffff; fill: #00000059; line: tc.g.with-alpha(0.7); } }
+                    RoundButton { size: 52px; icon-size: 28px; fill: #00000059; ring-w: 2px; ring-c: tc.g; ink: tc.g.mix(#ffffff, 0.6); icon: t.running ? "\u{F03E4}" : "\u{F040A}"; act: "timers.toggle"; act-value: i; }
+                    VerticalLayout { alignment: center; RoundButton { size: 40px; icon-size: 20px; fill: #00000059; ring-w: 1.5px; ring-c: tc.g.with-alpha(0.6); icon: "\u{F0156}"; act: "timers.cancel"; act-value: i; } }
                 }
             }
         }
         // three or four: a grid of smaller tubes
         if root.n >= 3: Rectangle {
-            cache-rendering-hint: true;   // over the moving scene: drawn once a second, not every frame
+            // (no layer around the whole timer: its static texts are layers of their own, the time and the ring live)
             for c in 4: scell := Rectangle {
                 x: 20px + Math.mod(c, 2) * 224px; y: root.top + Math.floor(c / 2) * 176px; width: 216px; height: 168px;
                 property <bool> has: c < root.n;
                 property <TimerItem> t: self.has ? root.timers[c] : { label: "", remaining: 0, total: 0, running: false, tint: #ffffff };
-                property <color> g: root.sw-rings[root.sw-scene * 4 + Math.mod(c, 4)];
+                property <color> g: self.t.running && self.t.remaining < 60 && self.has ? #ff5a5f : root.sw-rings[root.sw-scene * 4 + Math.mod(c, 4)];
                 TouchArea { clicked => { Act.act(scell.has ? "timers.sheet" : "timers.quick", c); } }
                 if scell.has: NeonRing { x: (scell.width - 118px) / 2; y: 10px; width: 118px; height: 118px; stroke: 6px; glow: scell.g; paused: !scell.t.running;
                     fr: scell.t.total > 0 ? scell.t.remaining / scell.t.total : 0; }
-                if scell.has: NeonText { x: 0; y: 10px + 38px; width: scell.width; height: 42px; text: root.clock(scell.t.remaining); size: scell.t.remaining >= 3600 ? 22px : 28px; weight: 400;
+                if scell.has: NeonText { live: true; x: 0; y: 10px + 38px; width: scell.width; height: 42px; text: root.clock(scell.t.remaining); size: scell.t.remaining >= 3600 ? 22px : 28px; weight: 400;
                     glow: scell.g; rim: root.deep; }
                 if scell.has && !scell.t.running: NeonText { x: 0; y: 10px + 76px; width: scell.width; height: 14px; text: "PAUSED"; size: 10px; weight: 600; glow: scell.g; rim: root.deep; core: scell.g.mix(#ffffff, 0.6); }
                 if scell.has: NeonText { x: 12px; y: 136px; width: scell.width - 24px; height: 22px; text: root.name(scell.t.label); size: 15px; weight: 600;
@@ -1295,15 +1311,19 @@ export component TimersPage inherits Rectangle {
 
     // 4 nixie tubes: mm ss cc in six tubes and three neon dots on a walnut plinth inside a dark case, the last lap below
     if !root.ringing && root.mode == 2 && root.sw-look == 4: nix := Rectangle {
-        property <int> mins: Math.mod(Math.floor(root.watch / 60), 100);
-        property <int> secs: Math.mod(Math.floor(root.watch), 60);
-        property <int> cs: Math.mod(Math.floor(root.watch * 100), 100);
+        // the time as the tubes show it: sampled 30 times a second while it runs (the hundredths blur anyway)
+        property <float> w30;
+        Timer { interval: 33ms; running: true; triggered => { nix.w30 = root.watch; } }
+        property <float> wv: root.watch-running ? nix.w30 : root.watch;
+        property <int> mins: Math.mod(Math.floor(nix.wv / 60), 100);
+        property <int> secs: Math.mod(Math.floor(nix.wv), 60);
+        property <int> cs: Math.mod(Math.floor(nix.wv * 100), 100);
         Rectangle { x: 22px; y: 108px; width: 436px; height: 200px; border-radius: 18px; background: Theme.dark ? #0e0c0b : #1a1614; }
         // the plinth (board S4): walnut with grain lines and a knot, end-grain shading, a bevel highlight, the darker lower
         // edge and a soft contact shadow
         Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #000000; opacity: 0.5;
             commands: "M 20 302 A 220 6 0 1 0 460 302 A 220 6 0 1 0 20 302 Z"; }
-        Rectangle { x: 30px; y: 264px; width: 420px; height: 34px; border-radius: 6px;
+        Rectangle { x: 30px; y: 264px; width: 420px; height: 34px; border-radius: 6px; cache-rendering-hint: true;
             background: @linear-gradient(180deg, #8a5634 0%, #6b3f22 45%, #3f2313 100%);
             Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 1.2px; opacity: 0.42;
                 commands: "M0 4.1 L10 4.8 L20 4.7 L30 4.3 L40 4.5 L50 5.1 L60 5.0 L70 4.3 L80 3.9 L90 4.2 L100 4.2 L110 3.6 L120 3.0 L130 3.3 L140 3.8 L150 3.8 L160 3.4 L170 3.6 L180 4.4 L190 4.8 L200 4.5 L210 4.3 L220 4.8 L230 5.2 L240 4.7 L250 4.0 L260 3.9 L270 4.3 L280 4.0 L290 3.3 L300 3.0 L310 3.5 L320 3.9 L330 3.6 L340 3.3 L350 3.9 L360 4.7 L370 4.7 L380 4.3 L390 4.4 L400 5.0 L410 5.1 L420 4.4"; }
@@ -1337,14 +1357,19 @@ export component TimersPage inherits Rectangle {
             Rectangle { x: 4px; y: 0; width: 412px; height: 1.8px; border-radius: 1px; background: #ffffff3d; }
             Rectangle { x: 0; y: 32px; width: 420px; height: 2px; border-radius: 1px; background: #00000066; } }
         property <bool> cycling: root.flyback && (animation-tick() - root.fly-t0) < 400ms;
-        for x[i] in [47, 107, 183, 243, 319, 379]: NixieTube { x: x * 1px; y: 124px; n: i;
+        for x[i] in [47, 107, 183, 243, 319, 379]: NixieTube { x: x * 1px; y: 124px; n: i; steady: root.watch-running && i >= 4;
             d: nix.cycling ? Math.mod(Math.floor((animation-tick() - root.fly-t0) / 40ms) + i, 10)
                 : i == 0 ? Math.floor(nix.mins / 10) : i == 1 ? Math.mod(nix.mins, 10) : i == 2 ? Math.floor(nix.secs / 10) : i == 3 ? Math.mod(nix.secs, 10)
                 : i == 4 ? Math.floor(nix.cs / 10) : Math.mod(nix.cs, 10); }
-        for dt in [{ x: 167, y: 164 }, { x: 167, y: 202 }, { x: 303, y: 222 }]: Rectangle { x: dt.x * 1px; y: dt.y * 1px; width: 9px; height: 9px; border-radius: 4.5px;
-            background: #ffb35c; drop-shadow-blur: 10px; drop-shadow-color: #ff6a00; }
-        if root.laps.length > 0: Text { x: 0; y: 318px; width: root.width; height: 26px; horizontal-alignment: center; vertical-alignment: center;
-            text: "LAP " + root.laps.length + "   " + root.lapfmt(root.laps[0]); font-size: 20px; font-weight: 300; letter-spacing: 1px; color: #ffb35c; }
+        // the three neon dots with their glow: drawn once
+        Rectangle { cache-rendering-hint: true;
+            for dt in [{ x: 167, y: 164 }, { x: 167, y: 202 }, { x: 303, y: 222 }]: Rectangle { x: dt.x * 1px; y: dt.y * 1px; width: 9px; height: 9px; border-radius: 4.5px;
+                background: #ffb35c; drop-shadow-blur: 10px; drop-shadow-color: #ff6a00; } }
+        // the laps under the case, newest on top; two lines show, the rest scrolls
+        if root.laps.length > 0: Flickable { x: 90px; y: 310px; width: 300px; height: 48px; content-height: max(self.height, root.laps.length * 24px);
+            for l[i] in root.laps: Text { x: 0; y: i * 24px; width: parent.width; height: 24px; horizontal-alignment: center; vertical-alignment: center;
+                text: "LAP " + (root.laps.length - i) + "   " + root.lapfmt(l); font-size: 18px; font-weight: 300; letter-spacing: 1px;
+                color: i == 0 ? #ffb35c : #ffb35c99; } }
     }
 
     // ---------------------------------------------------------------- stopwatch
@@ -1378,9 +1403,13 @@ export component TimersPage inherits Rectangle {
         }
         HorizontalLayout {
             x: 0; y: 362px; width: root.width; height: 72px; alignment: center; spacing: 22px;
-            VerticalLayout { alignment: center; Pill { text: root.watch-running ? "Lap" : "Reset"; h: 48px; act: root.watch-running ? "watch.lap" : "watch.reset"; } }
+            // one lap button (the flag) while it runs, Reset when stopped; play / pause stays in the middle
+            Rectangle { width: 96px;
+                if root.watch-running: RoundButton { x: (parent.width - 48px) / 2; y: (parent.height - 48px) / 2; size: 48px; icon-size: 24px; outline: true;
+                    icon: "\u{F023D}"; act: "watch.lap"; }
+                if !root.watch-running && root.watch > 0: Pill { x: (parent.width - self.width) / 2; y: (parent.height - 48px) / 2; text: "Reset"; h: 48px; act: "watch.reset"; } }
             RoundButton { size: 72px; icon-size: 38px; fill: root.watch-tint; ink: #ffffff; icon: root.watch-running ? "\u{F03E4}" : "\u{F040A}"; act: "watch.toggle"; }
-            VerticalLayout { alignment: center; RoundButton { size: 48px; icon-size: 24px; outline: true; icon: "\u{F023D}"; opacity: root.watch-running ? 1 : 0; act: root.watch-running ? "watch.lap" : ""; } }
+            Rectangle { width: 96px; }
         }
     }
 

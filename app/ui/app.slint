@@ -521,6 +521,7 @@ export component AppWindow inherits Window {
     in property <bool> weather-days: true;
     in property <[Person]> people;
     in property <bool> show-people: true;
+    in property <int> info-unread;       // unread notifications (the bell's count)
     in property <string> wake-hint: "";
     in property <[TimerInfo]> timers;
     in-out property <bool> island-away;       // the timer island was flicked into the timer mark (the app brings it back)
@@ -727,32 +728,35 @@ export component AppWindow inherits Window {
     // ---- the pages, side by side ----
     // A swipe down that starts on the status bar pulls the quick shade (the
     // pages are inside, so taps and sideways swipes still reach them).
+    // the shade follows a pull down from the status bar (or from one of its marks)
+    function shade-move(d: length) {
+        if !root.shade-pulling {
+            root.act("shade.peek", "");
+            root.pull-t = animation-tick();
+            root.pull-last = 0px;
+            root.pull-v = 0;
+        }
+        root.shade-pulling = true;
+        root.shade-pull = d;
+        let dt = (animation-tick() - root.pull-t) / 1ms;
+        if dt >= 16 {
+            root.pull-v = root.pull-v * 0.4 + 0.6 * ((root.shade-pull - root.pull-last) / 1px) / dt;
+            root.pull-last = root.shade-pull;
+            root.pull-t = animation-tick();
+        }
+    }
+    function shade-release(d: length) {
+        let p = root.p-of-pull(d);
+        root.shade-pulling = false;
+        // past 1.5 straight to the second step; from 40 % (or a flick down) the first; else it closes
+        root.p-go(p, p >= 1.5 ? 2 : (p >= 0.4 || root.pull-v > 0.5) ? 1 : 0);
+    }
     shade-swipe := SwipeGestureHandler {
         // the timer island takes its own drags (29.4)
         handle-swipe-down: !root.screensaver-on && root.set-view == 0 && self.pressed-position.y < 56px
             && !(island.shown && self.pressed-position.y >= 44px && Math.abs(self.pressed-position.x / 1px - 240) < island.cap-w / 2px);
-        moved => {
-            if !root.shade-pulling {
-                root.act("shade.peek", "");
-                root.pull-t = animation-tick();
-                root.pull-last = 0px;
-                root.pull-v = 0;
-            }
-            root.shade-pulling = true;
-            root.shade-pull = self.current-position.y - self.pressed-position.y;
-            let dt = (animation-tick() - root.pull-t) / 1ms;
-            if dt >= 16 {
-                root.pull-v = root.pull-v * 0.4 + 0.6 * ((root.shade-pull - root.pull-last) / 1px) / dt;
-                root.pull-last = root.shade-pull;
-                root.pull-t = animation-tick();
-            }
-        }
-        swiped => {
-            let p = root.p-of-pull(self.current-position.y - self.pressed-position.y);
-            root.shade-pulling = false;
-            // past 1.5 straight to the second step; from 40 % (or a flick down) the first; else it closes
-            root.p-go(p, p >= 1.5 ? 2 : (p >= 0.4 || root.pull-v > 0.5) ? 1 : 0);
-        }
+        moved => { root.shade-move(self.current-position.y - self.pressed-position.y); }
+        swiped => { root.shade-release(self.current-position.y - self.pressed-position.y); }
         cancelled => { root.shade-pulling = false; root.p-go(root.p-of-pull(root.shade-pull), 0); }
     pager := Rectangle {
         clip: true;
@@ -761,8 +765,8 @@ export component AppWindow inherits Window {
         // fully covered by the saver: not drawn at all
         visible: root.saver-k < 0.999;
         swipe := SwipeGestureHandler {
-            handle-swipe-left: root.pages.length > 1 && !Act.hold-swipe;
-            handle-swipe-right: root.pages.length > 1 && !Act.hold-swipe;
+            handle-swipe-left: root.pages.length > 1 && !Act.hold-swipe && !root.sheet-open;
+            handle-swipe-right: root.pages.length > 1 && !Act.hold-swipe && !root.sheet-open;
             moved => {
                 if !root.dragging {
                     // a new swipe takes the picture where it is: the running snap stops under the finger, and the
@@ -1151,12 +1155,14 @@ export component AppWindow inherits Window {
         x: 16px;
         y: 10px;
         width: root.width - 32px;
+        pull(d) => { if !root.screensaver-on && root.set-view == 0 { root.shade-move(d); } }
+        pull-end(d) => { if root.shade-pulling { root.shade-release(d); } }
         hint: root.wake-hint;
         mic-muted: root.mic-muted;
         speaker-muted: root.speaker-muted;
         dnd: root.dnd-on;
         listening: root.voice-on && root.voice-state == 1;
-        notes: root.info-notes.length;
+        notes: root.info-unread;
         timers: root.timers;
         timer-mark: island.mark-on;
         timer-hold: island.mark-hold;
@@ -1177,10 +1183,24 @@ export component AppWindow inherits Window {
             || (root.pages.length > 0 && root.pages[root.shown-page].kind == "timers");
         // the timer mark's place once the group has its final marks
         mark-x: 240px + ((root.mic-muted ? 1 : 0) + (root.speaker-muted ? 1 : 0)) * 32px + 16px
-            - ((root.mic-muted ? 1 : 0) + (root.speaker-muted ? 1 : 0) + 1 + ((root.info-notes.length > 0 || root.dnd-on) && !root.screensaver-on ? 1 : 0)) * 16px;
+            - ((root.mic-muted ? 1 : 0) + (root.speaker-muted ? 1 : 0) + 1 + ((root.info-unread > 0 || root.dnd-on) && !root.screensaver-on ? 1 : 0)) * 16px;
     }
-    property <bool> sheet-open: root.quick-sheet || root.thermo-sheet || root.thermo-picker || root.music-picker || root.cal-detail
-        || root.timers-quick || root.todo-picker;
+    // every page sheet, editor and keyboard view (the dots are never drawn over them)
+    property <bool> sheet-open: root.quick-sheet || root.thermo-sheet || root.thermo-picker || root.thermo-settings || root.music-picker
+        || root.music-settings || root.cal-detail || root.cal-settings || root.cal-day-sheet || root.cal-edit || root.timers-quick
+        || root.timers-sheet >= 0 || root.timers-settings || root.timers-edit || root.timers-edit-keyboard || root.todo-picker
+        || root.todo-adding || root.cam-settings || root.info-settings || root.info-card || root.home-bg-sheet || root.home-picker
+        || root.home-settings >= 0;
+    // a sheet opening while a page drag runs (the pager stops taking swipes): the drag snaps back, never left halfway
+    changed sheet-open => {
+        if root.sheet-open && root.dragging {
+            let rp = -(root.drag-start + root.drag-x - root.drag-x0) / root.width;
+            root.pos = Math.round(rp);
+            root.dragging = false;
+            root.drag-x = 0;
+            root.page = Math.mod(root.pos, root.pages.length);
+        }
+    }
     // the dots fade (200 ms) when a sheet, the screensaver or a temporary page hides them, and back
     property <float> dots-k: !root.screensaver-on && !root.dots-hidden && !root.sheet-open && root.pages.length > 1 ? 1 : 0;
     animate dots-k { duration: 200ms; easing: ease-out; }
@@ -1334,6 +1354,17 @@ export component AppWindow inherits Window {
     changed timers-ringing => { AlarmNow.ringing = root.timers-ringing && root.timers-ring-alarm; }
     changed timers-ring-alarm => { AlarmNow.ringing = root.timers-ringing && root.timers-ring-alarm; }
     init => { Theme.k = Theme.dark ? 1 : 0; }
+    // §22.6: the whole screen crossfades between the looks: a picture of the screen before the switch fades out
+    // over the new look (700 ms by hand, 1200 ms by Auto, sine ease-in-out); pictures and images that have a light and
+    // a dark version change with it, not in a jump
+    in-out property <image> theme-shot;
+    property <bool> shot-on;
+    property <duration> shot-t0;
+    property <duration> shot-dur: root.theme-slow ? 1200ms : 700ms;
+    public function theme-fade() { root.shot-t0 = animation-tick(); root.shot-on = true; }
+    Timer { interval: root.shot-dur + 30ms; running: root.shot-on; triggered => { root.shot-on = false; root.theme-shot = @image-url(""); } }
+    property <float> shot-x: root.shot-on ? clamp((animation-tick() - root.shot-t0) / root.shot-dur, 0, 1) : 1;
+    property <float> shot-k: root.shot-on ? (1 + Math.cos(180deg * root.shot-x)) / 2 : 0;
 
     // ---- screensaver ----
     property <float> saver-k: root.screensaver-on ? 1 : 0;
@@ -1439,7 +1470,7 @@ export component AppWindow inherits Window {
         speaker-muted: root.speaker-muted;
         dnd: root.dnd-on;
         listening: root.voice-on && root.voice-state == 1;
-        notes: root.info-notes.length;
+        notes: root.info-unread;
         timers: root.timers;
         timer-mark: island.mark-on;
         timer-hold: island.mark-hold;
@@ -1644,4 +1675,6 @@ export component AppWindow inherits Window {
             source: root.intro-logo;
         }
     }
+    // the theme crossfade's picture of the screen before the switch, over everything
+    if root.shot-k > 0.001: Image { x: 0; y: 0; width: root.width; height: root.height; source: root.theme-shot; opacity: root.shot-k; }
 }

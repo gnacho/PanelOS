@@ -33,6 +33,10 @@ component MarkCell inherits Rectangle {
     in property <color> ink;
     in property <int> badge: 0;           // the bell's count (0: none)
     callback tapped;
+    // a pull down that starts on the mark opens the quick shade after 6 px (29.4): its distance, its end
+    callback pull(length);
+    callback pull-end(length);
+    property <bool> pulling;
     property <duration> wt0;
     property <bool> wmove;
     changed on => { root.wt0 = animation-tick(); root.wmove = true; }
@@ -75,12 +79,28 @@ component MarkCell inherits Rectangle {
             font-size: 10px * root.bk; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center;
             opacity: root.bmove ? root.broll : 1; }
     }
-    touch := TouchArea { x: 0; y: -8px; width: root.width; height: 46px; enabled: root.on; clicked => { root.tapped(); } }
+    touch := TouchArea { x: 0; y: -8px; width: root.width; height: 46px; enabled: root.on;
+        clicked => { if !root.pulling { root.tapped(); } }
+        moved => {
+            if root.pulling || self.mouse-y - self.pressed-y > 6px {
+                root.pulling = true;
+                root.pull(max(0px, self.mouse-y - self.pressed-y - 6px));
+            }
+        }
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.down { root.pulling = false; }
+            if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) && root.pulling {
+                root.pull-end(max(0px, self.mouse-y - self.pressed-y - 6px));
+            }
+        }
+    }
 }
 
-// Thin status line at the top of a panel (29.1): the hint at x 16–168, the mark group centred on x 240, the page's
+// Thin status line at the top of a panel (29.1): the hint from x 16 up to the mark group (at least to x 168), the mark group centred on x 240, the page's
 // own chip at x 312–464 (drawn by the page). On the screensaver the hint and the bell rest.
 export component StatusBar inherits Rectangle {
+    callback pull(length);               // a pull down started on a mark (the shade follows it)
+    callback pull-end(length);
     in property <string> hint;           // wake word hint, or the muted microphone's line (the app picks it)
     in property <bool> mic-muted;
     in property <bool> speaker-muted;    // the panel's volume at 0
@@ -101,8 +121,9 @@ export component StatusBar inherits Rectangle {
     property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
     height: 32px;
     // the hint: the connection problem first, then the muted microphone's line, then the wake hint
+    // as wide as the room left of the mark group (cut only when even that is too short)
     Text {
-        x: 0; y: 0; width: 152px; height: root.height;
+        x: 0; y: 0; width: max(152px, grp.x - 8px); height: root.height;
         text: root.problem ? "No connection to Home Assistant" : root.quiet && !root.mic-muted ? "" : root.hint;
         font-size: Theme.font-caption;
         color: root.problem ? root.warn : root.mic-muted ? root.alert : root.soft;
@@ -114,12 +135,12 @@ export component StatusBar inherits Rectangle {
     grp := HorizontalLayout {
         x: (root.width - self.preferred-width) / 2; y: 0; width: self.preferred-width; height: root.height;
         spacing: 0;
-        MarkCell { on: root.mic-muted; glyph: "\u{F036D}"; ink: root.alert; tapped => { Act.act("mark.mic", ""); } }
-        MarkCell { on: root.speaker-muted; glyph: "\u{F075F}"; ink: root.warn; tapped => { Act.act("mark.speaker", ""); } }
+        MarkCell { on: root.mic-muted; glyph: "\u{F036D}"; ink: root.alert; tapped => { Act.act("mark.mic", ""); } pull(d) => { root.pull(d); } pull-end(d) => { root.pull-end(d); } }
+        MarkCell { on: root.speaker-muted; glyph: "\u{F075F}"; ink: root.warn; tapped => { Act.act("mark.speaker", ""); } pull(d) => { root.pull(d); } pull-end(d) => { root.pull-end(d); } }
         MarkCell { on: root.timer-mark && root.timers.length > 0; hold: root.timer-hold; glyph: "\u{F13AB}";
-            ink: root.near.urgent ? root.alert : root.near.tint; tapped => { Act.act("mark.timers", ""); } }
+            ink: root.near.urgent ? root.alert : root.near.tint; tapped => { Act.act("mark.timers", ""); } pull(d) => { root.pull(d); } pull-end(d) => { root.pull-end(d); } }
         MarkCell { on: (root.notes > 0 || root.dnd) && !root.quiet; glyph: root.dnd ? "\u{F00A0}" : "\u{F009A}"; ink: root.soft; badge: root.notes;
-            tapped => { Act.act("notes.open", ""); } }
+            tapped => { Act.act("notes.open", ""); } pull(d) => { root.pull(d); } pull-end(d) => { root.pull-end(d); } }
     }
 }
 
@@ -861,8 +882,11 @@ export component ClockFace inherits Rectangle {
     property <bool> has-next: root.show-next && root.data.next != "";
     property <bool> clock-only: !root.show-date && !root.show-weather && !root.has-next;
     // the colon breathes evenly, once in 2 s
-    property <float> colon: root.show-seconds ? 0.75 + 0.25 * Math.cos(root.seconds * 180deg) : 1;
-    property <float> minutes: root.data.mm.to-float() + root.seconds / 60;
+    // the seconds, sampled 30 times a second: the colon, the second hand and the seconds line move at 30 fps
+    property <float> s30;
+    Timer { interval: root.show-seconds ? 33ms : 1s; running: true; triggered => { root.s30 = root.seconds; } }
+    property <float> colon: root.show-seconds ? 0.75 + 0.25 * Math.cos(root.s30 * 180deg) : 1;
+    property <float> minutes: root.data.mm.to-float() + root.s30 / 60;
     property <float> hours: Math.mod(root.data.hh.to-float(), 12) + root.minutes / 60;
     // Content area between the top line and the bottom row (heads, dots).
     property <length> top: 40px;
@@ -936,16 +960,16 @@ export component ClockFace inherits Rectangle {
                 background: Theme.surface-raised;
                 Rectangle {
                     x: 0;
-                    width: parent.width * root.seconds / 60;
+                    width: parent.width * root.s30 / 60;
                     background: root.accent;
                     border-radius: 1.5px;
                 }
                 // at the minute the full line fades out (0.25 s) over the new one instead of running back
-                if root.seconds < 0.25: Rectangle {
+                if root.s30 < 0.25: Rectangle {
                     x: 0;
                     background: root.accent;
                     border-radius: 1.5px;
-                    opacity: 1 - root.seconds * 4;
+                    opacity: 1 - root.s30 * 4;
                 }
             }
         }
@@ -967,7 +991,7 @@ export component ClockFace inherits Rectangle {
             AnalogDial {
                 size: root.clock-only ? 340px : 290px;
                 show-seconds: root.show-seconds;
-                h: root.hours; m: root.minutes; s: root.seconds;
+                h: root.hours; m: root.minutes; s: root.s30;
                 accent: root.accent; weight: root.weight;
             }
         }
@@ -985,7 +1009,7 @@ export component ClockFace inherits Rectangle {
         weather: root.show-weather ? root.data.temperature + "  " + root.data.condition : "";
         weather-icon: root.data.weather-icon;
         next: root.has-next ? root.data.next : "";
-        h: root.hours; m: root.minutes; s: root.seconds;
+        h: root.hours; m: root.minutes; s: root.s30;
         accent: root.accent; weight: root.weight;
     }
 
@@ -1001,7 +1025,7 @@ export component ClockFace inherits Rectangle {
                 size: root.clock-only ? 340px : 300px;
                 minimal: true;
                 show-seconds: root.show-seconds;
-                h: root.hours; m: root.minutes; s: root.seconds;
+                h: root.hours; m: root.minutes; s: root.s30;
                 accent: root.accent; weight: root.weight;
             }
         }
@@ -1021,7 +1045,7 @@ export component ClockFace inherits Rectangle {
         weather: root.show-weather ? root.data.temperature : "";
         weather-icon: root.data.weather-icon;
         next: root.has-next ? root.data.next : "";
-        h: root.hours; m: root.minutes; s: root.seconds;
+        h: root.hours; m: root.minutes; s: root.s30;
         accent: root.accent; weight: root.weight;
     }
 
@@ -1055,15 +1079,15 @@ export component ClockFace inherits Rectangle {
         spacing: 14px;
         if root.style == 8: NixieClock {
             height: min(root.clock-only ? 300px : 220px, root.look-w * 168 / (root.show-seconds ? 438 : 302));
-            hh: root.data.hh; mm: root.data.mm; seconds: root.seconds; show-seconds: root.show-seconds;
+            hh: root.data.hh; mm: root.data.mm; seconds: root.s30; show-seconds: root.show-seconds;
         }
         if root.style == 9: LcdClock {
             height: min(root.clock-only ? 300px : 236px, root.look-w * 200 / 348);
-            hh: root.data.hh; mm: root.data.mm; seconds: root.seconds; weekday: root.data.lcd-day; date: root.data.lcd-date;
+            hh: root.data.hh; mm: root.data.mm; seconds: root.s30; weekday: root.data.lcd-day; date: root.data.lcd-date;
         }
         if root.style == 10: TwinBellClock {
             height: root.clock-only ? 320px : 252px;
-            hours: root.hours; minutes: root.minutes; seconds: root.seconds; show-seconds: root.show-seconds;
+            hours: root.hours; minutes: root.minutes; seconds: root.s30; show-seconds: root.show-seconds;
         }
         if (root.show-date && root.style != 9) || root.show-weather: InfoLine {
             data: root.data; show-date: root.show-date && root.style != 9; show-weather: root.show-weather; size: 19px;

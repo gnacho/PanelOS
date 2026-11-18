@@ -31,7 +31,12 @@ thread_local! {
     /// LEAVE_MS, then move down.
     static LEAVING: std::cell::RefCell<Vec<(String, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
-const LEAVE_MS: u64 = 640;
+const LEAVE_MS: u64 = 1500;
+
+thread_local! {
+    /// An item added on the panel, to be moved to the top of its list once Home Assistant knows its id: (list, text).
+    static TO_TOP: std::cell::RefCell<Option<(String, String)>> = const { std::cell::RefCell::new(None) };
+}
 
 thread_local! {
     /// The keys of the last update of a list, and the items first seen in a later update with when (spec 25.D3-D5: the
@@ -72,6 +77,17 @@ fn ensure_started(ui: &AppWindow, s: &crate::UiState) {
                 if let Some(items) = fetch(&url, &auth, &list) {
                     let weak = weak.clone();
                     let _ = slint::invoke_from_event_loop(move || {
+                        // a new item from the panel goes to the top of the list (C-550)
+                        let top = TO_TOP.with(|t| t.borrow().clone());
+                        if let Some((l, text)) = top.filter(|(l, _)| *l == list) {
+                            if let Some(pos) = items.iter().position(|i| !i.done && i.summary == text && !i.uid.is_empty()) {
+                                TO_TOP.with(|t| *t.borrow_mut() = None);
+                                if pos > 0 {
+                                    crate::send_raw(json!({ "type": "todo/item/move", "entity_id": l, "uid": items[pos].uid, "previous_uid": null }));
+                                    WANTED.lock().unwrap().1 = true;
+                                }
+                            }
+                        }
                         ITEMS.with(|i| *i.borrow_mut() = items);
                         if let Some(ui) = weak.upgrade() {
                             with_state(|s| refresh(&ui, s));
@@ -417,9 +433,10 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                             data["description"] = json!(note);
                         }
                         crate::call("todo", "add_item", &list, data);
-                        // shown at once; the list is read again right after
+                        TO_TOP.with(|t| *t.borrow_mut() = Some((list.clone(), text.clone())));
+                        // shown at once, at the top; the list is read again right after
                         ITEMS.with(|i| {
-                            i.borrow_mut().push(Item { uid: String::new(), summary: text, done: false, due: String::new(), note })
+                            i.borrow_mut().insert(0, Item { uid: String::new(), summary: text, done: false, due: String::new(), note })
                         });
                         WANTED.lock().unwrap().1 = true;
                     }

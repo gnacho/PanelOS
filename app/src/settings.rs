@@ -113,13 +113,15 @@ impl WebConfig {
     }
 }
 
+/// The smallest light change sent (lux), whatever the percentage.
+pub const LUX_MIN_STEP: f64 = 5.0;
+
 /// Change thresholds of the sensors Home Assistant records. Every value sent
 /// is a row in its database, so small wobbles are not sent.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Reporting {
-    /// Light: percent of the last value sent, and at least a third of this
-    /// number in lux (the noise of a dark room).
+    /// Light: percent of the last value sent, and at least 5 lx (the noise of a dark room).
     pub illuminance_percent: f64,
     /// SoC temperature, °C, on a five-minute average.
     pub soc_temperature_step: f64,
@@ -150,8 +152,7 @@ impl Reporting {
 
     /// Light change worth sending, from the last value sent (lux).
     pub fn lux_step(&self, before: f64) -> f64 {
-        let p = self.illuminance_percent;
-        (before * p / 100.0).max((p / 3.0).max(1.0))
+        (before * self.illuminance_percent / 100.0).max(LUX_MIN_STEP)
     }
 }
 

@@ -46,14 +46,13 @@ pub fn recognize(samples: &[i16]) -> Result<String, String> {
     Ok(v["text"].as_str().unwrap_or("").to_string())
 }
 
-/// What stops a ringing timer: a stop phrase, or any single word (through the ring the speech recognition often
-/// turns a lone "állj" into another word: "Fájl.", "Jók.", "Folytat." were measured), never a longer sentence
-/// (another speaker's answer, a sentence to someone).
+/// What stops a ringing timer: a stop phrase (`is_stop`), or a short sentence whose words include one starting with
+/// "állj" or "stop" (through the ring the speech recognition sometimes stretches a lone "állj" into "Álljuk meg …").
+/// Any other text never stops it, however short: a one-word fragment of a conversation in the room is not a stop.
 pub fn stops_ring(text: &str) -> bool {
     let words: Vec<String> = text.split(|c: char| !c.is_alphanumeric()).filter(|w| w.chars().count() >= 2).map(str::to_lowercase).collect();
-    // a short sentence with an "áll…" or "stop" word in it ("Álljuk meg …" was measured for "állj")
-    let stem = words.len() <= 6 && words.iter().any(|w| w.starts_with("áll") || w.starts_with("stop") || w.starts_with("sztop"));
-    is_stop(text) || words.len() == 1 || stem
+    let stem = words.len() <= 6 && words.iter().any(|w| w.starts_with("állj") || w.starts_with("stop") || w.starts_with("sztop"));
+    is_stop(text) || stem
 }
 
 /// A short phrase that means "stop" (Hungarian and English): at most four words, one of them a stop word, or a
@@ -84,8 +83,12 @@ mod tests {
 
     #[test]
     fn ring_stops() {
-        assert!(stops_ring("Fájl."));
-        assert!(stops_ring("Jók."));
+        assert!(!stops_ring("Fájl."));
+        assert!(!stops_ring("Mobil."));
+        assert!(!stops_ring("Szerintem."));
+        assert!(!stops_ring("Köszönöm."));
+        assert!(!stops_ring("Állítólag igen."));
+        assert!(stops_ring("Állj."));
         assert!(stops_ring("Állj, állj!"));
         assert!(!stops_ring("Köszönöm szépen."));
         assert!(!stops_ring(""));
