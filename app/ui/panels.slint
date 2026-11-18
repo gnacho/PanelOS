@@ -120,10 +120,13 @@ export component StatusBar inherits Rectangle {
     property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
     property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
     height: 32px;
-    // the hint: the connection problem first, then the muted microphone's line, then the wake hint
-    // as wide as the room left of the mark group (cut only when even that is too short)
+    // the hint: the connection problem first, then the muted microphone's line, then the wake hint.
+    // An empty mark group takes no room: the hint runs up to the page's chip (8 px before x 312; the whole line
+    // where the page has no chip, mixed by the swipe). With marks it ends 4 px before the group and is cut there.
+    property <length> hint-end: root.width - root.left-k * (root.width - 288px);
     Text {
-        x: 0; y: 0; width: max(152px, grp.x - 8px); height: root.height;
+        x: 0; y: 0; height: root.height;
+        width: grp.preferred-width > 0.5px ? min(root.hint-end, grp.x - 4px) : root.hint-end;
         text: root.problem ? "No connection to Home Assistant" : root.quiet && !root.mic-muted ? "" : root.hint;
         font-size: Theme.font-caption;
         color: root.problem ? root.warn : root.mic-muted ? root.alert : root.soft;
