@@ -1,4 +1,7 @@
-# PanelOS
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="branding/kit/social/readme-header.png">
+  <img alt="PanelOS: open firmware for smart home wall panels" src="branding/kit/social/readme-header-light.png" width="100%">
+</picture>
 
 Open-source Linux firmware for smart home wall panels: it replaces the closed vendor firmware with a minimal **mainline Linux** system built with **Buildroot**, running its own native interface for Home Assistant (**Rust + Slint**, drawn on the GPU) and a voice satellite. No browser, no cloud.
 
