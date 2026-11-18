@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.0.6 (in development)
+
+### Voice
+- A ringing timer stops only on a stop word or a short stop phrase; a one-word fragment of a conversation no longer stops it. Speech over the ring counts from 8 dB over its echo.
+- After the wake word, listening ends when nobody speaks within 5 s.
+- The voice view keeps the microphone level and trace live while it shows; the comic answer waits until the thinking is over, and the comic look runs smoothly.
+- The integration's wake word rows show and set what the satellite really listens for, by name.
+
+### Connection
+- The Wi-Fi roam check also finds access points that hide their network name (it asks for the network by name).
+- A connection log on the persistent partition: Home Assistant sessions ending and coming back, roam checks with the access points they saw, moves and reconnects, with the local time ([docs/security/app.md](docs/security/app.md)).
+- The integration keeps the panel's entities for 30 s through a short drop or an app restart instead of turning them unavailable.
+- Illuminance is reported from a change of 5 lx, at most once in 10 s, and again every 10 minutes.
+
+### Status bar, shade, sheets, pages
+- The wake hint uses the room left of the marks and follows a mute at once; the speaker mark leaves when its tap brings the volume back; the bell counts unread notifications only.
+- A pull that starts on a mark opens the shade. Leaving a page closes its sheets, the page dots never lie over a sheet, and a sideways drag on a sheet neither turns the page nor taps a row.
+- A dropdown opens upwards when it would not fit below.
+- The theme change crossfades the whole screen.
+- After a ring, or a view shown for some seconds (`panelos.show_view`), the panel goes back to the page it was on.
+- A reload or the dashboard coming on screen shows the loading screen first, never a white web page.
+
+### Pages
+- Timers: +1 min with two synthwave timers, the last minute in the alert colour, the ringing screen in the timer's colour, the timers page's own synthwave scene (or a random one every time); the new-timer view over running synthwave timers keeps the scene under a veil.
+- Stopwatch: one lap button (the flag) and the lap list in the nixie look, which now runs at ~45 fps instead of ~9.
+- Clocks: only the colon, the second hands and the seconds line move (30 fps); a still clock stays still. Screensaver faces nixie, LCD and twin-bell from the integration.
+- Music: transfer and group buttons in both themes, an info bubble in the player picker, the cover options in the music sheet, no thumbs on the sliders at rest, a vertical swipe no longer seeks, the half cassette's volume bar works, the position holds after a pause on the panel.
+- Thermostat: quick presses count one by one, the remote's clock runs, the wall look's knob turns with the finger like a real knob and never turns the page.
+- Quick controls: channels and levers centred for any count, labels fall back to the whole name, a light's effects in a dropdown, the deck's lamp in the light's own colour; the flight deck has a label field in the integration.
+- Calendar: the top-right chip names the calendar. To-do: a new item goes to the top; a ticked row stays 1.5 s; one list picker.
+- Notifications: the fridge note shows in the first window; the pager window steps on a swipe.
+- Settings: the storage page sits under the status bar.
+
 ## 0.0.5
 
 **Upgrading from 0.0.4**: update the panel and the integration together ([docs/home_assistant.md](docs/home_assistant.md#upgrading-from-004)); the new interface runs from the UI bundle and the web bundle ([docs/app.md](docs/app.md#build-run-develop)).

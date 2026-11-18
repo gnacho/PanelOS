@@ -17,6 +17,7 @@ mod cam;
 mod camera;
 mod clock;
 mod config;
+mod connlog;
 mod devlog;
 mod display;
 mod draw;
@@ -1061,7 +1062,7 @@ fn apply_panel_config(ui: &AppWindow) {
         if current as usize >= slots.len() {
             ui.set_page(0);
         }
-        ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
+        set_dashboard(ui, s.settings.display_mode == "dashboard" && s.web.is_some());
         let mut changed = false;
         let extra = extra_entities(s);
         // an entity a page needs that the running session does not follow (e.g. pages from the stored settings
@@ -2207,7 +2208,7 @@ fn handle_show(ui: &AppWindow, v: &Value) {
     match v["view"].as_str().unwrap_or("home") {
         "dashboard" => {
             if ui.get_web_active() {
-                ui.set_dashboard_mode(true);
+                set_dashboard(ui, true);
             }
         }
         "media" => {
@@ -2218,7 +2219,7 @@ fn handle_show(ui: &AppWindow, v: &Value) {
             }
         }
         other => {
-            ui.set_dashboard_mode(with_state(|s| s.settings.display_mode == "dashboard") && ui.get_web_active());
+            set_dashboard(ui, with_state(|s| s.settings.display_mode == "dashboard") && ui.get_web_active());
             let kind = if ui.get_pages().iter().any(|p| p.kind == other) { other } else { "home" };
             if seconds > 0 {
                 visit_page(ui, kind);
@@ -2258,6 +2259,59 @@ pub fn page_set(ui: &AppWindow, kind: &str, variant: Option<i32>, options: Value
         }
     }
     send(Command::PageSet { index, variant, options });
+}
+
+thread_local! {
+    /// When the web helper last said a page started loading.
+    static WEB_LOADING_AT: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+    /// A pull to refresh asked for a reload: the loading screen goes up first.
+    static WEB_COVER: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The loading screen stays at least until then (the web view's first frames after the dashboard comes on are
+    /// empty or half drawn even when the page reports ready).
+    static WEB_MIN_UNTIL: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The loading screen goes up at once (before the web view shows anything: its first frames of a reload are white),
+/// for a reload or when the dashboard comes on screen. If no page starts loading within 1.8 s (the dashboard was
+/// already loaded), it fades again.
+fn cover_web(ui: &AppWindow) {
+    // (also called from inside `with_state`: the setting is read only when the state is free, else it counts as on)
+    let screen_on = STATE.with(|st| st.try_borrow().ok().and_then(|g| g.as_ref().map(|s| s.settings.web.loading_screen))).unwrap_or(true);
+    if !screen_on || ui.get_web_loading() {
+        return;
+    }
+    let asked = Instant::now();
+    WEB_MIN_UNTIL.with(|m| m.set(Some(asked + Duration::from_millis(1800))));
+    ui.set_web_loading(true);
+    loading_text::start(ui);
+    ui.set_web_overlay(true);
+    let weak = ui.as_weak();
+    slint::Timer::single_shot(Duration::from_millis(1800), move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let started = WEB_LOADING_AT.with(|t| t.get()).is_some_and(|t| t >= asked);
+        if !started && ui.get_web_loading() {
+            // (the page was loaded already: it fades now, its minimum time is over)
+            WEB_MIN_UNTIL.with(|m| m.set(None));
+            ui.set_web_loading(false);
+            loading_text::stop();
+            let weak = ui.as_weak();
+            slint::Timer::single_shot(Duration::from_millis(500), move || {
+                if let Some(ui) = weak.upgrade() {
+                    if !ui.get_web_loading() {
+                        ui.set_web_overlay(false);
+                    }
+                }
+            });
+        }
+    });
+}
+
+/// The dashboard on screen or not; coming on screen, the loading screen covers it first (see `cover_web`).
+fn set_dashboard(ui: &AppWindow, on: bool) {
+    if on && !ui.get_dashboard_mode() && ui.get_web_active() {
+        cover_web(ui);
+    }
+    ui.set_dashboard_mode(on);
 }
 
 /// A websocket command of Home Assistant that is not a service call (`todo/item/move` …).
@@ -2911,7 +2965,7 @@ fn tick(ui: &AppWindow) {
         if s.show_until.is_some_and(|t| Instant::now() >= t) {
             s.show_until = None;
             ui.set_strip_on(false);
-            ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
+            set_dashboard(ui, s.settings.display_mode == "dashboard" && s.web.is_some());
             SHOW_OVER.with(|o| o.set(true));
         }
         let idle = platform::idle_time();
@@ -3999,7 +4053,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(ui) = weak.upgrade() else { return };
-                ui.set_web_loading(on);
+                if on {
+                    WEB_LOADING_AT.with(|t| t.set(Some(Instant::now())));
+                }
+                if on {
+                    ui.set_web_loading(true);
+                }
                 if on {
                     // Off in the options: Home Assistant's own start-up shows instead.
                     if with_state(|s| s.settings.web.loading_screen) {
@@ -4007,15 +4066,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         ui.set_web_overlay(true);
                     }
                 } else {
-                    loading_text::stop();
+                    // ready: the loading screen fades, but not before its minimum time after the dashboard came on
+                    let wait = WEB_MIN_UNTIL.with(|m| m.take()).map_or(Duration::ZERO, |u| u.saturating_duration_since(Instant::now()));
                     let weak = ui.as_weak();
-                    slint::Timer::single_shot(Duration::from_millis(500), move || {
-                        if let Some(ui) = weak.upgrade() {
-                            if !ui.get_web_loading() {
-                                ui.set_web_overlay(false);
-                            }
+                    slint::Timer::single_shot(wait, move || {
+                        let Some(ui) = weak.upgrade() else { return };
+                        if WEB_LOADING_AT.with(|t| t.get()).is_some_and(|t| t.elapsed() < wait) {
+                            return;
                         }
+                        ui.set_web_loading(false);
+                        loading_text::stop();
+                        let weak = ui.as_weak();
+                        slint::Timer::single_shot(Duration::from_millis(500), move || {
+                            if let Some(ui) = weak.upgrade() {
+                                if !ui.get_web_loading() {
+                                    ui.set_web_overlay(false);
+                                }
+                            }
+                        });
                     });
+                    return;
                 }
             });
         });
@@ -4141,6 +4211,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 _ => {
                     view.touch('u', x, y);
                     if s.web_pulled.is_some_and(|p| p >= 1.0) {
+                        WEB_COVER.with(|c| c.set(true));
                         view.reload();
                     }
                     s.web_pull = None;
@@ -4150,6 +4221,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             (false, None)
         });
+        if WEB_COVER.with(|c| c.replace(false)) {
+            cover_web(&ui);
+        }
         if let Some(p) = pulled {
             ui.set_web_pull(p);
         }

@@ -204,56 +204,61 @@ fn check(idle: &dyn Fn() -> bool, leaving: bool) -> bool {
     let Some(link) = wpa_cli(&["status"]).as_deref().and_then(parse_status) else { return false };
     let Some(signal) = wpa_cli(&["signal_poll"]).as_deref().and_then(parse_signal) else { return false };
     if signal >= GOOD_SIGNAL && !leaving {
-        eprintln!("nspanel-app: roam check: {signal} dBm on {}, strong enough, no scan", link.bssid);
+        crate::connlog::note(&format!("roam check: {signal} dBm on {}, strong enough, no scan", link.bssid));
         return true;
     }
-    // FAIL-BUSY while wpa_supplicant scans or connects by itself.
-    if !ok(wpa_cli(&["scan"])) {
+    // A scan for the network's own name: an access point that does not broadcast it (a hidden SSID) answers only a
+    // probe that names it, and a plain scan lists it without a name. FAIL-BUSY while wpa_supplicant scans or connects
+    // by itself.
+    let hex: String = link.ssid.bytes().map(|b| format!("{b:02x}")).collect();
+    if !ok(wpa_cli(&["scan", "ssid", &hex])) && !ok(wpa_cli(&["scan"])) {
         return false;
     }
     std::thread::sleep(SCAN_WAIT);
     let aps = wpa_cli(&["scan_results"]).map(|t| parse_scan(&t)).unwrap_or_default();
+    let same: Vec<String> = aps.iter().filter(|a| a.ssid == link.ssid).map(|a| format!("{} {} MHz {} dBm", a.bssid, a.freq, a.signal)).collect();
+    crate::connlog::note(&format!("roam check: access points of the network: {}", same.join(", ")));
     let poor = poor_aps();
     match decide(&link, signal, &aps, &poor, leaving) {
         Decision::Stay { current, best: Some(best) } => {
-            eprintln!("nspanel-app: roam check: {current} dBm on {}, strongest other access point {best} dBm, staying", link.bssid)
+            crate::connlog::note(&format!("roam check: {current} dBm on {}, strongest other access point {best} dBm, staying", link.bssid))
         }
         Decision::Stay { current, best: None } => {
-            eprintln!("nspanel-app: roam check: {current} dBm on {}, no other access point of the network, staying", link.bssid)
+            crate::connlog::note(&format!("roam check: {current} dBm on {}, no other access point of the network, staying", link.bssid))
         }
         Decision::Move { current, to } => {
             // A voice run may have started during the scan.
             if !idle() {
                 return false;
             }
-            eprintln!(
-                "nspanel-app: roam check: moving from {} ({current} dBm{}) to {} ({} dBm, {} MHz)",
+            crate::connlog::note(&format!(
+                "roam check: moving from {} ({current} dBm{}) to {} ({} dBm, {} MHz)",
                 link.bssid,
                 if leaving { ", poor link" } else { "" },
                 to.bssid,
                 to.signal,
                 to.freq
-            );
+            ));
             if !ok(wpa_cli(&["roam", &to.bssid])) {
-                eprintln!("nspanel-app: roam check: wpa_supplicant refused the move");
+                crate::connlog::note(&format!("roam check: wpa_supplicant refused the move"));
                 return true;
             }
             std::thread::sleep(MOVE_WAIT);
             match wpa_cli(&["status"]).as_deref().and_then(parse_status) {
-                Some(now) if now.bssid == to.bssid => eprintln!("nspanel-app: roam check: now on {}", now.bssid),
-                Some(now) => eprintln!("nspanel-app: roam check: the move did not happen, on {}", now.bssid),
-                None => eprintln!("nspanel-app: roam check: not connected after the move, wpa_supplicant reconnects by itself"),
+                Some(now) if now.bssid == to.bssid => crate::connlog::note(&format!("roam check: now on {}", now.bssid)),
+                Some(now) => crate::connlog::note(&format!("roam check: the move did not happen, on {}", now.bssid)),
+                None => crate::connlog::note(&format!("roam check: not connected after the move, wpa_supplicant reconnects by itself")),
             }
             // connected is not enough: the router must answer through the new link
             if !router_answers() {
-                eprintln!("nspanel-app: roam check: no traffic after the move, reconnecting");
+                crate::connlog::note(&format!("roam check: no traffic after the move, reconnecting"));
                 reconnect();
             } else if let Some((loss, avg)) = probe().filter(|&(l, a)| is_poor(l, a)) {
                 // a strong but poor access point: back to the one before (unless that one was poor)
-                eprintln!("nspanel-app: roam check: {} is poor ({loss} % lost, {avg:.0} ms), avoided for 2 h", to.bssid);
+                crate::connlog::note(&format!("roam check: {} is poor ({loss} % lost, {avg:.0} ms), avoided for 2 h", to.bssid));
                 mark_poor(&to.bssid);
                 if !leaving && ok(wpa_cli(&["roam", &link.bssid])) {
-                    eprintln!("nspanel-app: roam check: moving back to {}", link.bssid);
+                    crate::connlog::note(&format!("roam check: moving back to {}", link.bssid));
                     std::thread::sleep(MOVE_WAIT);
                     if !router_answers() {
                         reconnect();
@@ -293,15 +298,15 @@ fn reconnect() {
     let _ = wpa_cli(&["reassociate"]);
     std::thread::sleep(MOVE_WAIT);
     if router_answers() {
-        eprintln!("nspanel-app: link watch: traffic again after reassociating");
+        crate::connlog::note(&format!("link watch: traffic again after reassociating"));
         return;
     }
-    eprintln!("nspanel-app: link watch: still no traffic, disconnecting and connecting again");
+    crate::connlog::note(&format!("link watch: still no traffic, disconnecting and connecting again"));
     let _ = wpa_cli(&["disconnect"]);
     std::thread::sleep(Duration::from_secs(2));
     let _ = wpa_cli(&["reconnect"]);
     std::thread::sleep(MOVE_WAIT);
-    eprintln!("nspanel-app: link watch: {}", if router_answers() { "traffic again" } else { "still no traffic" });
+    crate::connlog::note(&format!("link watch: {}", if router_answers() { "traffic again" } else { "still no traffic" }));
 }
 
 /// Switches the Wi-Fi's power save off when it is on (also after a reconnect turned it on again).
@@ -310,7 +315,7 @@ fn power_save_off() {
         .map(|o| String::from_utf8_lossy(&o.stdout).contains(": on")).unwrap_or(false);
     if on {
         let done = Command::new("iw").args(["dev", IFACE, "set", "power_save", "off"]).status().map(|s| s.success()).unwrap_or(false);
-        eprintln!("nspanel-app: link watch: Wi-Fi power save {}", if done { "switched off" } else { "could not be switched off" });
+        crate::connlog::note(&format!("link watch: Wi-Fi power save {}", if done { "switched off" } else { "could not be switched off" }));
     }
 }
 
@@ -336,7 +341,7 @@ fn watch(linked: impl Fn() -> bool) {
         if router_answers() {
             continue;
         }
-        eprintln!("nspanel-app: link watch: Wi-Fi connected but the router does not answer, reconnecting");
+        crate::connlog::note(&format!("link watch: Wi-Fi connected but the router does not answer, reconnecting"));
         last_fix = Some(std::time::Instant::now());
         reconnect();
     }
@@ -346,7 +351,7 @@ fn watch(linked: impl Fn() -> bool) {
 /// whether the link to Home Assistant is up).
 pub fn spawn(idle: impl Fn() -> bool + Send + 'static, linked: impl Fn() -> bool + Send + 'static) {
     if let Err(e) = std::thread::Builder::new().name("link-watch".into()).spawn(move || watch(linked)) {
-        eprintln!("nspanel-app: link watch not started: {e}");
+        crate::connlog::note(&format!("link watch not started: {e}"));
     }
     let started = std::thread::Builder::new().name("roam".into()).spawn(move || {
         std::thread::sleep(FIRST_CHECK);
@@ -365,12 +370,12 @@ pub fn spawn(idle: impl Fn() -> bool + Send + 'static, linked: impl Fn() -> bool
             match probe() {
                 Some((loss, avg)) if is_poor(loss, avg) => {
                     poor_probes += 1;
-                    eprintln!("nspanel-app: link probe: {loss} % lost, {avg:.0} ms average (poor, {poor_probes} in a row)");
+                    crate::connlog::note(&format!("link probe: {loss} % lost, {avg:.0} ms average (poor, {poor_probes} in a row)"));
                     if poor_probes < 2 {
                         std::thread::sleep(Duration::from_secs(30));
                         if let Some((l, a)) = probe().filter(|&(l, a)| is_poor(l, a)) {
                             poor_probes += 1;
-                            eprintln!("nspanel-app: link probe: {l} % lost, {a:.0} ms average (poor, {poor_probes} in a row)");
+                            crate::connlog::note(&format!("link probe: {l} % lost, {a:.0} ms average (poor, {poor_probes} in a row)"));
                         } else {
                             poor_probes = 0;
                         }
@@ -378,7 +383,7 @@ pub fn spawn(idle: impl Fn() -> bool + Send + 'static, linked: impl Fn() -> bool
                     if poor_probes >= 2 {
                         if let Some(link) = wpa_cli(&["status"]).as_deref().and_then(parse_status) {
                             mark_poor(&link.bssid);
-                            eprintln!("nspanel-app: link probe: {} avoided for 2 h, looking for another access point", link.bssid);
+                            crate::connlog::note(&format!("link probe: {} avoided for 2 h, looking for another access point", link.bssid));
                         }
                         poor_probes = 0;
                         check(&idle, true);
@@ -390,7 +395,7 @@ pub fn spawn(idle: impl Fn() -> bool + Send + 'static, linked: impl Fn() -> bool
         }
     });
     if let Err(e) = started {
-        eprintln!("nspanel-app: roam check not started: {e}");
+        crate::connlog::note(&format!("roam check not started: {e}"));
     }
 }
 

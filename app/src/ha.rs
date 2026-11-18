@@ -659,7 +659,7 @@ pub fn spawn(
             let result = session(&ws_url, &shared, &auth, &commands, &|event| {
                 if let Event::Status { connected: true, .. } = event {
                     if let Some(since) = failing_since.take() {
-                        eprintln!("nspanel-app: Home Assistant connected again after {} s", since.elapsed().as_secs());
+                        crate::connlog::note(&format!("Home Assistant connected again after {} s", since.elapsed().as_secs()));
                     }
                     last_logged.borrow_mut().take();
                 }
@@ -687,7 +687,7 @@ pub fn spawn(
                 _ => e.clone(),
             };
             if last_logged.borrow().as_deref() != Some(cause.as_str()) {
-                eprintln!("nspanel-app: Home Assistant session ended: {e}");
+                crate::connlog::note(&format!("Home Assistant session ended: {e}"));
                 *last_logged.borrow_mut() = Some(cause);
             }
             if failing_since.get().is_none() {
