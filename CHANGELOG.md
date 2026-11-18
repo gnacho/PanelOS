@@ -8,6 +8,11 @@
 - The voice view keeps the microphone level and trace live while it shows; the comic answer waits until the thinking is over, and the comic look runs smoothly.
 - The integration's wake word rows show and set what the satellite really listens for, by name.
 
+### Music Assistant
+- The panel is a Sendspin player: Music Assistant finds it, pairs with it through Home Assistant and plays on it, with no setup. The music plays under every other sound and pauses while the assistant listens.
+- One volume: Music Assistant's volume of the panel is the panel's own.
+- The music page lists the panel itself first.
+
 ### Connection
 - The Wi-Fi roam check also finds access points that hide their network name (it asks for the network by name).
 - A connection log on the persistent partition: Home Assistant sessions ending and coming back, roam checks with the access points they saw, moves and reconnects, with the local time ([docs/security/app.md](docs/security/app.md)).
@@ -15,7 +20,7 @@
 - Illuminance is reported from a change of 5 lx, at most once in 10 s, and again every 10 minutes.
 
 ### Status bar, shade, sheets, pages
-- The wake hint uses the room left of the marks and follows a mute at once; the speaker mark leaves when its tap brings the volume back; the bell counts unread notifications only.
+- The wake hint takes the whole room when there is no mark (with marks it ends just before them) and follows a mute at once; the speaker mark leaves when its tap brings the volume back; the bell counts unread notifications only.
 - A pull that starts on a mark opens the shade. Leaving a page closes its sheets, the page dots never lie over a sheet, and a sideways drag on a sheet neither turns the page nor taps a row.
 - A dropdown opens upwards when it would not fit below.
 - The theme change crossfades the whole screen.

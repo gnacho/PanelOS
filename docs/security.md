@@ -9,6 +9,7 @@ The panel listens on:
 | Port | Service | Who may use it |
 |---|---|---|
 | TCP 6053 | ESPHome native API (`app/src/esphome.rs`, `app/src/api_link.rs`) | Home Assistant only, encrypted |
+| TCP 8928 | Sendspin player (`app/src/sendspin.rs`) | a paired Music Assistant; end-to-end encrypted (Noise KKpsk2), no unpaired access |
 | TCP 22 | SSH (dropbear) | the holder of the SSH key in the image |
 | UDP 5353 | mDNS (`app/src/mdns.rs`) | answers only to the panel's own network |
 | TCP 8080 | login callback (`app/src/pairing.rs`) | only until the panel is paired |
