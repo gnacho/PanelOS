@@ -199,8 +199,8 @@ SCREENSAVER_SCHEMA = vol.Schema(
         vol.Optional("from"): _TIME,
         vol.Optional("to"): _TIME,
         vol.Optional("light_entity"): vol.Any("", cv.entity_domain("sensor")),
-        # the clock on the screensaver: face (0..7), its parts, letters, the wandering speed, colour
-        vol.Optional("face"): vol.All(vol.Coerce(int), vol.Range(min=0, max=7)),
+        # the clock on the screensaver: face (0..10), its parts, letters, the wandering speed, colour
+        vol.Optional("face"): vol.All(vol.Coerce(int), vol.Range(min=0, max=10)),
         vol.Optional("seconds"): bool,
         vol.Optional("date"): bool,
         vol.Optional("weather"): bool,

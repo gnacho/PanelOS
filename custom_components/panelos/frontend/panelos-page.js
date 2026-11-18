@@ -1073,6 +1073,7 @@ class PanelOSPage extends HTMLElement {
     // an open dropdown closes on a click anywhere else (its field and menu keep their clicks)
     this.shadowRoot.addEventListener("click", () => { if (this._ui && this._ui.dd) { this._ui.dd = null; this._ui.ddq = ""; this._render(); } });
     this._data = null;
+    this._satCfg = {}; // voice satellites' wake word configuration, by entity
     this._reg = null; // registries from the websocket API when hass has none
     this._path = "";
     this._routed = false;
@@ -2333,7 +2334,7 @@ class PanelOSPage extends HTMLElement {
   _infoBtn(key, text) {
     const open = this._ui.info === key || this._ui.allInfo;
     return [
-      h("button", { class: "ib info", "aria-label": "More about this", "aria-expanded": open ? "true" : "false", onclick: (e) => { e.stopPropagation(); this._ui.info = open ? null : key; this._render(); } }, icon("information-outline")),
+      h("button", { class: "ib info", "aria-label": "More about this", "aria-expanded": open ? "true" : "false", onclick: (e) => { e.stopPropagation(); this._ui.info = open ? null : key; this._render(); if (this._ui.sheet && STILL_SHEETS.has(this._ui.sheet.kind)) this._renderLayer(); } }, icon("information-outline")),
       open && this._ui.info === key ? h("div", { class: "pop", role: "note", onclick: (e) => e.stopPropagation() }, text) : null,
     ];
   }
@@ -3110,7 +3111,7 @@ class PanelOSPage extends HTMLElement {
         if (!next.length) { this._toast("At least one stays"); return; }
         this._setPageOption(p, i, "functions", TIMER_FUNCTIONS.map(([x]) => x).filter((x) => next.includes(x)));
       }, { label: l }))),
-      (page.variant || 0) === 3 ? this._row("Scene", this._seg(SW_SCENES.map((n, k) => [k, n]), Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", v), { label: "Scene" })) : null,
+      (page.variant || 0) === 3 ? this._row("Scene", this._dropdown([[-1, "Random, new every time"], ...SW_SCENES.map((n, k) => [k, n])], Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", Number(v)), { label: "Scene" })) : null,
       this._soundRow("Timer sound", o.sound, { def: TIMER_LOOK_SOUND[page.variant || 0] || TIMER_LOOK_SOUND[0], defNote: "This look's own sound", title: "Timer sound", p },
         (v) => this._setPageOption(p, i, "sound", v), { info: "Each look has its own sound; another one, or your own, can be chosen." }),
       this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null }),
@@ -3231,7 +3232,8 @@ class PanelOSPage extends HTMLElement {
     const ents = page.entities || [];
     const o = page.options || {};
     const tapes = Array.isArray(o.tapes) ? o.tapes : [];
-    const desk = (page.variant || 0) === 1;
+    // the mixing desk's tapes and the flight deck's plates both show a short label
+    const desk = [1, 2].includes(page.variant || 0);
     const cols = (page.variant || 0) === 0 ? 2 : 4;
     const slots = [];
     const max = 16;
@@ -3628,6 +3630,16 @@ class PanelOSPage extends HTMLElement {
 
   // -- voice ----------------------------------------------------------------------------
 
+  // A voice satellite's wake words as the satellite itself has them (its select entities can lag behind).
+  _loadSatCfg(sat) {
+    if (this._satCfgLoading === sat) return;
+    this._satCfgLoading = sat;
+    this._hass.callWS({ type: "assist_satellite/get_configuration", entity_id: sat })
+      .then((cfg) => { this._satCfg[sat] = cfg; })
+      .catch(() => { this._satCfg[sat] = { available_wake_words: [], active_wake_words: [] }; })
+      .finally(() => { this._satCfgLoading = null; this._render(); });
+  }
+
   // The voice satellite's device (ESPHome), shown as connected via the panel's device.
   _voiceDevices(p) {
     if (!p.device_id) return [];
@@ -3639,13 +3651,35 @@ class PanelOSPage extends HTMLElement {
     const devices = this._voiceDevices(p);
     const ids = new Set(devices.map((d) => d.id));
     const ents = Object.values(this._entityReg).filter((e) => ids.has(e.device_id) && !e.hidden && !e.hidden_by && !e.disabled_by && /^(select|switch|number)\./.test(e.entity_id) && this._hass.states[e.entity_id]);
+    const sat = Object.values(this._entityReg).find((e) => ids.has(e.device_id) && e.entity_id.startsWith("assist_satellite."))?.entity_id;
     const control = (e) => {
       const id = e.entity_id;
       const s = this._hass.states[id];
       const domain = id.split(".")[0];
       const call = (service, data) => this._hass.callService(domain, service, { entity_id: id, ...data }).catch((err) => this._toast(err.message || String(err), null, true));
       if (domain === "switch") return this._toggle(s.state === "on", (v) => call(v ? "turn_on" : "turn_off", {}), { label: this._ename(id), disabled: s.state === "unavailable" });
-      if (domain === "select") return this._choice((s.attributes.options || []).map((o) => [o, o]), s.state, (v) => call("select_option", { option: v }), { label: this._ename(id) });
+      // the two wake word selects: what the satellite really listens for (its own configuration), by name
+      const wk = /_wake_word(_2)?$/.exec(id);
+      if (domain === "select" && wk && sat) {
+        const cfg = this._satCfg[sat];
+        if (!cfg) {
+          this._loadSatCfg(sat);
+          return h("span", { class: "muted" }, "…");
+        }
+        const k = wk[1] ? 1 : 0;
+        const names = Object.fromEntries((cfg.available_wake_words || []).map((w) => [w.id, w.wake_word]));
+        const active = cfg.active_wake_words || [];
+        const opts = [["", "No wake word"], ...(cfg.available_wake_words || []).map((w) => [w.id, w.wake_word])];
+        return this._choice(opts, names[active[k]] ? active[k] : "", (v) => {
+          const next = [active[0] || "", active[1] || ""];
+          next[k] = v;
+          const ids = next.filter((x, i) => x && next.indexOf(x) === i);
+          this._hass.callWS({ type: "assist_satellite/set_wake_words", entity_id: sat, wake_word_ids: ids })
+            .then(() => this._loadSatCfg(sat))
+            .catch((err) => this._toast(err.message || String(err), null, true));
+        }, { label: this._ename(id) });
+      }
+      if (domain === "select") return this._choice((s.attributes.options || []).map((o) => [o, o === "no_wake_word" ? "No wake word" : o]), s.state, (v) => call("select_option", { option: v }), { label: this._ename(id) });
       const a = s.attributes;
       const v = Number(s.state);
       return this._slider(Number.isNaN(v) ? a.min || 0 : v, a.min ?? 0, a.max ?? 100, a.step ?? 1, (x) => call("set_value", { value: x }), (x) => `${x}${a.unit_of_measurement ? ` ${a.unit_of_measurement}` : ""}`, { label: this._ename(id), disabled: s.state === "unavailable" });
@@ -4111,7 +4145,8 @@ class PanelOSPage extends HTMLElement {
     while (tapes.length < ents.length) tapes.push("");
     tapes.length = ents.length;
     const cur = ents[sh.slot] || null;
-    const desk = (page.variant || 0) === 1;
+    // the mixing desk's tapes and the flight deck's plates both show a short label
+    const desk = [1, 2].includes(page.variant || 0);
     const save = (nextEnts, nextTapes) => {
       const options = { ...(page.options || {}) };
       if (nextTapes.some(Boolean)) options.tapes = nextTapes;
@@ -4139,7 +4174,7 @@ class PanelOSPage extends HTMLElement {
     };
     return this._sheetFrame(cur ? this._ename(cur) : "New tile", [
       h("div", { class: "group" }, this._row(cur ? "Control" : "Choose what it controls", choose, { cls: "first" })),
-      cur && desk ? h("div", { class: "group" }, this._row("Label", this._text(tapes[sh.slot], (v) => { const nt = [...tapes]; nt[sh.slot] = v.trim().toUpperCase().slice(0, 8); save(ents, nt); }, { max: 8, placeholder: "From the name", label: "Label", cls: "short" }),
+      cur && desk ? h("div", { class: "group" }, this._row("Label", this._text(tapes[sh.slot], (v) => { const nt = [...tapes]; nt[sh.slot] = v.trim().toUpperCase().slice(0, 12); save(ents, nt); }, { max: 12, placeholder: "From the name", label: "Label", cls: "short" }),
         { info: "The label-maker tape under the fader. Empty: the panel makes one from the name.", cls: "first" })) : null,
       cur ? h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
         this._btn("Earlier", () => move(-1), { cls: "small", icon: "arrow-left", disabled: sh.slot === 0 }),
@@ -4254,7 +4289,8 @@ class PanelOSPage extends HTMLElement {
           undo: () => this._saveHouse((hs) => { if (!hs.own_critical.some((x) => x.id === gone.id)) hs.own_critical.splice(Math.max(0, Math.min(at, hs.own_critical.length)), 0, gone); }) });
       }, { cls: "ghost danger", icon: "delete-outline" }),
       h("span", { class: "grow" }),
-      this._btn(`Test on ${this._pname(p)}`, () => { this._closeSheet(); this._test(p, "critical", `own:${c.id}`); }, { icon: "alert-octagon-outline", disabled: !p.connected }),
+      // a test needs something that starts it (a new alert without a device is not kept)
+      this._btn(`Test on ${this._pname(p)}`, () => { this._closeSheet(); this._test(p, "critical", `own:${c.id}`); }, { icon: "alert-octagon-outline", disabled: !p.connected || (t.kind === "entity" && !t.entity) }),
       this._btn("Done", () => this._closeSheet(), { cls: "primary" })]);
   }
 
