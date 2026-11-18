@@ -1,0 +1,4 @@
+# GitHub's language statistics count only the code: the brand guidelines' pages are built by the
+# script next to them, and the vendored Skia renderer is Slint's own.
+branding/**/*.html linguist-generated
+app/vendor/** linguist-vendored
