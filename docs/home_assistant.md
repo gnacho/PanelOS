@@ -34,6 +34,10 @@ The Marketplace is built into Home Assistant since 2026.11 (it replaces HACS).
 
 ### B. HACS (Home Assistant before 2026.11, with HACS installed)
 
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lauden-io&repository=PanelOS&category=integration)
+
+The button opens steps 1–3 in your Home Assistant.
+
 1. Open **HACS** in the sidebar.
 2. Select the **three dots** at the top right → **Custom repositories**.
 3. Repository: `https://github.com/lauden-io/PanelOS`, Type: **Integration** → **Add**, then close the window.

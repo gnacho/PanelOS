@@ -1,3 +1,4 @@
 {
-  "name": "PanelOS"
+  "name": "PanelOS",
+  "render_readme": true
 }

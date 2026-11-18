@@ -17,7 +17,7 @@ Version **0.0.5** (what is new: [CHANGELOG.md](CHANGELOG.md)). Licence: AGPL-3.0
 
 PanelOS draws its own interface on the panel's GPU: no browser, no web page, every pixel made for a 480 × 480 wall screen and every motion running at the screen's full 60 frames a second. Swipe through your pages (there is no last one: after it comes the first again), pull down the quick shade, talk to Assist. Nothing stutters and nothing waits for a page to load.
 
-<!-- screenshots: a few frames per function, neutral data -->
+<img alt="PanelOS on the NSPanel Pro: a synthwave home page, a turntable, rain on the glass, a wall thermostat with running timers, a mixing desk, the oscilloscope voice view, a pager and a split-flap clock" src="docs/images/panelos-views.png" width="100%">
 
 **A custom page that looks outside.** Your clock, the weather and your widgets sit on a living picture of the sky as it is right now: rain runs down the glass, fog drifts, clouds travel with the wind, lightning flashes, and the sun and the moon stand where they really are. Pick a photo of nature, the countryside or a city, a drawn scene, a quiet line drawing, a synthwave night drive with neon letters and cars on the road, or simply a plain ground in the panel's own colour. Want more than one? Add another custom page with its own background and its own widgets.
 
@@ -72,6 +72,26 @@ Step-by-step guide, no Linux knowledge needed: **[docs/install.md](docs/install.
 
 In short: turn on developer mode and ADB in the eWeLink app, back up the panel, build the image on a Linux or WSL computer (it takes the stock bootloader's device tree from the backup), write PanelOS to its recovery partition over Wi-Fi ADB, make it the default boot, type the address of Home Assistant on the panel's setup screen (or pick it when found), and log in with the QR code on the screen.
 
+### The Home Assistant integration
+
+**With HACS** (updates arrive like any other):
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lauden-io&repository=PanelOS&category=integration)
+
+1. Click the button, or in HACS open the menu (⋮, top right) →
+   **Custom repositories**, paste `https://github.com/lauden-io/PanelOS`,
+   choose the type **Integration** and add it.
+2. Find **PanelOS** in HACS and download it.
+3. Restart Home Assistant.
+
+**With the Marketplace** (Home Assistant 2026.11 and later): **Settings → Marketplace → Add from link**,
+paste `https://github.com/lauden-io/PanelOS`, download **PanelOS**, then restart Home Assistant.
+
+**By hand:** copy `custom_components/panelos` into Home Assistant's
+`custom_components` folder, then restart Home Assistant.
+
+**First setup:** Settings → Devices & services → Add integration → **PanelOS**. Panel ID: the panel's network name (`nspanel-pro` by default). The panel's pages, looks and settings are then set on the PanelOS page. Details: [docs/home_assistant.md](docs/home_assistant.md).
+
 ## Known limitations
 
 - No TLS yet: Home Assistant must be reachable over plain `http://`.
@@ -90,6 +110,10 @@ In short: turn on developer mode and ADB in the eWeLink app, back up the panel, 
 - `testinit/` minimal PID 1 used for the first bring-up test boots
 - `tools/` build scripts, backup and restore, flashing over ADB or SSH, resource image pack/unpack, DTB dump, pstore log, boot splash renderer (`tools/splash/`), wake word benchmark
 - `backup/` local firmware backups, git-ignored, **never published**
+
+## How it is made
+
+I build PanelOS with 15 years of experience as an SAP consultant on large enterprise systems. AI tools write much of the code, but the ideas, the design and a strict set of requirements (security, efficiency, measured performance) are my own, and every function goes through rigorous system and acceptance tests (SIT and UAT) on a real panel before a release. Nothing here is generated in one go: every part is specified, measured and tested.
 
 ## Warning
 

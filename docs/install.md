@@ -250,7 +250,25 @@ ssh -n -i /root/.ssh/nspanel_dev -o StrictHostKeyChecking=accept-new -o UserKnow
 2. Host: the panel's IP address (pre-filled when discovered). Port: `6053`. Leave the encryption key empty: Home Assistant gives the panel a key by itself right after adding it and connects encrypted from then on.
 3. The panel appears as a device with its settings, sensors and the voice assistant (Assist satellite). Choose the wake words and the assistant on the device page.
 
-Optional: the assistant mode (smart-display home screen) is configured with the PanelOS Home Assistant integration; see [home_assistant.md](home_assistant.md).
+### The PanelOS integration
+
+**With HACS** (updates arrive like any other):
+
+[![Open your Home Assistant instance and open this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=lauden-io&repository=PanelOS&category=integration)
+
+1. Click the button, or in HACS open the menu (⋮, top right) →
+   **Custom repositories**, paste `https://github.com/lauden-io/PanelOS`,
+   choose the type **Integration** and add it.
+2. Find **PanelOS** in HACS and download it.
+3. Restart Home Assistant.
+
+**With the Marketplace** (Home Assistant 2026.11 and later): **Settings → Marketplace → Add from link**,
+paste `https://github.com/lauden-io/PanelOS`, download **PanelOS**, then restart Home Assistant.
+
+**By hand:** copy `custom_components/panelos` into Home Assistant's
+`custom_components` folder, then restart Home Assistant.
+
+Then **Settings → Devices & services → Add integration → PanelOS**, Panel ID: the panel's network name (`nspanel-pro` by default). The panel's pages, looks, voice and display settings are then set on the PanelOS page. More: [home_assistant.md](home_assistant.md).
 
 ## 13. Check
 
