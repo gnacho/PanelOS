@@ -4,7 +4,7 @@
 // Texts the app fills in: title, mood (a line: all off / some on / all on), placard (flight deck, may name the panel's
 // room), state words.
 import { Theme, Act } from "theme.slint";
-import { Icon } from "widgets.slint";
+import { Icon, Dropdown } from "widgets.slint";
 
 export struct QuickTile {
     name: string,
@@ -113,7 +113,9 @@ export component QuickPage inherits Rectangle {
         d <= 0 ? "" : root.arc-to(d, r, r, r, 3.1416) + (d - 1.5708 * r <= 0 ? "" : " L " + (r + min(d - 1.5708 * r, w / 2 - r)) + " 0")
     }
     if root.look == 0: tlook := Rectangle {
-        Text { x: 20px; y: 46px; width: 300px; height: 30px; text: root.title; font-size: 20px; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; }
+        // the title takes the room up to the All off button; a long one gets a smaller size instead of being cut
+        Text { x: 20px; y: 46px; width: parent.width - 148px; height: 30px; text: root.title; color: Theme.text; vertical-alignment: center; overflow: elide;
+            font-size: root.title.character-count > 30 ? 15px : root.title.character-count > 24 ? 17px : 20px; font-weight: 700; }
         Rectangle { x: parent.width - 108px; y: 46px; width: 88px; height: 30px; border-radius: 15px;
             background: alloff.pressed ? Theme.text.with-alpha(0.16) : Theme.text.with-alpha(0.08);
             Text { text: "All off"; font-size: 14px; font-weight: 600; color: Theme.text; }
@@ -236,9 +238,9 @@ export component QuickPage inherits Rectangle {
                 // effects the light offers (names from HA)
                 if root.sheet-effects.length > 0: HorizontalLayout { x: 20px; y: (root.sheet-temp >= 0 ? 56px : 0px) + (root.sheet-colours.length > 0 ? 54px : 0px) + 178px;
                     width: parent.width - 40px; height: 36px; spacing: 8px; alignment: start;
-                    for e in root.sheet-effects: Rectangle { width: et.preferred-width + 28px; border-radius: 18px; background: Theme.text.with-alpha(0.08);
-                        et := Text { text: e; font-size: 14px; font-weight: 600; color: Theme.text; }
-                        TouchArea { clicked => { Act.act("quick.effect", root.sheet-index + ":" + e); } } } }
+                    // a dropdown, not chips (28.5): the effect is picked from the light's list
+                    Dropdown { width: parent.width; height: 44px; options: root.sheet-effects; selected: -1; placeholder: "Effect";
+                        picked(k) => { Act.act("quick.effect", root.sheet-index + ":" + k); } } }
                 if root.sheet-tile.kind == 2: HorizontalLayout { x: 20px; y: 178px; width: parent.width - 40px; height: 44px; spacing: 10px;
                     for ic[n] in ["\u{F005D}", "\u{F04DB}", "\u{F0045}"]: Rectangle { border-radius: 22px;
                         background: cv.pressed ? Theme.text.with-alpha(0.16) : Theme.text.with-alpha(0.08);

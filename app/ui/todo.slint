@@ -432,14 +432,10 @@ export component TodoPage inherits Rectangle {
     background: root.page-bg;
 
     if root.look == 0: Rectangle {
-        // ---------------------------------------------------------------- header: the list (tap: other lists), what is left, add
-        HorizontalLayout {
-            x: 16px; y: 46px; width: 380px; height: 34px; spacing: 6px; alignment: start;
-            Text { text: root.l.name; font-size: 24px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide;
-                max-width: root.lists.length > 1 ? 350px : 380px; }
-            if root.lists.length > 1: Icon { width: 22px; text: "\u{F0140}"; font-size: 22px; color: Theme.muted; }
-        }
-        if root.lists.length > 1: TouchArea { x: 8px; y: 40px; width: 392px; height: 46px; clicked => { Act.act("todo.picker", ""); } }
+        // ---------------------------------------------------------------- header: the list, what is left, add (the lists: the chip at
+        // the top right, the one picker of the page)
+        Text { x: 16px; y: 46px; width: 380px; height: 34px; text: root.l.name; font-size: 24px; font-weight: 600; color: Theme.text;
+            vertical-alignment: center; overflow: elide; }
         Text { x: 16px; y: 80px; height: 20px; text: root.n-open == 0 ? "Nothing left" : root.n-open == 1 ? "1 to do" : root.n-open + " to do";
             font-size: 14px; color: Theme.muted; vertical-alignment: center; }
 

@@ -559,7 +559,7 @@ export component TimersPage inherits Rectangle {
     property <TimerItem> cur: root.n > 0 ? root.timers[min(root.pick, root.n - 1)] : { label: "", remaining: 0, total: 1, running: false, tint: #e8262d };
     property <float> fr: root.cur.total > 0 ? root.cur.remaining / root.cur.total : 0;
     property <bool> synth: (!root.ringing || (root.pre-ring && root.ring-theme == 3)) && root.mode == 1 && root.theme == 3;
-    property <bool> synth-quick: root.synth && root.n == 0;
+    property <bool> synth-quick: root.synth;   // the quick starts in the synthwave look (over the scene, or its veil)
     property <[color]> sw-rings: [#ff2a6d, #ffd319, #ff8b3d, #c86bfa, #00e5ff, #ff2e88, #f9f871, #8a5cff,
                                   #ff6ec7, #00f0c8, #ffb86b, #a17bff, #7df9ff, #b967ff, #01ffc3, #ff71ce];
     property <[color]> sw-grids: [#ff2bd6, #00e5ff, #00f0c8, #b967ff];
@@ -840,7 +840,7 @@ export component TimersPage inherits Rectangle {
             palm-l: root.sw-palm-l; palm-r: root.sw-palm-r; palm-l2: root.sw-palm-l2; palm-r2: root.sw-palm-r2; palm-lk: root.sw-palm-lk; palm-rk: root.sw-palm-rk; }
 
         // one timer: a big tube, the controls at the bottom
-        if root.n == 1: Rectangle {
+        if root.n == 1 && !root.quick: Rectangle {
             // (no layer around the whole timer: its static texts are layers of their own, the time and the ring live)
             property <TimerItem> t: root.timers[0];
             property <color> g: self.t.running && self.t.remaining < 60 ? #ff5a5f : root.sw-rings[root.sw-scene * 4];
@@ -855,7 +855,7 @@ export component TimersPage inherits Rectangle {
             TimerControls { x: 0; y: 384px; width: root.width; height: 56px; play: 56px; running: parent.t.running; tint: parent.g; neon: true; index: 0; }
         }
         // two timers: tubes side by side, small controls under each
-        if root.n == 2: Rectangle {
+        if root.n == 2 && !root.quick: Rectangle {
             // (no layer around the whole timer: its static texts are layers of their own, the time and the ring live)
             for t[i] in root.timers: tc := Rectangle {
                 property <color> g: t.running && t.remaining < 60 ? #ff5a5f : root.sw-rings[root.sw-scene * 4 + i];
@@ -874,7 +874,7 @@ export component TimersPage inherits Rectangle {
             }
         }
         // three or four: a grid of smaller tubes
-        if root.n >= 3: Rectangle {
+        if root.n >= 3 && !root.quick: Rectangle {
             // (no layer around the whole timer: its static texts are layers of their own, the time and the ring live)
             for c in 4: scell := Rectangle {
                 x: 20px + Math.mod(c, 2) * 224px; y: root.top + Math.floor(c / 2) * 176px; width: 216px; height: 168px;
@@ -899,7 +899,8 @@ export component TimersPage inherits Rectangle {
     // ---------------------------------------------------------------- no timer: quick starts
     if !root.ringing && root.mode == 1 && (root.n == 0 || root.quick): Rectangle {
         cache-rendering-hint: true;
-        background: root.n > 0 ? Theme.background : transparent;
+        // over running timers: the look stays (the synthwave scene under a dark veil, the status bar readable on it)
+        background: root.n > 0 ? (root.synth ? #00000066 : Theme.background) : transparent;
         if root.n > 0: TouchArea { clicked => { Act.act("timers.quick-close", ""); } }
         Rectangle { x: (root.width - 80px) / 2; y: root.top + 18px; width: 80px; height: 80px; border-radius: 40px; background: root.synth-quick ? #0000008c : TFg.c.with-alpha(0.05);
             Icon { width: parent.width; height: parent.height; text: "\u{F13AB}"; font-size: 42px; color: root.synth-quick ? #ffffffcc : TFg.c.with-alpha(0.40); } }

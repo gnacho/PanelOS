@@ -566,9 +566,9 @@ component ThermoWall inherits ThermoBase {
     property <float> cx: 240;
     property <float> cy: 204;
     // the pointer turns to a new target through the detents (one per step), the knob kicking 1 px at each
-    property <float> at-to: 135 + 270 * root.ft;
+    property <float> at-to: 135 + 270 * (root.turning ? root.turn-ft : root.ft);
     property <float> at: root.at-to;
-    animate at { duration: 260ms; easing: ease-out; }
+    animate at { duration: root.turning ? 0ms : 260ms; easing: ease-out; }
     property <int> det: Math.floor((root.at - 135) / max(0.5, 270 * root.d.step / root.span) + 0.5);
     property <bool> kicking;
     property <duration> kick-t0;
@@ -605,18 +605,42 @@ component ThermoWall inherits ThermoBase {
         x: (root.cx + 152 * Math.cos(self.a * 1deg) - 16) * 1px; y: (root.cy + 152 * Math.sin(self.a * 1deg) - 9) * 1px; width: 32px; height: 18px;
         text: root.t0 + i; font-size: 15px; font-weight: 600; color: root.print; horizontal-alignment: center; vertical-alignment: center;
     }
-    // turning the knob: the finger's angle on the 270° scale sets the target when it lifts
+    // turning the knob like a real one: the finger's turn around the centre turns it by the same angle (relative, so a
+    // small move is a small change; the detents click as it passes the steps); a drag that starts on the knob never
+    // turns the page; the target is sent when the finger lifts
+    property <bool> turning;
+    property <float> turn-f0;
+    property <float> turn-acc;
+    property <float> turn-last;
+    property <float> turn-ft;
     TouchArea {
         x: (root.cx - 112) * 1px; y: (root.cy - 112) * 1px; width: 224px; height: 224px;
         enabled: root.show-t;
         pointer-event(ev) => {
-            if ev.kind == PointerEventKind.up {
-                let dx = self.mouse-x / 1px - 112;
-                let dy = self.mouse-y / 1px - 112;
-                let deg = atan2(dy, dx) / 1deg;
-                let rel = Math.mod(deg - 135 + 720, 360);
-                let f = rel > 270 ? (rel > 315 ? 0 : 1) : rel / 270;
-                Act.act("thermo.target", root.d.tmin + f * (root.d.tmax - root.d.tmin));
+            if ev.kind == PointerEventKind.down {
+                root.turning = true;
+                Act.hold-swipe = true;
+                root.turn-f0 = root.ft;
+                root.turn-ft = root.ft;
+                root.turn-acc = 0;
+                root.turn-last = atan2(self.mouse-y / 1px - 112, self.mouse-x / 1px - 112) / 1deg;
+            }
+            if (ev.kind == PointerEventKind.up || ev.kind == PointerEventKind.cancel) && root.turning {
+                root.turning = false;
+                Act.hold-swipe = false;
+                if ev.kind == PointerEventKind.up && Math.abs(root.turn-acc) > 1 {
+                    Act.act("thermo.target", root.d.tmin + root.turn-ft * (root.d.tmax - root.d.tmin));
+                }
+            }
+        }
+        moved => {
+            if root.turning {
+                let a = atan2(self.mouse-y / 1px - 112, self.mouse-x / 1px - 112) / 1deg;
+                let raw = a - root.turn-last;
+                let d = raw > 180 ? raw - 360 : raw < -180 ? raw + 360 : raw;
+                root.turn-acc += d;
+                root.turn-last = a;
+                root.turn-ft = max(0, min(1, root.turn-f0 + root.turn-acc / 270));
             }
         }
     }

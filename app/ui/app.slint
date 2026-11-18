@@ -245,6 +245,7 @@ export component AppWindow inherits Window {
     in property <image> cal-wall-photo;
     in property <[WallCell]> cal-wall-cells;
     in property <string> cal-title;
+    in property <string> cal-chip;        // the calendar page's chip: its calendar, or how many
     in property <string> cal-sub;
     in property <length> cal-scroll;
     in property <[CalDay]> cal-agenda;
@@ -1096,7 +1097,7 @@ export component AppWindow inherits Window {
                     tear-weekday: root.cal-tear-weekday; tear-sunday: root.cal-tear-sunday; tear-info: root.cal-tear-info; tear-events: root.cal-tear-events;
                     tear-more: root.cal-tear-more; tear-line: root.cal-tear-line; wall-month: root.cal-wall-month; wall-year: root.cal-wall-year;
                     wall-photo: root.cal-wall-photo; wall-cells: root.cal-wall-cells;
-                    view: root.cal-view; title: root.cal-title; sub: root.cal-sub; scroll: root.cal-scroll; agenda: root.cal-agenda;
+                    view: root.cal-view; chip: root.cal-chip; title: root.cal-title; sub: root.cal-sub; scroll: root.cal-scroll; agenda: root.cal-agenda;
                     empty-title: root.cal-empty-title; empty-sub: root.cal-empty-sub; day-events: root.cal-day-events; day-allday: root.cal-day-allday;
                     day-today: root.cal-day-today; day-free: root.cal-day-free; now-min: root.cal-now-min; week-names: root.cal-week-names; week-nums: root.cal-week-nums;
                     week-today: root.cal-week-today; week-events: root.cal-week-events; week-allday: root.cal-week-allday; month-names: root.cal-month-names;

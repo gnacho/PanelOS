@@ -78,7 +78,12 @@ pub fn tiles(states: &HashMap<String, EntityState>, entities: &[String], accent:
                 (v.len() == 3).then(|| Color::from_rgb_u8(v[0], v[1], v[2]))
             });
             let tint = rgb.unwrap_or(accent);
-            let led = rgb.unwrap_or(Color::from_rgb_u8(0x69, 0xdb, 0x7c));
+            // the deck's lamp: a colour light's own colour, remembered while it is off (a throw lights it in that colour
+            // at once, not green first); everything else green
+            if let Some(c) = rgb {
+                LAST_RGB.with(|m| m.borrow_mut().insert(id.clone(), c));
+            }
+            let led = rgb.or_else(|| LAST_RGB.with(|m| m.borrow().get(id).copied())).unwrap_or(Color::from_rgb_u8(0x69, 0xdb, 0x7c));
             let icon = attr("icon")
                 .and_then(Value::as_str)
                 .and_then(icons::glyph)
@@ -195,7 +200,21 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     }
 }
 
+/// An effect's name as words: underscores to spaces, the first letter capital.
+fn effect_name(e: &str) -> String {
+    let words = e.replace('_', " ");
+    let mut c = words.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+        None => String::new(),
+    }
+}
+
 thread_local! {
+    /// The last colour each colour light reported while on.
+    static LAST_RGB: std::cell::RefCell<HashMap<String, Color>> = std::cell::RefCell::new(HashMap::new());
+    /// The effects of the light whose details are open (Home Assistant's own names).
+    static EFFECTS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The number of levers the deck's plate was drawn for.
     static DECK_N: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -297,8 +316,10 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
         }
         "quick.effect" => {
             let Some(id) = id_of(value) else { return };
-            let effect = value.split_once(':').map(|(_, e)| e).unwrap_or("");
-            crate::call("light", "turn_on", &id, json!({"effect": effect}));
+            let k = arg(value) as usize;
+            if let Some(effect) = EFFECTS.with(|e| e.borrow().get(k).cloned()) {
+                crate::call("light", "turn_on", &id, json!({"effect": effect}));
+            }
         }
         // 0 open, 1 stop, 2 close
         "quick.cover" => {
@@ -366,11 +387,15 @@ pub fn details(ui: &AppWindow, i: usize) {
         Vec::new()
     };
     ui.set_quick_sheet_colours(ModelRc::new(VecModel::from(colours)));
-    let effects: Vec<SharedString> = attrs
+    // the light's effects: Home Assistant's names as words ("channel_change" -> "Channel change"); the raw names are
+    // what the light takes back
+    let raw: Vec<String> = attrs
         .get("effect_list")
         .and_then(Value::as_array)
-        .map(|l| l.iter().filter_map(Value::as_str).take(4).map(SharedString::from).collect())
+        .map(|l| l.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
+    let effects: Vec<SharedString> = raw.iter().map(|e| effect_name(e).into()).collect();
+    EFFECTS.with(|e| *e.borrow_mut() = raw);
     ui.set_quick_sheet_effects(ModelRc::new(VecModel::from(effects)));
     ui.set_quick_sheet_index(i as i32);
     ui.set_quick_sheet_tile(tile);

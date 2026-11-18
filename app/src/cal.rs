@@ -370,6 +370,14 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
     if entities.is_empty() {
         return;
     }
+    // the top-right chip names what the page shows: its calendar, or how many
+    let chip = match entities.as_slice() {
+        [one] => s.states.get(one).and_then(|e| e.attrs.get("friendly_name")).and_then(Value::as_str).unwrap_or(one).to_string(),
+        many => format!("{} calendars", many.len()),
+    };
+    if ui.get_cal_chip().as_str() != chip {
+        ui.set_cal_chip(chip.into());
+    }
     ensure_started(ui, s);
     ui.set_cal_look(slot.variant);
     let names: Vec<String> = entities
