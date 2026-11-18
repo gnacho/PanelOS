@@ -1,5 +1,9 @@
 """Music Assistant and the panel's player (alarms with music play through Music Assistant).
 
+The panel is a Sendspin player: Music Assistant finds it on the network and pairs with the token Home Assistant
+asks from the panel over the ESPHome API, so it has the panel as a player by itself (its player id is the panel's
+Sendspin client id). Older panel apps without Sendspin need the way below.
+
 Music Assistant plays on a Home Assistant media player only once that player is added to its
 "Home Assistant MediaPlayers" provider (domain ``hass_players``); it then makes its own player of it,
 which Home Assistant shows as a ``music_assistant`` entity (the one ``music_assistant.play_media``
@@ -35,12 +39,31 @@ def _friendly(hass: HomeAssistant, entity_id: str) -> str:
     return str(state.attributes.get("friendly_name") or "") if state else ""
 
 
+def sendspin_id(hass: HomeAssistant, entity_id: str) -> str:
+    """The panel's Sendspin client id, from the ESPHome device of its media player ("" for a panel without one)."""
+    entry_id = getattr(er.async_get(hass).async_get(entity_id), "config_entry_id", None) if entity_id else None
+    entry = hass.config_entries.async_get_entry(entry_id) if entry_id else None
+    caps = getattr(getattr(entry, "runtime_data", None), "device_capabilities", None)
+    return str(getattr(getattr(caps, "sendspin", None), "client_id", "") or "")
+
+
 def _ma_player(hass: HomeAssistant, mass: Any, entity_id: str) -> Any | None:
-    """The Music Assistant player made of a Home Assistant media player."""
+    """The Music Assistant player of the panel: its Sendspin player, or the one made of its Home Assistant media player."""
     try:
         players = list(mass.players)
     except Exception:  # noqa: BLE001 - an old or not yet connected client
         return None
+    sid = sendspin_id(hass, entity_id)
+    if sid:
+        # Music Assistant wraps the Sendspin player (a protocol player, without an entity of its own) in a player
+        # of the device that lists it among its outputs; that one has the entity
+        for player in players:
+            outputs = getattr(player, "output_protocols", None) or []
+            if any(getattr(o, "output_protocol_id", None) == sid for o in outputs) and getattr(player, "player_id", None) != sid:
+                return player
+        for player in players:
+            if getattr(player, "player_id", None) == sid:
+                return player
     name = _friendly(hass, entity_id)
     for player in players:
         extra = getattr(player, "extra_attributes", None) or getattr(player, "extra_data", None) or {}
@@ -86,7 +109,13 @@ async def async_status(hass: HomeAssistant, entity_id: str) -> dict[str, Any]:
     base = {"available": True, "entity": entity_id, "player_name": _friendly(hass, entity_id) if entity_id else "", "ma_panel": _ma_panel(hass)}
     if not entity_id:
         return {**base, "added": False, "entity_ma": ""}
-    return {**base, "added": _ma_player(hass, mass, entity_id) is not None, "entity_ma": ma_entity(hass, entity_id)}
+    # a Sendspin panel: Music Assistant connects and pairs by itself, nothing to add
+    return {
+        **base,
+        "added": _ma_player(hass, mass, entity_id) is not None,
+        "entity_ma": ma_entity(hass, entity_id),
+        "sendspin": bool(sendspin_id(hass, entity_id)),
+    }
 
 
 async def async_add(hass: HomeAssistant, entity_id: str) -> dict[str, Any]:
@@ -96,7 +125,7 @@ async def async_add(hass: HomeAssistant, entity_id: str) -> dict[str, Any]:
         raise ValueError("Music Assistant is not set up in Home Assistant")
     if not entity_id:
         raise ValueError("The panel has no media player yet")
-    if _ma_player(hass, mass, entity_id) is not None:
+    if _ma_player(hass, mass, entity_id) is not None or sendspin_id(hass, entity_id):
         return await async_status(hass, entity_id)
     configs = await mass.config.get_provider_configs(provider_domain=HASS_PLAYERS, include_values=True)
     if not configs:

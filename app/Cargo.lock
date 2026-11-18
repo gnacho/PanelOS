@@ -2860,6 +2860,7 @@ name = "nspanel-app"
 version = "0.0.6"
 dependencies = [
  "alsa",
+ "base64 0.22.1",
  "cc",
  "drm 0.14.1",
  "drm 0.15.0",
@@ -2880,6 +2881,7 @@ dependencies = [
  "raw-window-handle",
  "serde",
  "serde_json",
+ "sha2",
  "skia-safe",
  "slint",
  "slint-build",

@@ -62,7 +62,11 @@ fn open(ui: &AppWindow) {
             .filter(|e| e["entity_id"].as_str().is_some_and(|i| i.starts_with("media_player.")) && e["state"] != "unavailable")
             .collect();
         let mass: Vec<&Value> = players.iter().copied().filter(|e| e["attributes"].get("mass_player_type").is_some()).collect();
-        let list = if mass.is_empty() { players } else { mass };
+        let mut list = if mass.is_empty() { players } else { mass };
+        // the panel itself (its Sendspin player in Music Assistant, marked by the integration) comes first
+        let own = crate::sendspin::client_id().unwrap_or_default();
+        let is_self = |e: &Value| !own.is_empty() && e["attributes"]["sendspin_id"].as_str() == Some(own.as_str());
+        list.sort_by_key(|e| !is_self(e));
         let group: Vec<String> = list
             .iter()
             .find(|e| e["entity_id"] == active.as_str())
@@ -88,13 +92,13 @@ fn open(ui: &AppWindow) {
             .map(|e| {
                 let id = e["entity_id"].as_str().unwrap_or("").to_string();
                 let a = &e["attributes"];
-                let name = a["friendly_name"].as_str().unwrap_or(&id).to_string();
+                let name = if is_self(e) { "This panel".to_string() } else { a["friendly_name"].as_str().unwrap_or(&id).to_string() };
                 let grouped = group.iter().any(|g| *g == e["entity_id"]);
                 let (mut now, mut playing) = track(e);
                 if now.is_empty() && grouped && id != active {
                     (now, playing) = lead.clone();
                 }
-                let icon = if a["device_class"] == "tv" { "television" } else { "speaker" };
+                let icon = if is_self(e) { "tablet" } else if a["device_class"] == "tv" { "television" } else { "speaker" };
                 (id, name, icon.to_string(), playing, grouped, now)
             })
             .collect();

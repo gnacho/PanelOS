@@ -54,11 +54,11 @@ pub struct Browser {
     pub found: Mutex<Vec<HomeAssistant>>,
 }
 
-pub fn spawn(service: Service, browser: Arc<Browser>) {
+pub fn spawn(services: Vec<Service>, browser: Arc<Browser>) {
     std::thread::spawn(move || loop {
         // Waits for an address, runs until the address changes or the socket fails.
         if let Some(ip) = own_ipv4() {
-            match run(&service, &browser, ip) {
+            match run(&services, &browser, ip) {
                 Ok(()) => continue,
                 Err(e) => eprintln!("nspanel-app: mdns: {e}"),
             }
@@ -99,16 +99,18 @@ fn on_link(src: Ipv4Addr) -> bool {
     attached_networks().iter().any(|&(net, mask)| src & mask == net & mask)
 }
 
-fn run(service: &Service, browser: &Browser, ip: Ipv4Addr) -> Result<(), String> {
+fn run(services: &[Service], browser: &Browser, ip: Ipv4Addr) -> Result<(), String> {
     let socket = UdpSocket::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, PORT)).map_err(|e| format!("bind: {e}"))?;
     socket.join_multicast_v4(&GROUP, &ip).map_err(|e| format!("join: {e}"))?;
     let _ = socket.set_multicast_loop_v4(false);
     let _ = socket.set_multicast_ttl_v4(255);
     socket.set_read_timeout(Some(Duration::from_millis(500))).map_err(|e| e.to_string())?;
     let group = SocketAddr::V4(SocketAddrV4::new(GROUP, PORT));
-    eprintln!("nspanel-app: mdns: announcing {}.{}.local on {ip}", service.name, service.kind);
+    for service in services {
+        eprintln!("nspanel-app: mdns: announcing {}.{}.local on {ip}", service.name, service.kind);
+    }
 
-    let names = Names::new(service);
+    let all_names: Vec<Names> = services.iter().map(Names::new).collect();
     let mut announce_at = vec![Instant::now(), Instant::now() + Duration::from_secs(1)];
     let mut next_query: Option<Instant> = None;
     let mut queries_sent = 0u32;
@@ -120,7 +122,9 @@ fn run(service: &Service, browser: &Browser, ip: Ipv4Addr) -> Result<(), String>
         let now = Instant::now();
         announce_at.retain(|t| {
             if *t <= now {
-                let _ = socket.send_to(&names.response(0, None, &[], ip, true), group);
+                for names in &all_names {
+                    let _ = socket.send_to(&names.response(0, None, &[], ip, true), group);
+                }
                 false
             } else {
                 true
@@ -161,10 +165,12 @@ fn run(service: &Service, browser: &Browser, ip: Ipv4Addr) -> Result<(), String>
             let wanted: Vec<(String, u16)> = msg.questions.iter().map(|q| (q.0.to_lowercase(), q.1)).collect();
             let legacy = from.port() != PORT;
             let unicast = legacy || msg.questions.iter().any(|q| q.2 & TOP_BIT != 0);
-            let reply = names.response(msg.id, legacy.then_some(&msg.questions), &wanted, ip, false);
-            if reply.len() > 12 {
-                let to = if unicast { from } else { group };
-                let _ = socket.send_to(&reply, to);
+            for names in &all_names {
+                let reply = names.response(msg.id, legacy.then_some(&msg.questions), &wanted, ip, false);
+                if reply.len() > 12 {
+                    let to = if unicast { from } else { group };
+                    let _ = socket.send_to(&reply, to);
+                }
             }
         } else if browser.active.load(Ordering::Relaxed) {
             collect_home_assistant(&msg, &mut ha);

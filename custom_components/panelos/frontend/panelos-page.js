@@ -1671,10 +1671,19 @@ class PanelOSPage extends HTMLElement {
     const key = `${p.entry_id}:${at}`;
     if (this._pageLive?.key !== key) {
       this._pageLive = { key, entry: p.entry_id, i, at, since: Date.now(), sent: Date.now() };
+      const live = this._pageLive;
       this._hass.callWS({ type: "panelos/page/command", entry_id: p.entry_id, key: "page", value: at })
-        .then(() => this._schedulePicture(400), () => { this._pageLive = { key, entry: p.entry_id, failed: true }; });
+        .then(() => { live.shownAt = Date.now(); this._schedulePicture(400); }, () => { this._pageLive = { key, entry: p.entry_id, failed: true }; });
     }
     return !this._pageLive.failed;
+  }
+
+  // The panel's picture shows the page whose settings are open: it was taken after the panel went to that page
+  // (until then the editors draw the page's own background, not the page the panel was on before).
+  _picOfLivePage(p) {
+    const pic = this._pics[p.entry_id];
+    const live = this._pageLive;
+    return Boolean(pic && live && live.entry === p.entry_id && !live.failed && live.shownAt && pic.asked >= live.shownAt);
   }
 
   // The panel shows its screensaver now (while its settings are being changed); it comes back when
@@ -1748,6 +1757,7 @@ class PanelOSPage extends HTMLElement {
 
   async _fetchPicture(p) {
     try {
+      const asked = Date.now();
       const result = await this._hass.callWS({ type: "panelos/page/screen", entry_id: p.entry_id });
       const bytes = Uint8Array.from(atob(result.png), (c) => c.charCodeAt(0));
       const url = URL.createObjectURL(new Blob([bytes], { type: result.type || "image/png" }));
@@ -1758,11 +1768,14 @@ class PanelOSPage extends HTMLElement {
       });
       const old = this._pics[p.entry_id];
       const shape = old && (old.w !== img.naturalWidth || old.h !== img.naturalHeight);
-      this._pics[p.entry_id] = { url, w: img.naturalWidth || 1, h: img.naturalHeight || 1 };
+      const wasLive = this._picOfLivePage(p);
+      this._pics[p.entry_id] = { url, w: img.naturalWidth || 1, h: img.naturalHeight || 1, asked };
+      // the first picture of the page whose settings are open replaces the drawn background
+      const nowLive = !wasLive && this._picOfLivePage(p);
       this._captureLook(p, img);
       this._keepPageLive(p);
       if (old) setTimeout(() => URL.revokeObjectURL(old.url), 2000);
-      if (!old || shape) this._requestRender();
+      if (!old || shape || nowLive) this._requestRender();
       else this._showPictures(p.entry_id);
     } catch (_err) {
       // keeps the last picture; the next try comes on schedule
@@ -3212,9 +3225,11 @@ class PanelOSPage extends HTMLElement {
       : cur.error ? cur.error
       : !cur.available ? "Music Assistant is not set up in Home Assistant: alarms with music ring their own sound."
       : cur.added ? "Music Assistant plays on this panel."
+      : cur.sendspin ? "Music Assistant finds and pairs the panel by itself, a few seconds after the panel or Music Assistant starts."
       : cur.by_hand ? `Add it in Music Assistant: Settings → Providers → Home Assistant MediaPlayers, choose “${name}” among its players and save.`
       : "Music Assistant does not know this panel's player yet.";
     const acts = !cur || !cur.available || cur.added || cur.error ? null
+      : cur.sendspin ? this._btn("Check again", () => ask(false), { cls: "small ghost" })
       : cur.by_hand ? h("div", { style: { display: "flex", gap: "8px", flexWrap: "nowrap", flex: "none" } },
         cur.ma_panel ? this._btn("Open Music Assistant", () => { window.history.pushState(null, "", `/${cur.ma_panel}`); window.dispatchEvent(new CustomEvent("location-changed")); }, { cls: "small primary" }) : null,
         this._btn("Check again", () => ask(false), { cls: "small ghost" }))
@@ -3359,7 +3374,7 @@ class PanelOSPage extends HTMLElement {
     const lightGround = BACKGROUNDS[bgIndex(page)].theme === PLAIN_THEME && this._plainMode(p) === "light";
     // the panel shows this page while its settings are open: the live picture is the background, so
     // what lies where (and on what) is seen as it really is
-    const live = this._livePage(p, i) && Boolean(this._pics[p.entry_id]);
+    const live = this._livePage(p, i) && this._picOfLivePage(p);
     const canvas = h("div", { class: `hcanvas${lightGround ? " light" : ""}${live ? " live" : ""}`, style: { width: `${size}px`, height: `${size}px` } },
       live ? h("img", { class: "art", src: this._pics[p.entry_id].url, "data-pic": p.entry_id, alt: "", draggable: "false" }) : svgNode(bgArt(bgIndex(page), this._plainMode(p))));
     for (let k = 0; k <= 4; k++) {

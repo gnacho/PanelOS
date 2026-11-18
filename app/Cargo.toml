@@ -34,6 +34,9 @@ minimp3 = "0.5"
 alsa = "0.12"
 # ESPHome API encryption (Noise_NNpsk0_25519_ChaChaPoly_SHA256)
 snow = "=0.9.6"
+# Sendspin player (Music Assistant): PSK ids, base64url identities
+sha2 = "0.10"
+base64 = "0.22"
 # GPU renderer (feature "gpu"): Skia on OpenGL ES through EGL on a GBM surface.
 # The Skia renderer crate is Slint's own (same version as slint, pinned).
 i-slint-renderer-skia = { version = "=1.18.1", default-features = false, features = ["opengl"], optional = true }

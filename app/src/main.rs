@@ -38,6 +38,7 @@ mod pairing;
 mod panel_device;
 mod platform;
 mod roam;
+mod sendspin;
 mod settings;
 mod shade;
 mod sounds;
@@ -2765,6 +2766,8 @@ fn report_device(s: &mut UiState) {
     d.mic_muted = s.settings.mic_muted;
     d.display_mode = s.settings.display_mode.clone();
     d.volume = s.settings.volume;
+    // one volume: Music Assistant's volume of the panel's Sendspin player is the panel's own
+    crate::sendspin::panel_volume(s.settings.volume);
     d.alarms = serde_json::to_value(&s.settings.alarms).unwrap_or_default();
     d.ready = true;
     let after = (
@@ -3423,7 +3426,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // mDNS: announces the ESPHome API, so Home Assistant finds the panel;
     // browses for Home Assistant when the setup screen asks for it.
     let mdns_browser = Arc::new(mdns::Browser::default());
-    mdns::spawn(esphome::mdns_service(), mdns_browser.clone());
+    mdns::spawn(vec![esphome::mdns_service(), sendspin::mdns_service()], mdns_browser.clone());
     let shared = Arc::new(ha::Shared::default());
     // development install: the system log kept on the data partition and sent to Home Assistant
     devlog::spawn();
@@ -3595,6 +3598,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mic_muted = Arc::new(std::sync::atomic::AtomicBool::new(settings.mic_muted));
     let wake_words = Arc::new(std::sync::Mutex::new(settings.wake_words.clone()));
     let player = Arc::new(voice::Player::new());
+    // the Sendspin player for Music Assistant (mixes into the same speaker); its volume is the panel's volume
+    {
+        let weak = ui.as_weak();
+        sendspin::spawn(player.clone(), settings.volume, move |percent| {
+            let weak = weak.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(ui) = weak.upgrade() else { return };
+                with_state(|s| {
+                    if percent == 0 && s.settings.volume > 0 {
+                        s.vol_before_mute = s.settings.volume;
+                    }
+                    s.settings.volume = percent;
+                    hw::set_volume(percent);
+                    s.settings.save();
+                    let _ = s.device_notify.send(());
+                });
+                ui.set_speaker_muted(percent == 0);
+            });
+        });
+    }
     hw::set_volume(settings.volume);
     ui.set_speaker_muted(settings.volume == 0);
     let ringing_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));

@@ -455,6 +455,16 @@ fn device_info() -> DeviceInfoResponse {
     }
 }
 
+/// What the panel offers besides its entities: the voice satellite and the Sendspin player, which Music Assistant
+/// pairs with the token Home Assistant asks from here (SendspinPairingTokenRequest).
+fn capabilities() -> DeviceCapabilitiesResponse {
+    DeviceCapabilitiesResponse {
+        voice_assistant: Some(VoiceAssistantCapabilities { feature_flags: VOICE_FEATURES }),
+        sendspin: Some(SendspinCapabilities { feature_flags: 1, client_id: crate::sendspin::client_id().unwrap_or_default() }),
+        ..Default::default()
+    }
+}
+
 enum Basic {
     Done,
     Close,
@@ -472,7 +482,9 @@ fn handle_basic(stream: &mut Conn, kind: u32, payload: &[u8]) -> io::Result<Basi
             eprintln!("nspanel-app: ESPHome API client '{}' {}.{}", hello.client_info, hello.api_version_major, hello.api_version_minor);
             send(stream, 2, &HelloResponse {
                 api_version_major: 1,
-                api_version_minor: 12,
+                // 1.15: Home Assistant asks the capabilities (DeviceCapabilitiesRequest), where the panel offers
+                // its Sendspin client for pairing
+                api_version_minor: 15,
                 server_info: format!("nspanel-app {}", env!("CARGO_PKG_VERSION")),
                 name: DEVICE_NAME.into(),
             })?;
@@ -485,6 +497,19 @@ fn handle_basic(stream: &mut Conn, kind: u32, payload: &[u8]) -> io::Result<Basi
         7 => send(stream, 8, &PingResponse {})?,
         8 => {}
         9 => send(stream, 10, &device_info())?,
+        149 => send(stream, 150, &capabilities())?,
+        159 => {
+            // the Sendspin pairing token only goes over an encrypted session
+            let (status, token) = if api_link::load_key().is_none() {
+                (SendspinPairingTokenStatus::EncryptionRequired, String::new())
+            } else {
+                match crate::sendspin::pairing_token() {
+                    Some(t) => (SendspinPairingTokenStatus::Ok, t),
+                    None => (SendspinPairingTokenStatus::NotReady, String::new()),
+                }
+            };
+            send(stream, 160, &SendspinPairingTokenResponse { status: status as i32, token })?;
+        }
         124 => {
             let ok = NoiseEncryptionSetKeyRequest::decode(payload).map(|m| api_link::set_key(stream, &m.key)).unwrap_or(false);
             send(stream, 125, &NoiseEncryptionSetKeyResponse { success: ok })?;

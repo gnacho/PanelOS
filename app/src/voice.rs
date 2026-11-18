@@ -458,6 +458,8 @@ pub enum Sound {
     Loop(Arc<Vec<i16>>),
     /// 48 kHz mono pieces as they arrive (the media player's stream); it ends with the stream or a stop.
     Stream(Receiver<Vec<i16>>),
+    /// No sound: wakes the speaker for the Sendspin music, which the player mixes under every sound.
+    Wake,
 }
 
 /// Speech over a ringing timer: this many dB over what is left of the ring after the echo canceller...
@@ -764,6 +766,254 @@ fn upsample(pcm16k: &[u8]) -> Vec<i16> {
     out
 }
 
+/// A sound plays (or is still in the speaker): the Sendspin music stays on under an answer.
+static SPEAKING: AtomicBool = AtomicBool::new(false);
+
+pub fn speaking() -> bool {
+    SPEAKING.load(Ordering::Relaxed)
+}
+
+/// One sound being played (with its place), the media stream's pieces as they come.
+struct Playing {
+    samples: Arc<Vec<i16>>,
+    offset: usize,
+    looped: bool,
+    stream: Option<Receiver<Vec<i16>>>,
+    /// A stream waits for half a second of audio first, so short stalls of the network do not empty the speaker.
+    prebuffer: bool,
+    gen: u64,
+}
+
+fn open_speaker() -> Option<PCM> {
+    (|| -> alsa::Result<PCM> {
+        let p = PCM::new(PLAYBACK_DEVICE, Direction::Playback, false)?;
+        {
+            let hw = HwParams::any(&p)?;
+            hw.set_channels(2)?;
+            hw.set_rate(48000, ValueOr::Nearest)?;
+            hw.set_format(Format::s16())?;
+            hw.set_access(Access::RWInterleaved)?;
+            // 100 ms: the echo reference runs this much ahead of the speaker.
+            hw.set_buffer_size_near(48000 / 10)?;
+            p.hw_params(&hw)?;
+        }
+        Ok(p)
+    })()
+    .map_err(|e| eprintln!("nspanel-app: speaker: {e}"))
+    .ok()
+}
+
+/// The speaker: the queued sounds one after the other, the Sendspin music mixed under them (and alone while no
+/// sound plays), 10 ms at a time. Each written piece also goes to the echo reference (48 kHz → 16 kHz, mean of
+/// three samples), so the echo canceller hears the music too.
+fn player_thread(
+    rx: Receiver<(Sound, u64)>,
+    busy: Arc<AtomicBool>,
+    stop_gen: Arc<std::sync::atomic::AtomicU64>,
+    echo: EchoRef,
+    underruns: Arc<AtomicU32>,
+) {
+    const PERIOD: usize = 480; // 10 ms of frames
+    let mut pcm: Option<PCM> = None;
+    let mut playing: Option<Playing> = None;
+    // the sound has been written but may still be in the speaker's buffer: busy until then
+    let mut busy_until: Option<Instant> = None;
+    let mut queued: VecDeque<(Sound, u64)> = VecDeque::new();
+    loop {
+        let music = crate::sendspin::music_active();
+        // the next sound: waits for one while nothing plays (and closes the speaker after 400 ms of silence)
+        if playing.is_none() {
+            let next = if let Some(q) = queued.pop_front() {
+                Some(q)
+            } else if music || busy_until.is_some() {
+                rx.try_recv().ok()
+            } else {
+                match rx.recv_timeout(Duration::from_millis(400)) {
+                    Ok(s) => Some(s),
+                    Err(RecvTimeoutError::Timeout) => {
+                        if let Some(p) = pcm.take() {
+                            let _ = p.drain();
+                        }
+                        busy.store(false, Ordering::SeqCst);
+                        SPEAKING.store(false, Ordering::SeqCst);
+                        continue;
+                    }
+                    Err(RecvTimeoutError::Disconnected) => return,
+                }
+            };
+            if let Some((sound, gen)) = next {
+                if gen >= stop_gen.load(Ordering::SeqCst) {
+                    let (samples, looped, stream): (Arc<Vec<i16>>, bool, Option<Receiver<Vec<i16>>>) = match sound {
+                        Sound::Pcm16k(b) => (Arc::new(upsample(&b)), false, None),
+                        Sound::Pcm { rate, channels, data } => (Arc::new(resample_to_48k(rate, channels, &data)), false, None),
+                        Sound::Chime => (Arc::new(chime()), false, None),
+                        Sound::Beep => (Arc::new(beep()), false, None),
+                        Sound::Loop(samples) => (samples, true, None),
+                        Sound::Stream(rx) => (Arc::new(Vec::new()), false, Some(rx)),
+                        Sound::Wake => (Arc::new(Vec::new()), false, None),
+                    };
+                    if !samples.is_empty() || stream.is_some() {
+                        busy.store(true, Ordering::SeqCst);
+                        SPEAKING.store(true, Ordering::SeqCst);
+                        busy_until = None;
+                        let prebuffer = stream.is_some();
+                        playing = Some(Playing { samples, offset: 0, looped, stream, prebuffer, gen });
+                    }
+                }
+            }
+        }
+        if playing.is_none() && !crate::sendspin::music_active() {
+            if let Some(until) = busy_until {
+                if Instant::now() >= until {
+                    busy_until = None;
+                    busy.store(false, Ordering::SeqCst);
+                        SPEAKING.store(false, Ordering::SeqCst);
+                } else {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+            continue;
+        }
+        if pcm.is_none() {
+            pcm = open_speaker();
+            if pcm.is_none() {
+                playing = None;
+                std::thread::sleep(Duration::from_millis(500));
+                continue;
+            }
+        }
+        let Some(p) = pcm.as_ref() else { continue };
+        let Ok(io) = p.io_i16() else {
+            pcm = None;
+            continue;
+        };
+
+        // a stop drops what plays and what the speaker still holds
+        if playing.as_ref().is_some_and(|pl| pl.gen < stop_gen.load(Ordering::SeqCst)) {
+            playing = None;
+            queued.retain(|(_, g)| *g >= stop_gen.load(Ordering::SeqCst));
+            let _ = p.drop();
+            let _ = p.prepare();
+            echo.lock().unwrap().clear();
+            busy_until = Some(Instant::now());
+            continue;
+        }
+
+        // the sound's part of this period
+        let mut sound: Vec<i16> = Vec::with_capacity(PERIOD);
+        let mut finished = false;
+        if let Some(pl) = playing.as_mut() {
+            if let Some(srx) = &pl.stream {
+                // a stream: take what has arrived; the first piece waits for half a second of audio
+                let mut ended = false;
+                loop {
+                    match srx.try_recv() {
+                        Ok(piece) => {
+                            let mut v = Arc::try_unwrap(std::mem::take(&mut pl.samples)).unwrap_or_else(|a| (*a).clone());
+                            v.drain(..pl.offset.min(v.len()));
+                            pl.offset = 0;
+                            v.extend(piece);
+                            pl.samples = Arc::new(v);
+                        }
+                        Err(mpsc::TryRecvError::Empty) => break,
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            ended = true;
+                            break;
+                        }
+                    }
+                }
+                let have = pl.samples.len() - pl.offset;
+                if pl.prebuffer && have >= 24000 {
+                    pl.prebuffer = false;
+                }
+                if ended && have == 0 {
+                    finished = true;
+                } else if pl.prebuffer && !ended {
+                    if !music {
+                        // nothing else to play: wait for the stream instead of writing silence
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                } else if have == 0 && !music {
+                    // a stall of the network: wait (the speaker drains, as before)
+                    match srx.recv_timeout(Duration::from_millis(30)) {
+                        Ok(piece) => {
+                            pl.samples = Arc::new(piece);
+                            pl.offset = 0;
+                        }
+                        Err(RecvTimeoutError::Timeout) => {}
+                        Err(RecvTimeoutError::Disconnected) => finished = true,
+                    }
+                    if !finished {
+                        continue;
+                    }
+                }
+                if !finished && !pl.prebuffer {
+                    let take = PERIOD.min(pl.samples.len() - pl.offset);
+                    sound.extend_from_slice(&pl.samples[pl.offset..pl.offset + take]);
+                    pl.offset += take;
+                }
+            } else {
+                while sound.len() < PERIOD {
+                    if pl.offset >= pl.samples.len() {
+                        if pl.looped {
+                            pl.offset = 0;
+                        } else {
+                            finished = true;
+                            break;
+                        }
+                    }
+                    let take = (PERIOD - sound.len()).min(pl.samples.len() - pl.offset);
+                    sound.extend_from_slice(&pl.samples[pl.offset..pl.offset + take]);
+                    pl.offset += take;
+                }
+            }
+        }
+        if finished {
+            playing = None;
+            // the next queued sound follows at once; the busy flag waits until the speaker has played it out
+            match rx.try_recv() {
+                Ok(next) => queued.push_back(next),
+                Err(_) => {
+                    let held = p.delay().unwrap_or(0).max(0) as u64;
+                    busy_until = Some(Instant::now() + Duration::from_micros(held * 1_000_000 / 48000 + 20_000));
+                }
+            }
+            if sound.is_empty() {
+                continue;
+            }
+        }
+
+        // the music's part, timed for when this period will be heard
+        let frames = if sound.is_empty() { PERIOD } else { sound.len() };
+        let held = p.delay().unwrap_or(0).max(0) as i64;
+        let heard_at = crate::sendspin::now_us() + held * 1_000_000 / 48000;
+        let mut mono = sound;
+        mono.resize(frames, 0);
+        if music {
+            crate::sendspin::mix_music(&mut mono, heard_at);
+        }
+        let stereo: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
+        match io.writei(&stereo) {
+            Ok(written) => {
+                let mut q = echo.lock().unwrap();
+                let start = q.len();
+                for tri in mono[..written.min(mono.len())].chunks(3) {
+                    q.push_back((tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32) as i16);
+                }
+                keep_trace(&OUT_TRACE, q.iter().skip(start).copied());
+                while q.len() > 16000 {
+                    q.pop_front();
+                }
+            }
+            Err(_) => {
+                underruns.fetch_add(1, Ordering::SeqCst);
+                let _ = p.prepare();
+            }
+        }
+    }
+}
+
 impl Player {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel::<(Sound, u64)>();
@@ -775,125 +1025,7 @@ impl Player {
         let echo2 = echo.clone();
         let underruns = Arc::new(AtomicU32::new(0));
         let underruns2 = underruns.clone();
-        std::thread::spawn(move || {
-            let mut pcm: Option<PCM> = None;
-            loop {
-                let (sound, gen) = match rx.recv_timeout(Duration::from_millis(400)) {
-                    Ok(s) => s,
-                    Err(RecvTimeoutError::Timeout) => {
-                        if let Some(p) = pcm.take() {
-                            let _ = p.drain();
-                        }
-                        busy2.store(false, Ordering::SeqCst);
-                        continue;
-                    }
-                    Err(RecvTimeoutError::Disconnected) => return,
-                };
-                busy2.store(true, Ordering::SeqCst);
-                if gen < stop2.load(Ordering::SeqCst) {
-                    continue; // queued before a stop
-                }
-                let (mut mono, looped, stream): (Arc<Vec<i16>>, bool, Option<Receiver<Vec<i16>>>) = match sound {
-                    Sound::Pcm16k(b) => (Arc::new(upsample(&b)), false, None),
-                    Sound::Pcm { rate, channels, data } => (Arc::new(resample_to_48k(rate, channels, &data)), false, None),
-                    Sound::Chime => (Arc::new(chime()), false, None),
-                    Sound::Beep => (Arc::new(beep()), false, None),
-                    Sound::Loop(samples) => (samples, true, None),
-                    Sound::Stream(rx) => (Arc::new(Vec::new()), false, Some(rx)),
-                };
-                if mono.is_empty() && stream.is_none() {
-                    continue;
-                }
-                if pcm.is_none() {
-                    pcm = (|| -> alsa::Result<PCM> {
-                        let p = PCM::new(PLAYBACK_DEVICE, Direction::Playback, false)?;
-                        {
-                            let hw = HwParams::any(&p)?;
-                            hw.set_channels(2)?;
-                            hw.set_rate(48000, ValueOr::Nearest)?;
-                            hw.set_format(Format::s16())?;
-                            hw.set_access(Access::RWInterleaved)?;
-                            // 100 ms: the echo reference runs this much ahead of the speaker.
-                            hw.set_buffer_size_near(48000 / 10)?;
-                            p.hw_params(&hw)?;
-                        }
-                        Ok(p)
-                    })()
-                    .map_err(|e| eprintln!("nspanel-app: speaker: {e}"))
-                    .ok();
-                }
-                let Some(p) = pcm.as_ref() else { continue };
-                let io = match p.io_i16() {
-                    Ok(io) => io,
-                    Err(_) => continue,
-                };
-                let mut first_piece = true;
-                'pieces: loop {
-                // a stream: the next piece; the first waits for half a second of audio, so short
-                // stalls of the network do not empty the speaker
-                if let Some(rx) = &stream {
-                    let mut got: Vec<i16> = Vec::new();
-                    let want = if first_piece { 24000 } else { 1 };
-                    first_piece = false;
-                    while got.len() < want {
-                        match rx.recv_timeout(Duration::from_secs(30)) {
-                            Ok(piece) => got.extend(piece),
-                            Err(_) => break,
-                        }
-                    }
-                    if got.is_empty() || gen < stop2.load(Ordering::SeqCst) {
-                        break 'pieces;
-                    }
-                    mono = Arc::new(got);
-                }
-                let stereo: Vec<i16> = mono.iter().flat_map(|s| [*s, *s]).collect();
-                let mut stopped = false;
-                // 10 ms at a time; each written piece also goes to the echo
-                // reference (48 kHz → 16 kHz, mean of three samples). A looped
-                // sound starts over until a stop.
-                let mut offset = 0;
-                loop {
-                    if offset >= stereo.len() {
-                        if !looped {
-                            break;
-                        }
-                        offset = 0;
-                    }
-                    if gen < stop2.load(Ordering::SeqCst) {
-                        let _ = p.drop();
-                        let _ = p.prepare();
-                        echo2.lock().unwrap().clear();
-                        stopped = true;
-                        break;
-                    }
-                    let end = (offset + 960).min(stereo.len());
-                    match io.writei(&stereo[offset..end]) {
-                        Ok(frames) => {
-                            let first = offset / 2;
-                            let mut q = echo2.lock().unwrap();
-                            let start = q.len();
-                            for tri in mono[first..first + frames].chunks(3) {
-                                q.push_back((tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32) as i16);
-                            }
-                            keep_trace(&OUT_TRACE, q.iter().skip(start).copied());
-                            while q.len() > 16000 {
-                                q.pop_front();
-                            }
-                            drop(q);
-                            offset += frames * 2;
-                        }
-                        Err(_) => {
-                            underruns2.fetch_add(1, Ordering::SeqCst);
-                            let _ = p.prepare();
-                        }
-                    }
-                }
-                if stopped || stream.is_none() {
-                    break 'pieces;
-                }
-                }
-            }
-        });
+        std::thread::spawn(move || player_thread(rx, busy2, stop2, echo2, underruns2));
         Self { tx, busy, stop_gen, echo, underruns }
     }
 
