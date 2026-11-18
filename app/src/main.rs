@@ -223,6 +223,13 @@ pub struct UiState {
     screen_off: bool,
     /// What the weather shown last looked like (see weather_key).
     weather_key: String,
+    /// The condition whose living icon frames are loaded (spec M12).
+    wx_cond: String,
+    /// The timers (and the ones in their last minute) the timer island knows: a new one brings it back (29.3).
+    island_seen: Vec<String>,
+    island_urgent: Vec<String>,
+    /// The volume before the panel was muted (the speaker mark's tap goes back to it; 0 = unknown).
+    vol_before_mute: u8,
     /// Development: weather values forced from the dev input.
     dev_wx: Option<Value>,
 }
@@ -343,9 +350,16 @@ fn popup(ui: &AppWindow, id: &str, title: &str, message: &str) {
         return;
     }
     if kind == "card" {
+        // the window (30): its time, or until answered
+        let until = with_state(|s| {
+            s.panel_config.as_ref().and_then(|c| c.get("popups")).and_then(|p| p.get("until")).and_then(Value::as_bool).unwrap_or(false)
+        });
+        ui.set_pop_until(until);
+        ui.set_pop_seconds(seconds as f32);
         info::pop(ui, Some(id));
+        wake(ui);
+        // the window keeps its own time (a finger holds it, each step starts it again, until answered has none)
         with_state(|s| {
-            s.show_until = Some(Instant::now() + Duration::from_secs(seconds));
             if sound {
                 s.player.play(voice::Sound::Chime);
             }
@@ -459,6 +473,30 @@ fn same_rows<T: Clone + PartialEq + 'static>(old: &ModelRc<T>, new: &[T]) -> boo
 
 /// What the weather shows, to tell whether a new WeatherData changes anything
 /// (its hour and day lists are models, which compare by identity).
+/// Loads the living weather icon's frames for a condition (spec M12): n frames for each of the sizes 34, 44, 50, 64
+/// (lightning-rainy: the three rain frames and the bolt layer). Without its frames the icon is the plain glyph.
+fn set_wx_frames(ui: &AppWindow, cond: &str) {
+    let (name, n, kind) = pages::wx_motion(cond);
+    let mut frames = Vec::new();
+    for size in [34, 44, 50, 64] {
+        for k in 0..n {
+            let file = if kind == 7 && k == 3 { format!("home/wxicon/{name}-bolt-{size}.png") } else { format!("home/wxicon/{name}-{k}-{size}.png") };
+            frames.push(quick::picture(&file));
+        }
+    }
+    let ok = n > 0 && frames.iter().all(|f| f.size().width > 0);
+    let w = ui.global::<WxIcons>();
+    if ok {
+        w.set_frames(slint::ModelRc::new(slint::VecModel::from(frames)));
+        w.set_n(n as i32);
+    } else {
+        w.set_frames(slint::ModelRc::default());
+        w.set_n(0);
+    }
+    w.set_kind(if ok || n == 0 { kind } else { 0 });
+    eprintln!("nspanel-app: weather icon {cond}: {} frames, motion {kind}", if ok { n } else { 0 });
+}
+
 fn weather_key(w: &WeatherData) -> String {
     let hours: Vec<String> = w.hours.iter().map(|h| format!("{}{}{}{}", h.label, h.icon, h.temp, h.precip)).collect();
     let days: Vec<String> = w.days.iter().map(|d| format!("{}{}{}{}{}", d.label, d.icon, d.high, d.low, d.precip)).collect();
@@ -516,9 +554,19 @@ fn update_clock(ui: &AppWindow) {
         // Timer chips and the timers page only while there are timers (they count down).
         if !s.timers.is_empty() || ui.get_timers().row_count() > 0 {
             // Rows change in place each second (no element is built again).
-            if let Some(m) = pages::update_rows(&ui.get_timers(), pages::timer_chips(&s.timers)) {
+            if let Some(m) = pages::update_rows(&ui.get_timers(), pages::timer_chips(&s.timers, accent(s), ui.get_timers_colourful())) {
                 ui.set_timers(m);
             }
+            // the timer island comes back by itself when a new timer starts or a timer enters its last minute (29.3)
+            let keys: Vec<String> = s.timers.keys().cloned().collect();
+            let urgent: Vec<String> = s.timers.iter().filter(|(_, t)| t.active && t.remaining() < 60).map(|(k, _)| k.clone()).collect();
+            let fresh = keys.iter().any(|k| !s.island_seen.contains(k));
+            let late = urgent.iter().any(|k| !s.island_urgent.contains(k));
+            if (fresh || late || keys.is_empty()) && ui.get_island_away() {
+                ui.set_island_away(false);
+            }
+            s.island_seen = keys;
+            s.island_urgent = urgent;
             if let Some(m) = pages::update_rows(&ui.get_timers_list(), pages::timer_items(&s.timers, accent(s), ui.get_timers_colourful())) {
                 ui.set_timers_list(m);
             }
@@ -672,6 +720,12 @@ fn refresh_pages(ui: &AppWindow) {
             if let Some(v) = f("theme") { weather.theme = v as i32; }
             if let Some(v) = f("sun_el") { weather.sun_el = v as f32; }
         }
+        // the living weather icon: the frames of the condition (spec M12)
+        let cond = s.states.get(&entity).map(|st| st.state.clone()).unwrap_or_default();
+        if cond != s.wx_cond {
+            set_wx_frames(ui, &cond);
+            s.wx_cond = cond;
+        }
         let key = weather_key(&weather);
         if key != s.weather_key {
             s.weather_key = key;
@@ -803,6 +857,17 @@ fn refresh_pages(ui: &AppWindow) {
         if ui.get_timers_theme() != v {
             ui.set_timers_theme(v);
         }
+    }
+    // the stopwatch's and the alarms' own looks (spec 24): page options
+    let (sw_look, alarm_look) = with_state(|s| {
+        let get = |k: &str| page_option(s, "timers", k).and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 4) as i32;
+        (get("sw_look"), get("alarm_look"))
+    });
+    if ui.get_timers_sw_look() != sw_look {
+        ui.set_timers_sw_look(sw_look);
+    }
+    if ui.get_timers_alarm_look() != alarm_look {
+        ui.set_timers_alarm_look(alarm_look);
     }
     if let Some(v) = variant("music") {
         if ui.get_music_style() != v {
@@ -1451,6 +1516,15 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
                 s.lap_at = now;
                 s.laps.clone()
             });
+            // the looks' numbers: the time at the last lap, the best lap, the laps' times on the watch (oldest first, 8)
+            let mut at = 0.0;
+            let mut marks: Vec<f32> = laps.iter().rev().map(|l| { at += l; at }).collect();
+            if marks.len() > 8 {
+                marks.drain(..marks.len() - 8);
+            }
+            ui.set_timers_lap_at(now);
+            ui.set_timers_lap_best(laps.iter().copied().fold(f32::MAX, f32::min));
+            ui.set_timers_lap_marks(ModelRc::new(VecModel::from(marks)));
             ui.set_timers_laps(ModelRc::new(VecModel::from(laps)));
         }
         "watch.reset" => {
@@ -1461,6 +1535,9 @@ fn timers_act(ui: &AppWindow, what: &str, value: &str) {
                 s.lap_at = 0.0;
             });
             ui.set_timers_laps(ModelRc::new(VecModel::from(Vec::<f32>::new())));
+            ui.set_timers_lap_at(0.0);
+            ui.set_timers_lap_best(-1.0);
+            ui.set_timers_lap_marks(ModelRc::new(VecModel::from(Vec::<f32>::new())));
         }
         _ => eprintln!("nspanel-app: act {what} {value} (not handled yet)"),
     }
@@ -1529,9 +1606,45 @@ fn voice_line(ui: &AppWindow, state: &str) -> String {
 }
 
 thread_local! {
-    /// Feeds the voice view's halo and trace while the microphone streams.
+    /// Feeds the voice view's halo, peaks and trace while it shows.
     static METER: slint::Timer = slint::Timer::default();
-    static TRACE: RefCell<std::collections::VecDeque<f32>> = RefCell::new(std::collections::VecDeque::new());
+    /// The follow-up's 5 s, the terminal's typing.
+    static FOLLOW: slint::Timer = slint::Timer::default();
+    static TYPING: slint::Timer = slint::Timer::default();
+    static PEAK: std::cell::Cell<(bool, Option<Instant>)> = const { std::cell::Cell::new((true, None)) };
+    static THINK_T0: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// The oscilloscope's trace of the last 40 ms of a sound (16 kHz): 100 columns, each its samples' min and max, in a
+/// 400 × 160 box (spec 31, F5).
+fn scope_path(q: &std::sync::Mutex<std::collections::VecDeque<i16>>) -> String {
+    let q = q.lock().unwrap();
+    let n = 640.min(q.len());
+    if n < 100 {
+        return "M 0 80 L 400 80".into();
+    }
+    let s: Vec<i16> = q.iter().skip(q.len() - n).copied().collect();
+    let mut p = String::with_capacity(2400);
+    for c in 0..100 {
+        let part = &s[c * n / 100..((c + 1) * n / 100).max(c * n / 100 + 1)];
+        let (lo, hi) = part.iter().fold((i16::MAX, i16::MIN), |(a, b), &v| (a.min(v), b.max(v)));
+        let y = |v: i16| (80.0 - (v as f32 / 32768.0 * 3.0).clamp(-1.0, 1.0) * 74.0).clamp(1.0, 159.0);
+        let x = c as f32 * 4.0 + 2.0;
+        p.push_str(&format!("{}{x:.0} {:.1} L {x:.0} {:.1} ", if c == 0 { "M " } else { "L " }, y(hi), y(lo)));
+    }
+    p
+}
+
+/// The thinking trace: a flat amber line with a slow ripple (6 px, 0.5 Hz; spec 31, O2).
+fn think_path() -> String {
+    let t = THINK_T0.with(|t| t.get()).map_or(0.0, |t0| t0.elapsed().as_secs_f32());
+    let mut p = String::from("M 0 80 ");
+    for c in 1..=50 {
+        let x = c as f32 * 8.0;
+        let y = 80.0 + 6.0 * (std::f32::consts::TAU * (0.5 * t - x / 200.0)).sin();
+        p.push_str(&format!("L {x:.0} {y:.1} "));
+    }
+    p
 }
 
 /// The voice view's look (integration), its pictures and its state colours.
@@ -1543,50 +1656,112 @@ fn voice_view(ui: &AppWindow, state: i32) {
     }
     if look == 2 {
         let dots = match state {
-            1 | 5 => "voice/dots-blue.png",
-            3 => "voice/dots-green.png",
-            4 => "voice/dots-red.png",
-            6 => "voice/dots-violet.png",
-            _ => "voice/dots.png",
+            1 | 5 => "voice/dots-blue-500.png",
+            3 => "voice/dots-green-500.png",
+            4 => "voice/dots-red-500.png",
+            6 => "voice/dots-violet-500.png",
+            _ => "voice/dots-500.png",
         };
         ui.set_voice_dots(quick::picture(dots));
     }
 }
 
-/// Starts or stops the microphone meter (level 30 times a second, smoothed;
-/// the oscilloscope trace from the last 2 s of it).
+/// Starts or stops the voice view's meter (30 times a second): the microphone level (smoothed), the voice peaks (a
+/// ripple, the TRIG lamp: over 0.38, again below 0.25, at most one in 280 ms) and the oscilloscope's trace with its
+/// afterglow (the microphone while listening, the ripple while thinking, the panel's own sound while answering).
 fn voice_meter(ui: &AppWindow, on: bool) {
     METER.with(|t| {
         if !on {
             t.stop();
             ui.set_voice_level(0.0);
-            TRACE.with(|tr| tr.borrow_mut().clear());
+            return;
+        }
+        if t.running() {
             return;
         }
         let weak = ui.as_weak();
         t.start(slint::TimerMode::Repeated, Duration::from_millis(33), move || {
             let Some(ui) = weak.upgrade() else { return };
-            let raw = f32::from_bits(voice::MIC_LEVEL.load(Ordering::Relaxed));
+            let state = ui.get_voice_state();
+            let listening = state == 1 || state == 5;
+            let raw = if listening { f32::from_bits(voice::MIC_LEVEL.load(Ordering::Relaxed)) } else { 0.0 };
             let level = ui.get_voice_level() * 0.6 + raw * 0.4;
             ui.set_voice_level(level);
-            if ui.get_voice_look() == 3 {
-                // 60 points across a 400 × 160 box, the newest on the right.
-                let path = TRACE.with(|tr| {
-                    let mut tr = tr.borrow_mut();
-                    tr.push_back(raw);
-                    while tr.len() > 60 {
-                        tr.pop_front();
+            if listening {
+                PEAK.with(|p| {
+                    let (armed, last) = p.get();
+                    if armed && level > 0.38 && last.is_none_or(|t| t.elapsed() >= Duration::from_millis(280)) {
+                        p.set((false, Some(Instant::now())));
+                        ui.set_voice_peaks(ui.get_voice_peaks() + 1);
+                    } else if !armed && level < 0.25 {
+                        p.set((true, last));
                     }
-                    let mut p = String::new();
-                    for (i, v) in tr.iter().enumerate() {
-                        let x = 400.0 * i as f32 / 59.0;
-                        let swing = if i % 2 == 0 { 1.0 } else { -1.0 };
-                        let y = 80.0 - swing * v * 70.0;
-                        p.push_str(&format!("{}{x:.1} {y:.1} ", if i == 0 { "M " } else { "L " }));
-                    }
-                    p
                 });
+            }
+            if ui.get_voice_look() == 3 {
+                let path = match state {
+                    2 => think_path(),
+                    3 => scope_path(&voice::OUT_TRACE),
+                    1 | 5 => scope_path(&voice::MIC_TRACE),
+                    _ => "M 0 80 L 400 80".into(),
+                };
+                // the phosphor's afterglow: the last three traces
+                ui.set_voice_wave3(ui.get_voice_wave2());
+                ui.set_voice_wave2(ui.get_voice_wave1());
+                ui.set_voice_wave1(ui.get_voice_wave());
                 ui.set_voice_wave(path.into());
+            }
+        });
+    });
+}
+
+/// Listening for more: the 5 s drain (`voice-left`, 1 … 0) until speech starts (spec 31, F2).
+fn follow_up_drain(ui: &AppWindow, on: bool) {
+    FOLLOW.with(|t| {
+        if !on {
+            t.stop();
+            ui.set_voice_left(-1.0);
+            return;
+        }
+        let started = Instant::now();
+        ui.set_voice_left(1.0);
+        let weak = ui.as_weak();
+        t.start(slint::TimerMode::Repeated, Duration::from_millis(50), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let left = 1.0 - started.elapsed().as_secs_f32() / 5.0;
+            ui.set_voice_left(left.max(0.0));
+            if left <= 0.0 {
+                FOLLOW.with(|t| t.stop());
+            }
+        });
+    });
+}
+
+/// The terminal look's answer types at 40 characters a second (spec 31, T3).
+fn type_answer(ui: &AppWindow, text: &str) {
+    // the terminal types characters (40 a second), the plain look brings the words one after another (55 ms apart)
+    let look = ui.get_voice_look();
+    if look != 0 && look != 1 {
+        ui.set_voice_typed(text.into());
+        return;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let word_ends: Vec<usize> = chars.iter().enumerate().filter(|(i, c)| c.is_whitespace() || *i + 1 == chars.len()).map(|(i, _)| i + 1).collect();
+    ui.set_voice_typed("".into());
+    let started = Instant::now();
+    let weak = ui.as_weak();
+    TYPING.with(|t| {
+        t.start(slint::TimerMode::Repeated, Duration::from_millis(25), move || {
+            let Some(ui) = weak.upgrade() else { return };
+            let s = started.elapsed().as_secs_f32();
+            let n = if look == 1 {
+                ((s * 40.0) as usize).min(chars.len())
+            } else {
+                word_ends.get((s / 0.055) as usize).copied().unwrap_or(chars.len())
+            };
+            ui.set_voice_typed(chars[..n].iter().collect::<String>().into());
+            if n >= chars.len() {
+                TYPING.with(|t| t.stop());
             }
         });
     });
@@ -1597,41 +1772,59 @@ fn handle_voice_ui(ui: &AppWindow, event: voice::VoiceUi) {
     let hide_after = |secs: u64| with_state(|s| s.voice_hide_at = Some(Instant::now() + Duration::from_secs(secs)));
     let show = with_state(|s| s.panel_config.as_ref().and_then(|c| c.get("show_conversation")).and_then(Value::as_bool).unwrap_or(true));
     match event {
-        VoiceUi::Listening => {
+        VoiceUi::Listening | VoiceUi::FollowUp => {
+            let more = matches!(event, VoiceUi::FollowUp);
             wake(ui);
             with_state(|s| s.voice_hide_at = None);
-            ui.set_voice_heard("".into());
-            ui.set_voice_answer("".into());
+            if !more {
+                ui.set_voice_heard("".into());
+                ui.set_voice_answer("".into());
+                ui.set_voice_typed("".into());
+            }
             ui.set_voice_detail("".into());
-            voice_view(ui, 1);
-            ui.set_voice_line(voice_line(ui, "listen").into());
-            ui.set_voice_state(1);
+            voice_view(ui, if more { 5 } else { 1 });
+            ui.set_voice_line(voice_line(ui, if more { "more" } else { "listen" }).into());
+            ui.set_voice_state(if more { 5 } else { 1 });
+            follow_up_drain(ui, more);
             voice_meter(ui, true);
             ui.set_voice_on(show);
         }
-        VoiceUi::Heard(text) => ui.set_voice_heard(text.into()),
+        VoiceUi::Heard(text) => {
+            follow_up_drain(ui, false);
+            ui.set_voice_heard(text.into());
+        }
         VoiceUi::Thinking => {
-            voice_meter(ui, false);
+            follow_up_drain(ui, false);
+            THINK_T0.with(|t| t.set(Some(Instant::now())));
             voice_view(ui, 2);
             ui.set_voice_line(voice_line(ui, "think").into());
             ui.set_voice_state(2);
         }
         VoiceUi::Answer(text) => {
+            type_answer(ui, &text);
             ui.set_voice_answer(text.into());
-            voice_meter(ui, false);
             voice_view(ui, 3);
             ui.set_voice_line(voice_line(ui, "reply").into());
             ui.set_voice_state(3);
         }
         VoiceUi::Idle => {
-            voice_meter(ui, false);
+            follow_up_drain(ui, false);
             if ui.get_voice_on() {
                 hide_after(5);
+            } else {
+                voice_meter(ui, false);
             }
         }
+        VoiceUi::NotUnderstood => {
+            follow_up_drain(ui, false);
+            voice_view(ui, 6);
+            ui.set_voice_line(voice_line(ui, "again").into());
+            ui.set_voice_state(6);
+            hide_after(5);
+        }
         VoiceUi::Error(message) => {
+            follow_up_drain(ui, false);
             ui.set_voice_detail(message.into());
-            voice_meter(ui, false);
             voice_view(ui, 4);
             ui.set_voice_line(voice_line(ui, "fail").into());
             ui.set_voice_state(4);
@@ -1868,7 +2061,7 @@ fn wake_phrase(ids: &[String]) -> String {
     voice::available_wake_words().into_iter().find(|w| w.id == *id).map(|w| w.phrase).unwrap_or_default()
 }
 
-/// show_view / show_message from Home Assistant (PanelOS integration).
+/// show_view and the other requests of the PanelOS integration (alarms, status screens, critical alerts, notifications).
 fn handle_show(ui: &AppWindow, v: &Value) {
     if v["type"].as_str() == Some("touch_test") {
         start_touch_test(ui);
@@ -1880,13 +2073,22 @@ fn handle_show(ui: &AppWindow, v: &Value) {
         alarms::set_all(ui, &v["list"]);
         return;
     }
+    // PanelOS's own notifications (the integration's list for this panel): new ones pop up
+    if v["type"].as_str() == Some("notes") {
+        let fresh = info::update_own(ui, v);
+        with_state(|s| info::refresh(ui, s));
+        for id in fresh {
+            let (title, message) = info::note_text(&id);
+            popup(ui, &id, &title, &message);
+        }
+        return;
+    }
     // status screens and critical alerts (the integration's house-wide rules)
     if matches!(v["type"].as_str(), Some("status" | "status_clear" | "critical" | "critical_clear")) {
         eprintln!("nspanel-app: {} {}", v["type"].as_str().unwrap_or(""), v["id"].as_str().unwrap_or(""));
         alerts::show(ui, v);
         return;
     }
-    let kind = v["type"].as_str().unwrap_or("view");
     let seconds = v["seconds"].as_u64().unwrap_or(30);
     eprintln!("nspanel-app: show request {v}");
     wake(ui);
@@ -1895,32 +2097,21 @@ fn handle_show(ui: &AppWindow, v: &Value) {
         s.show_until = (seconds > 0).then(|| Instant::now() + Duration::from_secs(seconds));
         v["chime"].as_bool().unwrap_or(false).then(|| s.player.clone())
     });
-    match kind {
-        "message" => {
-            ui.set_strip_title(v["title"].as_str().unwrap_or("").into());
-            ui.set_strip_sub(v["message"].as_str().unwrap_or("").into());
-            let icon = v["icon"].as_str().unwrap_or("mdi:information-outline").trim_start_matches("mdi:");
-            ui.set_strip_icon(icons::glyph(icon).map(String::from).unwrap_or_default().into());
-            ui.set_strip_has_picto(false);
-            ui.set_strip_critical(false);
-            ui.set_strip_on(true);
+    match v["view"].as_str().unwrap_or("home") {
+        "dashboard" => {
+            if ui.get_web_active() {
+                ui.set_dashboard_mode(true);
+            }
         }
-        _ => match v["view"].as_str().unwrap_or("home") {
-            "dashboard" => {
-                if ui.get_web_active() {
-                    ui.set_dashboard_mode(true);
-                }
+        "media" => {
+            go_to_page(ui, "music");
+        }
+        other => {
+            ui.set_dashboard_mode(with_state(|s| s.settings.display_mode == "dashboard") && ui.get_web_active());
+            if !go_to_page(ui, other) {
+                go_to_page(ui, "home");
             }
-            "media" => {
-                go_to_page(ui, "music");
-            }
-            other => {
-                ui.set_dashboard_mode(with_state(|s| s.settings.display_mode == "dashboard") && ui.get_web_active());
-                if !go_to_page(ui, other) {
-                    go_to_page(ui, "home");
-                }
-            }
-        },
+        }
     }
     if let Some(player) = chime {
         player.play(voice::Sound::Chime);
@@ -2563,7 +2754,6 @@ fn tick(ui: &AppWindow) {
         if s.show_until.is_some_and(|t| Instant::now() >= t) {
             s.show_until = None;
             ui.set_strip_on(false);
-            info::pop(ui, None);
             ui.set_dashboard_mode(s.settings.display_mode == "dashboard" && s.web.is_some());
         }
         let idle = platform::idle_time();
@@ -2611,6 +2801,7 @@ fn tick(ui: &AppWindow) {
         let timeout = s.settings.screensaver_seconds;
         // (and not while a timer runs: its chips stay in view)
         let showing = s.show_until.is_some()
+            || ui.get_pop_on()
             || s.proximity_test.is_some()
             || ui.get_voice_on()
             || s.ringing.is_some()
@@ -2841,6 +3032,28 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
                 open_temporary_page(ui, "info");
             }
         }
+        // the status bar's marks (29.2): the microphone and the speaker back on, the timers page
+        "mark.mic" => {
+            if ui.get_mic_muted() {
+                shade::act(ui, "set.mic", "");
+            }
+        }
+        "mark.speaker" => {
+            let to = with_state(|s| if s.vol_before_mute > 0 { s.vol_before_mute } else { 30 });
+            shade::act(ui, "set.volume", &format!("{}", to as f32 / 100.0));
+        }
+        "mark.timers" => {
+            if !go_to_page(ui, "timers") {
+                open_temporary_page(ui, "timers");
+            }
+        }
+        // a timer on the island: the timers page with its sheet
+        "island.timer" => {
+            if !go_to_page(ui, "timers") {
+                open_temporary_page(ui, "timers");
+            }
+            ui.set_timers_sheet(value.parse::<i32>().unwrap_or(-1));
+        }
         "strip.close" => ui.set_strip_on(false),
         "status.fold" | "strip.open" | "info.crit-silence" => alerts::act(ui, what),
         "set.touch" => start_touch_test(ui),
@@ -2867,6 +3080,9 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
         }
         "music.settings-close" => ui.set_music_settings(false),
         "music.look" => page_set(ui, "music", Some(value.parse().unwrap_or(0)), Value::Null),
+        // the camera and notification pages' sheets
+        "cam.fit" => page_set(ui, "camera", None, json!({ "fit": value })),
+        "info.look" => page_set(ui, "info", Some(value.parse().unwrap_or(0)), Value::Null),
         "music.holds" => page_set(ui, "music", None, json!({ "holds": value.parse::<i64>().unwrap_or(0) })),
         "music.scroll" => page_set(ui, "music", None, json!({ "scroll": value == "1" })),
         "music.speed" => page_set(ui, "music", None, json!({ "scroll_speed": value.parse::<i64>().unwrap_or(3).clamp(1, 5) })),
@@ -3239,6 +3455,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             alarm_minute: 0,
             screen_off: false,
             weather_key: String::new(),
+            wx_cond: String::new(),
+            island_seen: Vec::new(),
+            island_urgent: Vec::new(),
+            vol_before_mute: 0,
             dev_wx: None,
         })
     });

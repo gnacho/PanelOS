@@ -3,7 +3,7 @@
 // The layout is edited in Home Assistant; editing on the panel itself is optional (switched on in
 // HA): a long press opens a lock, holding the lock unlocks the edit mode.
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, Glyph, PlayGlyph, GlowText, Marquee } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText, Marquee, RollPair } from "widgets.slint";
 import { WeatherData, ClockData, AnalogDial, FlipClock } from "panels.slint";
 
 export struct HomeItem {
@@ -46,21 +46,6 @@ export struct HomeEvent {
     time: string,   // "15:00 – 15:45"
     rel: string,    // "in 33 min"
     tint: color,    // calendar colour
-}
-
-// Soft dark glow behind white text: a row of overlapping radial discs (no hard edges).
-// k = the widget's own amount x the background's need (none on the dark line theme).
-component Halo inherits Rectangle {
-    in property <float> k: 1;
-    property <length> d: min(self.height * 1.7, 260px);
-    property <int> n: max(1, round(self.width / (self.d * 0.55)));
-    for c in (root.k > 0.01 ? root.n : 0): Rectangle {
-        x: (c + 0.5) * root.width / root.n - root.d / 2;
-        y: (root.height - root.d) / 2;
-        width: root.d; height: root.d;
-        opacity: root.k;
-        background: @radial-gradient(circle, #0000001c 0%, #00000010 36%, #00000000 62%);
-    }
 }
 
 component Glass inherits Rectangle {
@@ -106,9 +91,9 @@ component ClockW inherits Rectangle {
         spacing: 0;
         HorizontalLayout {
             alignment: center;
-            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.hh; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
+            RollPair { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.hh; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
             GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: ":"; font-size: dg.fs; font-weight: root.it.weight; color: root.it.accent; opacity: root.colon; }
-            GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.mm; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
+            RollPair { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.clock.mm; font-size: dg.fs; font-weight: root.it.weight; color: root.ink; }
         }
         if root.st == 1 && root.secs: HorizontalLayout {
             alignment: center;
@@ -271,6 +256,90 @@ component DateW inherits Rectangle {
 }
 
 // --------------------------------------------------------------------------- weather now
+// --------------------------------------------------------------------------- weather icon life (M12)
+// The frames of the current condition, set by the app: n frames per size, the sizes 34, 44, 50, 64 in this order.
+export global WxIcons {
+    in property <[image]> frames;
+    in property <int> n;
+    // 0 none, 1 sunny (breathe 1.6 s), 2 clear night (breathe 2.4 s), 3 drops (160 ms a frame), 4 snow (240 ms),
+    // 5 lightning (frame 1 for 80 ms every 3–6 s), 6 drift (no frames), 7 lightning-rainy (drops + the bolt layer, frame 3)
+    in property <int> kind;
+}
+
+// The weather glyph with a little life: frames cut from the same glyph (white masks coloured with the ink; the rim
+// and the neon glow drawn from the same frame, as GlowText does for text). Without frames it is the glyph, drifting
+// for the cloud and wind conditions.
+component WxIcon inherits Rectangle {
+    in property <string> glyph;
+    in property <length> size;
+    in property <color> ink;
+    in property <float> halo;
+    in property <bool> paper;
+    in property <bool> neon;
+    in property <color> glow;
+    property <int> si: root.size >= 64px ? 3 : root.size >= 50px ? 2 : root.size >= 44px ? 1 : 0;
+    property <int> n: WxIcons.n;
+    property <int> kind: WxIcons.kind;
+    property <bool> has: root.n > 0 && root.kind != 6 && WxIcons.frames.length >= (root.si + 1) * root.n;
+    preferred-width: root.size * 1.25; preferred-height: root.size * 1.25;
+    min-width: root.size * 1.25; min-height: root.size * 1.25;
+    property <float> t: (root.kind > 0 ? animation-tick() : 0ms) / 1ms;
+    property <float> ph: Math.mod(root.size / 1px * 397, 4000);      // a phase of its own
+    // sunny / clear night: frame 1 (dim) always, frame 0 over it fading in and out
+    property <float> mix: root.kind == 1 ? 0.5 + 0.5 * Math.sin(360deg * (root.t + root.ph) / 1600)
+        : root.kind == 2 ? 0.5 + 0.5 * Math.sin(360deg * (root.t + root.ph) / 2400) : 0;
+    property <int> step: root.kind == 3 || root.kind == 7 ? Math.mod(Math.floor(root.t / 160), 3) : root.kind == 4 ? Math.mod(Math.floor(root.t / 240), 3) : 0;
+    // the flash: 80 ms after a gap of 3–6 s (a new gap each time)
+    property <int> flashes;
+    property <duration> flash-t0: -1s;
+    Timer {
+        interval: 3000ms + Math.mod(root.flashes * 1543 + Math.round(root.ph), 3001) * 1ms;
+        running: root.kind == 5 || root.kind == 7;
+        triggered => { root.flash-t0 = animation-tick(); root.flashes += 1; }
+    }
+    property <bool> flash: (root.kind == 5 || root.kind == 7) && (animation-tick() - root.flash-t0) < 80ms && (animation-tick() - root.flash-t0) >= 0ms;
+    property <length> drift: root.kind == 6 ? 1.5px * Math.sin(360deg * (root.t + root.ph) / 4500) : 0px;
+    property <int> base: root.si * root.n;
+    property <int> f0: root.kind == 3 || root.kind == 4 || root.kind == 7 ? root.step : root.kind == 5 ? (root.flash ? 1 : 0) : root.kind == 1 || root.kind == 2 ? 1 : 0;
+    property <image> main: root.has ? WxIcons.frames[root.base + root.f0] : @image-url("");
+    property <image> shape: root.has ? WxIcons.frames[root.base] : @image-url("");
+    property <image> bolt: root.has && root.kind == 7 && root.n >= 4 ? WxIcons.frames[root.base + 3] : @image-url("");
+    property <length> d: max(0.8px, min(2.2px, root.size / 46));
+    property <length> gi: max(1.8px, min(5px, root.size / 22));
+    property <color> rim: root.paper ? #F5F3EE.with-alpha(0.55 * min(1, root.halo)) : #000000.with-alpha(0.18 * min(1, root.halo));
+    property <length> ix: (root.width - root.size) / 2;
+    property <length> iy: (root.height - root.size) / 2;
+    if !root.has: GlowText { x: root.drift; width: parent.width; height: parent.height; paper: root.paper; icon: true; horizontal-alignment: center;
+        k: root.halo; neon: root.neon; glow: root.glow; text: root.glyph; font-size: root.size; color: root.ink; }
+    // neon: one ring of glow copies (as GlowText)
+    if root.has && root.neon: Rectangle {
+        for o in [{ x: -1, y: 0 }, { x: 1, y: 0 }, { x: 0, y: -1 }, { x: 0, y: 1 }, { x: -0.71, y: -0.71 }, { x: 0.71, y: -0.71 }, { x: -0.71, y: 0.71 }, { x: 0.71, y: 0.71 }]: Image {
+            x: root.ix + o.x * root.gi; y: root.iy + o.y * root.gi; width: root.size; height: root.size; source: root.shape; colorize: root.glow.with-alpha(0.24); }
+    }
+    // the rim: four faint copies, a little more downwards (as GlowText)
+    if root.has && !root.neon && root.halo > 0.01: Rectangle {
+        for o in [{ x: -1, y: -0.35 }, { x: 1, y: -0.35 }, { x: -1, y: 1.5 }, { x: 1, y: 1.5 }]: Image {
+            x: root.ix + o.x * root.d; y: root.iy + o.y * root.d; width: root.size; height: root.size;
+            source: root.main; colorize: root.rim; }
+        // sunny / clear night: the full shape's rim fades with it
+        if root.kind == 1 || root.kind == 2: Rectangle {
+            for o in [{ x: -1, y: -0.35 }, { x: 1, y: -0.35 }, { x: -1, y: 1.5 }, { x: 1, y: 1.5 }]: Image {
+                x: root.ix + o.x * root.d; y: root.iy + o.y * root.d; width: root.size; height: root.size; source: root.shape; colorize: root.rim; opacity: root.mix; }
+        }
+        if root.kind == 7: Rectangle {
+            for o in [{ x: -1, y: -0.35 }, { x: 1, y: -0.35 }, { x: -1, y: 1.5 }, { x: 1, y: 1.5 }]: Image {
+                x: root.ix + o.x * root.d; y: root.iy + o.y * root.d; width: root.size; height: root.size; source: root.bolt; colorize: root.rim; }
+        }
+    }
+    if root.has: Image { x: root.ix; y: root.iy; width: root.size; height: root.size; source: root.main; colorize: root.ink; }
+    if root.has && (root.kind == 1 || root.kind == 2): Image { x: root.ix; y: root.iy; width: root.size; height: root.size;
+        source: root.shape; colorize: root.ink; opacity: root.mix; }
+    if root.has && root.kind == 7: Image { x: root.ix; y: root.iy; width: root.size; height: root.size;
+        source: root.bolt; colorize: root.ink; opacity: root.flash ? 0.35 : 1; }
+    // neon: the hot whiter core
+    if root.has && root.neon: Image { x: root.ix; y: root.iy; width: root.size; height: root.size; source: root.main; colorize: #ffffff73; }
+}
+
 component WeatherW inherits Rectangle {
     in property <color> ink: #ffffff;      // text and lines (Ink on the plain light background)
     in property <WeatherData> data;
@@ -289,7 +358,7 @@ component WeatherW inherits Rectangle {
         HorizontalLayout {
             alignment: center;
             spacing: 10px;
-            GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 64px; color: root.ink; }
+            WxIcon { glyph: root.data.icon; size: 64px; ink: root.ink; halo: root.halo; paper: root.ink.red < 128; neon: root.neon; glow: root.glow; }
             GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 104px; font-weight: root.it.weight; color: root.ink; }
         }
         if root.on(1): GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.condition; font-size: 24px; color: root.ink; horizontal-alignment: center; }
@@ -299,7 +368,7 @@ component WeatherW inherits Rectangle {
         alignment: center;
         spacing: 12px;
         padding-left: 10px; padding-right: 10px;
-        GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 50px; color: root.ink; }
+        WxIcon { glyph: root.data.icon; size: 50px; ink: root.ink; halo: root.halo; paper: root.ink.red < 128; neon: root.neon; glow: root.glow; }
         GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 60px; font-weight: root.it.weight; color: root.ink; }
         VerticalLayout {
             alignment: center;
@@ -311,7 +380,7 @@ component WeatherW inherits Rectangle {
         alignment: center;
         spacing: 8px;
         padding-left: 10px; padding-right: 10px;
-        GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 44px; color: root.ink; }
+        WxIcon { glyph: root.data.icon; size: 44px; ink: root.ink; halo: root.halo; paper: root.ink.red < 128; neon: root.neon; glow: root.glow; }
         VerticalLayout {
             alignment: center;
             GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: root.on(1) && root.extra != "" ? 34px : 40px; font-weight: root.it.weight; color: root.ink; }
@@ -321,7 +390,7 @@ component WeatherW inherits Rectangle {
     }
     if root.it.w < 2: VerticalLayout {
         alignment: center;
-        GlowText { paper: root.ink.red < 128; icon: true; horizontal-alignment: center; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.icon; font-size: 34px; color: root.ink; }
+        WxIcon { glyph: root.data.icon; size: 34px; ink: root.ink; halo: root.halo; paper: root.ink.red < 128; neon: root.neon; glow: root.glow; }
         GlowText { paper: root.ink.red < 128; k: root.halo; neon: root.neon; glow: root.glow; text: root.data.temperature; font-size: 26px; font-weight: root.it.weight; color: root.ink; horizontal-alignment: center; }
     }
 }
@@ -606,7 +675,7 @@ export component HomeWidget inherits Rectangle {
     in property <float> music-pos;
     // Widgets without per-second changes are drawn once into a layer; the clock and
     // the music widget keep their moving parts live (their texts are layers of their own).
-    cache-rendering-hint: root.it.kind != 0 && root.it.kind != 7;
+    cache-rendering-hint: root.it.kind != 0 && root.it.kind != 7 && !(root.it.kind == 2 && WxIcons.kind > 0);
     // a card set in the integration (0 % = none, 100 % = solid), dark under white text, Paper under Ink
     if root.it.card > 0: Rectangle {
         x: 4px; y: 4px; width: parent.width - 8px; height: parent.height - 8px; border-radius: 16px;
@@ -685,6 +754,14 @@ component InfoButton inherits Rectangle {
 component InfoPop inherits Rectangle {
     in property <[string]> lines;
     in property <length> w: 320px;
+    // M5: the bubble grows out of its button (140 ms)
+    property <float> grow: 0;
+    init => { root.grow = 1; }
+    animate grow { duration: 140ms; easing: ease-out; }
+    opacity: root.grow;
+    transform-scale-x: 0.85 + 0.15 * root.grow;
+    transform-scale-y: 0.85 + 0.15 * root.grow;
+    transform-origin: { x: 18px, y: self.height };
     width: self.w;
     height: 20px + self.lines.length * 26px;
     border-radius: 16px;
@@ -756,8 +833,15 @@ export component HomeGrid inherits Rectangle {
     for it[i] in root.items: cell := Rectangle {
         property <bool> up: root.editing && i == root.lifted;
         visible: root.settings < 0;
-        x: root.gx + it.col * root.cw + (self.up ? root.lift-dx : 0px);
-        y: root.gy + it.row * root.ch + (self.up ? root.lift-dy : 0px);
+        // M11: in edit mode the widgets jiggle by ±1 px, each with its own phase; a dropped widget settles with a 2 px dip
+        property <float> jt: root.editing && !self.up ? (animation-tick() / 1ms + i * 337) / 520 : 0;
+        property <duration> drop-t0;
+        property <bool> settling;
+        changed up => { if !self.up && root.editing { self.drop-t0 = animation-tick(); self.settling = true; } }
+        Timer { interval: 220ms; running: cell.settling; triggered => { cell.settling = false; } }
+        property <length> settle: cell.settling ? 2px * Math.sin(180deg * clamp((animation-tick() - cell.drop-t0) / 200ms, 0, 1)) : 0px;
+        x: root.gx + it.col * root.cw + (self.up ? root.lift-dx : 0px) + 1px * Math.sin(360deg * self.jt);
+        y: root.gy + it.row * root.ch + (self.up ? root.lift-dy : 0px) + 1px * Math.cos(360deg * self.jt * 0.83) + self.settle;
         width: it.w * root.cw; height: it.h * root.ch;
         if cell.up: Rectangle { x: -2px; y: 4px; width: parent.width + 4px; height: parent.height; border-radius: 18px; background: #00000059; }
         // a tap opens the widget's view (the app knows which page that is); it lies under the widget, so a

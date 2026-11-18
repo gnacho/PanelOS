@@ -3,7 +3,7 @@
 // page lists them, unread first. Critical alerts (smoke, CO, water) always take the whole screen in plain red, whatever the
 // look, and keep sounding until someone holds the button: the funky looks are for info and warnings only.
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, GlowText, Crawl, DragSheet } from "widgets.slint";
+import { Icon, GlowText, Crawl, DragSheet, Dropdown } from "widgets.slint";
 
 export struct InfoNote {
     title: string,
@@ -17,16 +17,6 @@ export struct InfoNote {
     actions: [string],     // up to three buttons, set in HA
     unread: bool,
     paper: image,          // fridge look: the note as the app draws it (post-it, handwriting, magnet, tilt)
-}
-
-component LookChip inherits Rectangle {
-    in property <string> text;
-    in property <bool> on;
-    height: 40px; width: lbl.preferred-width + 28px; border-radius: 20px;
-    background: root.on ? Theme.text : transparent;
-    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
-    lbl := Text { x: 14px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
-        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
 }
 
 component LevelIcon inherits Rectangle {
@@ -278,7 +268,7 @@ export component InfoPage inherits Rectangle {
 
     // ---------------------------------------------------------------- the page's sheet: the look
     // the settings: a sheet that follows the finger (DragSheet)
-    property <length> settings-need: 72px + 2 * 52px - 12px + 26px;
+    property <length> settings-need: 68px + 48px + 26px;
     DragSheet {
         width: parent.width; height: parent.height;
         open: root.settings; need: root.settings-need;
@@ -286,12 +276,9 @@ export component InfoPage inherits Rectangle {
         Text { x: 24px; y: 24px; height: 28px; text: "Notifications"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 146px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
-        HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
-            LookChip { text: Words.line("ui.looks.info.0"); on: root.look == 0; }
-            LookChip { text: Words.line("ui.looks.info.1"); on: root.look == 1; } }
-        HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
-            LookChip { text: Words.line("ui.looks.info.2"); on: root.look == 2; }
-            LookChip { text: Words.line("ui.looks.info.3"); on: root.look == 3; } }
+        Dropdown { x: 24px; y: 68px; width: parent.width - 48px;
+            options: [Words.line("ui.looks.info.0"), Words.line("ui.looks.info.1"), Words.line("ui.looks.info.2"), Words.line("ui.looks.info.3")];
+            selected: root.look; picked(i) => { Act.act("info.look", i); } }
     }
 
     // ---------------------------------------------------------------- critical: whole screen, plain red, breathing; hold to silence

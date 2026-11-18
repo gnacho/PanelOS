@@ -28,34 +28,45 @@ show_view:
           max: 3600
           unit_of_measurement: s
 
-show_message:
+notify:
   fields:
     panel_id:
       example: nspanel-pro
       selector:
         text:
+          multiple: true
     title:
-      example: Doorbell
+      example: Washing machine
       selector:
         text:
     message:
       required: true
-      example: Someone is at the front door.
+      example: The laundry is done.
       selector:
         text:
           multiline: true
     icon:
-      example: mdi:doorbell
+      example: mdi:washing-machine
       selector:
         icon:
-    seconds:
-      default: 30
+    level:
+      default: info
       selector:
-        number:
-          min: 0
-          max: 3600
-          unit_of_measurement: s
-    chime:
+        select:
+          options:
+            - info
+            - warning
+          translation_key: level
+    picture:
+      example: camera.front_door
+      selector:
+        text:
+    buttons:
+      example: '["Snooze", "Done"]'
+      selector:
+        text:
+          multiple: true
+    until_answered:
       default: false
       selector:
         boolean:

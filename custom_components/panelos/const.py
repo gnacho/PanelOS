@@ -90,7 +90,7 @@ DEFAULT_DND = {"mode": "off", "from": "22:00", "to": "07:00", "allow": dict.from
 # New notifications: a strip at the top, a card, or only into the list.
 CONF_POPUPS = "popups"
 POPUP_KINDS = ("strip", "card", "off")
-DEFAULT_POPUPS = {"kind": "card", "sound": True, "seconds": 10}
+DEFAULT_POPUPS = {"kind": "card", "sound": True, "seconds": 10, "until": False}
 
 # What a panel can do, as it reports it (device report "caps"); until a panel
 # reports them it counts as an NSPanel Pro.
@@ -100,6 +100,8 @@ DEFAULT_CAPS = ("touch", "images", "web", "video", "mic", "speaker", "proximity"
 # Critical alerts and status screens are shared by every panel (one store for
 # the integration, each item with its panels).
 HOUSE_STORE = "panelos.house"
+# PanelOS's own notifications (notify entities, panelos.notify), kept until answered
+NOTES_STORE = "panelos.notes"
 # Status screen kinds; the panel has its own texts and pictures for each.
 STATUS_CATS = (
     "occupied", "aftermath", "bathroom", "meeting", "focus", "sleeping", "movie",
@@ -121,7 +123,9 @@ SOUND_UPLOAD_MAX = 10 * 1024 * 1024
 SOUND_KEEP_SECONDS = 60
 
 SERVICE_SHOW_VIEW = "show_view"
-SERVICE_SHOW_MESSAGE = "show_message"
+SERVICE_NOTIFY = "notify"
+# a button of a PanelOS notification pressed on a panel
+EVENT_NOTIFICATION_ACTION = "panelos_notification_action"
 VIEWS = ["home", "dashboard", "weather", "media", "camera"]
 
 # Internal signals; the panels follow them through panelos/subscribe.
@@ -135,7 +139,7 @@ CONF_DEVICE = "device"
 # The panel's own device: its entities are fed by panelos/report and send
 # their commands back through panelos/subscribe. The voice satellite stays
 # on the ESPHome device, which is linked to this one ("Connected via").
-PLATFORMS = ["binary_sensor", "button", "number", "select", "sensor", "switch"]
+PLATFORMS = ["binary_sensor", "button", "notify", "number", "select", "sensor", "switch"]
 
 # Entity keys per platform, as the panel names them in panelos/report and in
 # the commands it gets back.

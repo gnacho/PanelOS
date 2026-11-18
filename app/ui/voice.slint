@@ -2,8 +2,10 @@
 // States: 1 listening, 2 thinking, 3 answering, 4 error, 5 listening for more (follow-up, ends after 5 s), 6 not understood.
 // Looks: 0 plain, 1 terminal, 2 comic, 3 oscilloscope. The status line (`line`) is a text picked by the app for the
 // state; heard / answer are the real texts of the turn. `level` is the microphone level (0 … 1), `left` the follow-up time left.
+// Motion (spec 31): voice peaks, state changes, thinking, the answer, the follow-up drain, "not understood", the error,
+// per look.
 import { Theme, Act } from "theme.slint";
-import { Icon } from "widgets.slint";
+import { Icon, Jelly } from "widgets.slint";
 
 export component VoicePage inherits Rectangle {
     in property <int> look;
@@ -11,45 +13,111 @@ export component VoicePage inherits Rectangle {
     in property <string> assistant;        // the pipeline's name
     in property <string> heard;
     in property <string> answer;
+    in property <string> typed;            // the answer as far as it has come (the terminal types it, 40 characters a second)
     in property <string> line;
     in property <string> detail;           // error detail
     in property <float> level;
     in property <float> left: -1;
     in property <string> wave;             // oscilloscope trace (path commands in a 400 x 160 box)
+    in property <string> wave1;            // … and the three before it (the phosphor's afterglow)
+    in property <string> wave2;
+    in property <string> wave3;
+    in property <int> peaks;               // counts the voice peaks (a ripple, the TRIG lamp)
+    in property <bool> closing;            // the view is going (the terminal switches off like a CRT)
     in property <image> scan;              // terminal: scanlines + vignette
-    in property <image> dots;              // comic: halftone page
+    in property <image> dots;              // comic: halftone page (500 × 500, it sways)
     in property <bool> blink: true;
     in property <string> version: "0.0.3";  // the app's version (terminal header)
     property <bool> listening: root.state == 1 || root.state == 5;
     property <color> tone: root.state == 2 ? #f59e0b : root.state == 3 ? #22c55e : root.state == 4 ? #ef4444 : root.state == 6 ? #a78bfa : #3b82f6;
     background: Theme.background;
+    // ---- the clock of the view: since it opened, since the state changed, since each voice peak
+    property <duration> open-t0;
+    init => { root.open-t0 = animation-tick(); root.st-t0 = animation-tick(); }
+    property <float> ot: (animation-tick() - root.open-t0) / 1ms;
+    property <duration> st-t0;
+    changed state => { root.st-t0 = animation-tick(); }
+    property <float> st: (animation-tick() - root.st-t0) / 1ms;
+    property <duration> pk0: -10s;
+    property <duration> pk1: -10s;
+    property <duration> pk2: -10s;
+    property <int> pk-n;
+    changed peaks => {
+        if Math.mod(root.pk-n, 3) == 0 { root.pk0 = animation-tick(); } else if Math.mod(root.pk-n, 3) == 1 { root.pk1 = animation-tick(); } else { root.pk2 = animation-tick(); }
+        root.pk-n += 1;
+    }
+    property <duration> last-peak: max(root.pk0, max(root.pk1, root.pk2));
 
     // ------------------------------------------------------------------ 0 plain
+    // P1 a ripple leaves the disc on each voice peak; P2 the disc squashes and springs on a state change, its colour
+    // crossfades (200 ms); P3 three dots orbit while thinking; P5 the follow-up drain runs along the rim; P6 "not
+    // understood" shakes its head; P7 the error thumps the halo; the halo follows the voice and breathes while thinking
+    property <color> tone-a: root.tone;
+    animate tone-a { duration: 200ms; easing: ease-in-out; }
+    property <float> disc-k: (0.86 + 0.14 * Jelly.edge(root.st, 90, 230)) * Jelly.wobble(root.st, 0.10);
+    property <length> shake: root.state == 6 && root.st < 360 ? 6px * Math.sin(720deg * root.st / 360) * (1 - root.st / 360) : 0px;
+    property <float> thump: root.state == 4 && root.st < 320 ? 1.25 - 0.25 * (1 - Math.pow(1 - root.st / 320, 3)) : 1;
+    property <length> halo: (120px + (root.listening ? 44px * root.level : 0px) + (root.state == 2 ? 7px * Math.sin(360deg * root.ot / 1200) : 0px)) * root.thump;
     if root.look == 0: Rectangle {
         Text { x: 20px; y: 12px; height: 22px; text: root.assistant; font-size: 13px; font-weight: 600; color: Theme.muted; vertical-alignment: center; }
         Icon { x: parent.width - 44px; y: 8px; width: 30px; height: 30px; text: "\u{F0156}"; font-size: 22px; color: Theme.muted; }
-        // the state disc: a soft halo that follows the voice, a solid disc with the state icon
-        Rectangle { x: (parent.width - self.width) / 2; y: 118px - self.height / 2; width: 120px + (root.listening ? 44px * root.level : 0px);
-            height: self.width; border-radius: self.width / 2; background: root.tone.with-alpha(0.16); }
-        Rectangle { x: (parent.width - 92px) / 2; y: 72px; width: 92px; height: 92px; border-radius: 46px; background: root.tone;
-            Icon { text: root.listening ? "\u{F036C}" : root.state == 2 ? "\u{F01D8}" : root.state == 3 ? "\u{F057E}" : root.state == 4 ? "\u{F0026}" : "\u{F02D6}";
-                font-size: 46px; color: #ffffff; } }
+        // the ripples of the voice peaks: r 46 → 110 px over 900 ms, alpha 0.35 → 0, width 3 → 1 px
+        for p in [root.pk0, root.pk1, root.pk2]: Rectangle {
+            property <float> a: (animation-tick() - p) / 900ms;
+            property <float> e: 1 - Math.pow(1 - clamp(self.a, 0, 1), 3);
+            property <length> r: 46px + 64px * self.e;
+            visible: self.a >= 0 && self.a < 1;
+            x: (parent.width - 2 * self.r) / 2; y: 118px - self.r; width: 2 * self.r; height: 2 * self.r; border-radius: self.r;
+            border-width: 3px - 2px * self.e; border-color: root.tone-a.with-alpha(0.35 * (1 - self.e));
+        }
+        // the halo and the disc
+        Rectangle { x: (parent.width - root.halo) / 2 + root.shake; y: 118px - root.halo / 2; width: root.halo; height: root.halo; border-radius: root.halo / 2;
+            background: root.tone-a.with-alpha(0.16); }
+        Rectangle { property <length> d: 92px * root.disc-k;
+            x: (parent.width - self.d) / 2 + root.shake; y: 118px - self.d / 2; width: self.d; height: self.d; border-radius: self.d / 2; background: root.tone-a;
+            if root.state != 2: Icon { text: root.listening ? "\u{F036C}" : root.state == 3 ? "\u{F057E}" : root.state == 4 ? "\u{F0026}" : "\u{F02D6}";
+                font-size: 46px * root.disc-k; color: #ffffff; }
+            // thinking: three dots orbit inside the disc (r 14 px, a turn in 1.1 s, sizes 0.8 – 1.1)
+            if root.state == 2: Rectangle {
+                for k in 3: Rectangle {
+                    property <angle> a: 360deg * root.ot / 1100 + k * 120deg;
+                    property <length> s: 9px * (0.95 + 0.15 * Math.sin(self.a));
+                    x: parent.width / 2 + 14px * Math.cos(self.a) - self.s / 2; y: parent.height / 2 + 14px * Math.sin(self.a) - self.s / 2;
+                    width: self.s; height: self.s; border-radius: self.s / 2; background: #ffffff;
+                }
+            }
+        }
+        // listening for more: the 5 s drain runs along the rim (a 4 px ring at r 56) too
+        if root.state == 5 && root.left > 0.001: Path {
+            property <angle> a: min(0.9999, root.left) * 360deg;
+            x: (parent.width - 116px) / 2; y: 118px - 58px; width: 116px; height: 116px; viewbox-width: 116; viewbox-height: 116;
+            stroke: root.tone-a; stroke-width: 4px;
+            commands: "M 58 2 A 56 56 0 " + (self.a > 180deg ? "1" : "0") + " 1 " + (58 + 56 * Math.sin(self.a)) + " " + (58 - 56 * Math.cos(self.a));
+        }
         VerticalLayout { x: 28px; y: 186px; width: parent.width - 56px; height: parent.height - 186px - (root.left >= 0 ? 52px : 20px); spacing: 10px; alignment: start;
             Text { text: root.line; font-size: 17px; color: root.state == 4 ? #ef4444 : Theme.muted; horizontal-alignment: center; overflow: elide; }
             if root.heard != "": Rectangle { height: min(hh.preferred-height, 56px); clip: true;
                 hh := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: "“" + root.heard + "”"; font-size: 20px; color: Theme.text.with-alpha(0.62);
                     horizontal-alignment: center; wrap: word-wrap; overflow: elide; } }
+            // the answer: its words come one after another
             if root.answer != "": Rectangle { height: min(aa.preferred-height, 196px); clip: true;
-                aa := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.answer; font-weight: 700; color: Theme.text;
+                aa := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.typed; font-weight: 700; color: Theme.text;
                     font-size: root.answer.character-count > 150 ? 21px : root.answer.character-count > 80 ? 25px : 30px;
                     horizontal-alignment: center; wrap: word-wrap; overflow: elide; } }
             if root.detail != "": Text { text: root.detail; font-size: 15px; color: Theme.muted; horizontal-alignment: center; wrap: word-wrap; }
         }
         if root.left >= 0: Rectangle { x: (parent.width - 200px) / 2; y: parent.height - 34px; width: 200px; height: 6px; border-radius: 3px; background: Theme.text.with-alpha(0.12);
-            Rectangle { x: 0; y: 0; width: parent.width * root.left; height: parent.height; border-radius: 3px; background: root.tone; } }
+            Rectangle { x: 0; y: 0; width: parent.width * root.left; height: parent.height; border-radius: 3px; background: root.tone-a; } }
     }
 
     // ------------------------------------------------------------------ 1 terminal
+    // T1 a boot line prints in 200 ms; T2 the cursor blinks; T3 the answer types; T4 a spinner while thinking; T5 the
+    // error jumps sideways with a red flash; T6 closing collapses the picture to a line, then a dot; T7 the timeout bar
+    property <length> jump: root.state == 4 && root.st < 120 ? (root.st < 60 ? -7px : 5px) : 0px;
+    property <string> spin: Math.mod(Math.floor(root.ot / 125), 4) == 0 ? "|" : Math.mod(Math.floor(root.ot / 125), 4) == 1 ? "/" : Math.mod(Math.floor(root.ot / 125), 4) == 2 ? "–" : "\\";
+    property <duration> close-t0;
+    changed closing => { if root.closing { root.close-t0 = animation-tick(); } }
+    property <float> cl: root.closing ? (animation-tick() - root.close-t0) / 1ms : 0;
     if root.look == 1: term := Rectangle {
         background: #021208;
         property <color> ink: root.state == 4 ? #ff5a4d : #3dff7a;
@@ -59,45 +127,91 @@ export component VoicePage inherits Rectangle {
         // the follow-up time left as a character bar too
         property <string> tbar: root.left > 0.9 ? "##########" : root.left > 0.8 ? "#########." : root.left > 0.7 ? "########.." : root.left > 0.6 ? "#######..."
             : root.left > 0.5 ? "######...." : root.left > 0.4 ? "#####....." : root.left > 0.3 ? "####......" : root.left > 0.2 ? "###......." : root.left > 0.1 ? "##........" : "#.........";
-        for t[i] in [
-            { y: 12px, s: "PanelOS " + root.version + " · " + root.assistant, dim: true },
-            { y: 32px, s: "MODE " + term.mode + (root.listening ? "   MIC [" + term.bar + "]" : ""), dim: false },
-            { y: 52px, s: "-------------------------------------------", dim: true },
-        ]: Text { x: 22px; y: t.y; text: t.s; font-family: "DejaVu Sans Mono"; font-size: 14px; color: term.ink.with-alpha(t.dim ? 0.55 : 0.9); overflow: elide; width: 436px; }
-        VerticalLayout { x: 22px; y: 78px; width: parent.width - 44px; height: parent.height - 104px; spacing: 12px; alignment: start;
-            Text { text: "// " + root.line; font-family: "DejaVu Sans Mono"; font-size: 16px; color: term.ink.with-alpha(0.55); wrap: word-wrap; }
-            Text { text: "> " + (root.heard != "" ? root.heard : "") + (root.listening && root.blink ? "█" : ""); font-family: "DejaVu Sans Mono"; font-size: 19px;
-                color: term.ink; wrap: word-wrap; }
-            if root.state == 2: Text { text: root.blink ? "  ...█" : "  ..."; font-family: "DejaVu Sans Mono"; font-size: 19px; color: term.ink; }
-            if root.answer != "": Rectangle { height: min(ta.preferred-height, 220px); clip: true;
-                ta := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.answer + (root.blink ? " █" : ""); font-family: "DejaVu Sans Mono";
-                    font-size: root.answer.character-count > 120 ? 17px : 21px; font-weight: 700; color: #d6ffe2; wrap: word-wrap; overflow: elide; } }
-            if root.detail != "": Text { text: "ERR: " + root.detail; font-family: "DejaVu Sans Mono"; font-size: 16px; color: term.ink; wrap: word-wrap; }
+        // closing: the picture collapses to a line (130 ms), then to a dot (130 ms), brighter
+        property <float> sy: root.closing ? max(0.006, 1 - clamp(root.cl / 130, 0, 1)) : 1;
+        property <float> sx: root.closing ? max(0.01, 1 - clamp((root.cl - 130) / 130, 0, 1)) : 1;
+        Rectangle {
+            x: root.jump + parent.width * (1 - term.sx) / 2; y: parent.height * (1 - term.sy) / 2; width: parent.width * term.sx; height: parent.height * term.sy; clip: true;
+            Rectangle { x: -parent.x + root.jump; y: -parent.y; width: 480px; height: 480px;
+                for t[i] in [
+                    { y: 12px, s: "PanelOS " + root.version + " · " + root.assistant, dim: true },
+                    { y: 32px, s: "MODE " + term.mode + (root.listening ? "   MIC [" + term.bar + "]" : ""), dim: false },
+                    { y: 52px, s: "-------------------------------------------", dim: true },
+                ]: Text { x: 22px; y: t.y; text: t.s; font-family: "DejaVu Sans Mono"; font-size: 14px; color: term.ink.with-alpha(t.dim ? 0.55 : 0.9); overflow: elide; width: 436px; }
+                VerticalLayout { x: 22px; y: 78px; width: parent.width - 44px; height: parent.height - 104px; spacing: 12px; alignment: start;
+                    // the boot line, printed in 200 ms when the view opens
+                    Rectangle { height: 20px; clip: true;
+                        Rectangle { x: 0; y: 0; height: 20px; width: 436px * clamp(root.ot / 200, 0, 1); clip: true;
+                            Text { x: 0; y: 0; width: 436px; height: 20px; text: "boot: mic ok · ear ok · link ok"; font-family: "DejaVu Sans Mono"; font-size: 14px;
+                                color: term.ink.with-alpha(0.45); vertical-alignment: center; } } }
+                    Text { text: "// " + root.line; font-family: "DejaVu Sans Mono"; font-size: 16px; color: term.ink.with-alpha(0.55); wrap: word-wrap; }
+                    Text { text: "> " + (root.heard != "" ? root.heard : "") + (root.listening && root.blink ? "█" : ""); font-family: "DejaVu Sans Mono"; font-size: 19px;
+                        color: term.ink; wrap: word-wrap; }
+                    if root.state == 2: Text { text: "  ... " + root.spin; font-family: "DejaVu Sans Mono"; font-size: 19px; color: term.ink; }
+                    if root.answer != "": Rectangle { height: min(ta.preferred-height, 220px); clip: true;
+                        ta := Text { x: 0; y: 0; width: parent.width; height: parent.height; text: root.typed + (root.blink ? " █" : ""); font-family: "DejaVu Sans Mono";
+                            font-size: root.answer.character-count > 120 ? 17px : 21px; font-weight: 700; color: #d6ffe2; wrap: word-wrap; overflow: elide; } }
+                    if root.detail != "": Text { text: "ERR: " + root.detail; font-family: "DejaVu Sans Mono"; font-size: 16px; color: term.ink; wrap: word-wrap; }
+                }
+                if root.left >= 0: Text { x: 22px; y: parent.height - 38px; text: "TIMEOUT [" + term.tbar + "] " + ceil(root.left * 5) + " s"; font-family: "DejaVu Sans Mono";
+                    font-size: 15px; color: term.ink.with-alpha(0.8); }
+                Image { x: 0; y: 0; width: 480px; height: 480px; source: root.scan; }
+            }
+            // the error's red flash (two frames) and the CRT's glow while it closes
+            if root.state == 4 && root.st < 120: Rectangle { background: #ff2a1a40; }
+            if root.closing: Rectangle { background: #d6ffe2.with-alpha(0.6 * clamp(root.cl / 260, 0, 1)); }
         }
-        if root.left >= 0: Text { x: 22px; y: parent.height - 38px; text: "TIMEOUT [" + term.tbar + "] " + ceil(root.left * 5) + " s"; font-family: "DejaVu Sans Mono";
-            font-size: 15px; color: term.ink.with-alpha(0.8); }
-        Image { x: 0; y: 0; width: 480px; height: 480px; source: root.scan; }
     }
 
     // ------------------------------------------------------------------ 2 comic
+    // C1 the halftone sways; C2 bubbles pop from their tail's corner; C3 the "• • •" bounce; C4 the thought cloud pops
+    // in, HMM bobs; C5 BZZT! shakes in a burst of action lines; C6 a new page colour wipes in; C7 speed lines while loud
+    property <image> prev-dots;
+    property <image> cur-dots;
+    property <duration> wipe-t0: -10s;
+    changed dots => { root.prev-dots = root.cur-dots; root.cur-dots = root.dots; root.wipe-t0 = animation-tick(); }
+    property <float> wipe: clamp((animation-tick() - root.wipe-t0) / 250ms, 0, 1);
+    property <length> sway: 10px * Math.sin(360deg * root.ot / 6000);
+    property <duration> hb-t0;
+    property <bool> hb-on: root.look == 2 && (root.heard != "" || root.listening || root.state == 6);
+    changed hb-on => { if root.hb-on { root.hb-t0 = animation-tick(); } }
+    property <float> hb-t: (animation-tick() - root.hb-t0) / 1ms;
+    property <duration> ab-t0;
+    property <bool> ab-on: root.answer != "";
+    changed ab-on => { if root.ab-on { root.ab-t0 = animation-tick(); } }
+    property <float> ab-t: (animation-tick() - root.ab-t0) / 1ms;
+    pure function pop(t: float) -> float { (0.9 + 0.1 * Jelly.edge(t, 80, 230)) * Jelly.wobble(t, 0.06) }
+    pure function puff(t: float) -> float { t <= 0 ? 0 : t < 84 ? 1.15 * t / 84 : t < 120 ? 1.15 - 0.15 * (t - 84) / 36 : 1 }
     if root.look == 2: Rectangle {
         background: #ffd43b;
-        Image { x: 0; y: 0; width: 480px; height: 480px; source: root.dots; }
+        clip: true;
+        Image { x: -10px + root.sway; y: -10px + root.sway; width: 500px; height: 500px; source: root.wipe < 1 ? root.prev-dots : root.dots; }
+        if root.wipe < 1: Rectangle { x: 0; y: 0; width: parent.width * root.wipe; height: parent.height; clip: true;
+            Image { x: -10px + root.sway; y: -10px + root.sway; width: 500px; height: 500px; source: root.dots; } }
         // the caption box on top: the state
         Rectangle { x: 18px; y: 16px; width: min(cap.preferred-width + 28px, parent.width - 36px); height: 38px; background: #fff7d6; border-width: 3px; border-color: #111111;
             cap := Text { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; text: root.line.to-uppercase(); font-size: 16px; font-weight: 800; color: #111111;
                 vertical-alignment: center; overflow: elide; } }
-        // the person's words: a bubble with its tail to the bottom left
-        if root.heard != "" || root.listening || root.state == 6: Rectangle { x: 22px; y: 78px; width: parent.width - 120px; height: min(hb.preferred-height, 84px) + 30px;
+        // the person's words: a bubble with its tail to the bottom left (it pops from there)
+        if root.hb-on: hb-box := Rectangle { x: 22px; y: 78px; width: parent.width - 120px; height: min(hb.preferred-height, 84px) + 30px;
+            transform-scale-x: root.pop(root.hb-t); transform-scale-y: root.pop(root.hb-t); transform-origin: { x: 50px, y: self.height };
             Rectangle { background: #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
-            hb := Text { x: 18px; y: 15px; width: parent.width - 36px; height: parent.height - 30px; text: root.heard != "" ? root.heard.to-uppercase() : root.state == 6 ? "? ? ?" : (root.blink ? "• • •" : "• •");
+            hb := Text { x: 18px; y: 15px; width: parent.width - 36px; height: parent.height - 30px; text: root.heard != "" ? root.heard.to-uppercase() : root.state == 6 ? "? ? ?" : "";
                 font-size: 18px; font-weight: 800; color: #111111; wrap: word-wrap; overflow: elide; vertical-alignment: center; }
+            // waiting for words: three dots bounce one after another (6 px, 0.9 s)
+            if root.heard == "" && root.state != 6: Rectangle { x: 18px; y: 15px; height: parent.height - 30px;
+                for k in 3: Text { x: k * 18px; y: -6px * max(0, Math.sin(360deg * (root.ot - k * 150) / 900)); height: parent.height; text: "•";
+                    font-size: 18px; font-weight: 800; color: #111111; vertical-alignment: center; } }
             Path { x: 34px; y: parent.height - 3px; width: 36px; height: 30px; viewbox-width: 36; viewbox-height: 30; fill: #ffffff; stroke: #111111; stroke-width: 3px;
                 commands: "M 1.5 0 L 28 0 L 3 28.5 Z"; }
             Rectangle { x: 38px; y: parent.height - 3px; width: 25px; height: 3px; background: #ffffff; }
+            // speed lines while the voice is loud
+            if root.listening && root.level > 0.5: Rectangle {
+                for k in 6: Rectangle { x: parent.width + 8px + Math.mod(k * 7, 11) * 1px; y: 10px + k * 14px; width: 14px + Math.mod(k * 5, 9) * 1px; height: 3px; background: #111111; } }
         }
         // the panel's answer: a bubble from the bottom right (or a thought cloud while thinking)
         if root.answer != "": Rectangle { x: 80px; y: parent.height - self.height - 54px; width: parent.width - 102px; height: min(ab.preferred-height, 200px) + 34px;
+            transform-scale-x: root.pop(root.ab-t); transform-scale-y: root.pop(root.ab-t); transform-origin: { x: self.width - 56px, y: self.height };
             Rectangle { background: root.state == 4 ? #ff6b6b : #ffffff; border-width: 3px; border-color: #111111; border-radius: 26px; }
             ab := Text { x: 18px; y: 17px; width: parent.width - 36px; height: parent.height - 34px; text: root.answer.to-uppercase(); font-weight: 800; color: #111111;
                 font-size: root.answer.character-count > 120 ? 16px : 20px; wrap: word-wrap; overflow: elide; vertical-alignment: center; }
@@ -105,32 +219,58 @@ export component VoicePage inherits Rectangle {
                 stroke: #111111; stroke-width: 3px; commands: "M 6 0 L 34.5 0 L 33 32.5 Z"; }
             Rectangle { x: parent.width - 66px; y: parent.height - 3px; width: 25px; height: 3px; background: root.state == 4 ? #ff6b6b : #ffffff; }
         }
+        // thinking: the two small puffs and the cloud pop in one after another; HMM bobs
         if root.state == 2: Rectangle { x: parent.width - 252px; y: 214px;
-            for c[i] in [{ x: 150, y: 128, r: 9 }, { x: 172, y: 104, r: 14 }]: Rectangle { x: c.x * 1px - c.r * 1px; y: c.y * 1px - c.r * 1px; width: c.r * 2px; height: self.width;
-                border-radius: self.width / 2; background: #ffffff; border-width: 3px; border-color: #111111; }
-            Rectangle { x: 20px; y: 0; width: 210px; height: 86px; background: #ffffff; border-width: 3px; border-color: #111111; border-radius: 43px;
-                Text { text: "HMM…"; font-size: 30px; font-weight: 800; color: #111111; } }
+            for c[i] in [{ x: 150, y: 128, r: 9 }, { x: 172, y: 104, r: 14 }]: Rectangle {
+                property <float> k: root.puff(root.st - i * 120);
+                x: c.x * 1px - c.r * 1px * self.k; y: c.y * 1px - c.r * 1px * self.k; width: c.r * 2px * self.k; height: self.width;
+                border-radius: self.width / 2; background: #ffffff; border-width: 3px; border-color: #111111; visible: self.k > 0.01; }
+            Rectangle { property <float> k: root.puff(root.st - 240);
+                visible: self.k > 0.01;
+                x: 20px + 105px * (1 - self.k); y: 43px * (1 - self.k) + 4px * Math.sin(360deg * root.ot / 1500); width: 210px * self.k; height: 86px * self.k;
+                background: #ffffff; border-width: 3px; border-color: #111111; border-radius: self.height / 2;
+                Text { text: "HMM…"; font-size: 30px * parent.k; font-weight: 800; color: #111111; } }
         }
-        if root.state == 4: Text { x: parent.width - 190px; y: 196px; text: "BZZT!"; font-size: 54px; font-weight: 900; color: #e03131; }
+        // the error: BZZT! shakes inside a burst of action lines
+        if root.state == 4: Rectangle { x: parent.width - 190px; y: 196px; width: 170px; height: 70px;
+            for k in 12: Rectangle { property <angle> a: k * 30deg;
+                x: parent.width / 2 + 70px * Math.cos(self.a) - 8px; y: parent.height / 2 + 46px * Math.sin(self.a) - 1.5px; width: 16px; height: 3px; background: #111111;
+                transform-rotation: self.a; }
+            Text { x: root.st < 300 ? 6px * Math.sin(1440deg * root.st / 300) : 0px; text: "BZZT!"; font-size: 54px; font-weight: 900; color: #e03131;
+                transform-rotation: root.st < 300 ? 4deg * Math.sin(1080deg * root.st / 300) : 0deg; } }
         if root.left >= 0: Rectangle { x: (parent.width - 180px) / 2; y: parent.height - 30px; width: 180px; height: 12px; background: #fff7d6; border-width: 3px; border-color: #111111;
             Rectangle { x: 3px; y: 3px; width: (parent.width - 6px) * root.left; height: 6px; background: #111111; } }
     }
 
     // ------------------------------------------------------------------ 3 oscilloscope
+    // O1 the phosphor's afterglow; O2 / O3 the thinking ripple and the answer's sound (the app feeds them); O4 the beam
+    // warms up from a dot; O5 the TRIG lamp blinks on each voice peak; O6 the follow-up bar drains
     if root.look == 3: scope := Rectangle {
         background: #0b0f0d;
         property <color> trace: root.state == 4 ? #ff6b5e : root.state == 2 ? #ffc94a : #4dffb0;
+        property <float> warm: clamp(root.ot / 300, 0, 1);
         // the screen with its graticule
         Rectangle { x: 40px; y: 52px; width: 400px; height: 160px; background: #06140e; border-radius: 6px; clip: true;
             for i in 11: Rectangle { x: i * 40px; y: 0; width: 1px; height: parent.height; background: #1f5a40.with-alpha(i == 5 ? 0.9 : 0.5); }
             for i in 5: Rectangle { x: 0; y: i * 40px; width: parent.width; height: 1px; background: #1f5a40.with-alpha(i == 2 ? 0.9 : 0.5); }
-            for w[i] in [{ s: 9px, a: 0.10 }, { s: 5px, a: 0.28 }, { s: 2.2px, a: 1.0 }]: Path { x: -w.s / 2; y: -w.s / 2; width: parent.width + w.s; height: parent.height + w.s;
-                viewbox-width: 400; viewbox-height: 160; commands: root.wave; stroke: scope.trace.with-alpha(w.a); stroke-width: w.s; }
+            Rectangle { x: parent.width * (1 - scope.warm) / 2; width: max(2px, parent.width * scope.warm); clip: true;
+                Rectangle { x: -parent.x; width: 400px;
+                    for g[i] in [{ w: root.wave3, a: 0.10 }, { w: root.wave2, a: 0.20 }, { w: root.wave1, a: 0.40 }]: Path {
+                        visible: g.w != ""; x: -1.1px; y: -1.1px; width: 402.2px; height: 162.2px;
+                        viewbox-width: 400; viewbox-height: 160; commands: g.w != "" ? g.w : "M 0 80 L 400 80"; stroke: scope.trace.with-alpha(g.a); stroke-width: 2.2px; }
+                    for w[i] in [{ s: 9px, a: 0.10 }, { s: 5px, a: 0.28 }, { s: 2.2px, a: 1.0 }]: Path { x: -w.s / 2; y: -w.s / 2; width: 400px + w.s; height: 160px + w.s;
+                        viewbox-width: 400; viewbox-height: 160; commands: root.wave != "" ? root.wave : "M 0 80 L 400 80"; stroke: scope.trace.with-alpha(w.a); stroke-width: w.s; }
+                }
+            }
         }
         Text { x: 44px; y: 26px; text: "CH1 MIC  " + (root.listening ? "50 mV/div" : root.state == 2 ? "SWEEP" : root.state == 3 ? "TTS OUT" : "NO SIGNAL"); font-family: "DejaVu Sans Mono";
             font-size: 13px; color: scope.trace.with-alpha(0.8); }
         Text { x: 300px; y: 26px; width: 140px; horizontal-alignment: right; text: root.assistant; font-family: "DejaVu Sans Mono"; font-size: 13px; color: #9fb5aa; overflow: elide; }
-        VerticalLayout { x: 40px; y: 230px; width: 400px; height: parent.height - 250px; spacing: 10px; alignment: start;
+        // the TRIG lamp: 120 ms on each voice peak
+        Rectangle { x: 392px; y: 218px; width: 8px; height: 8px; border-radius: 4px;
+            background: (animation-tick() - root.last-peak) < 120ms ? #ff5a3c : #3a1a14; }
+        Text { x: 404px; y: 214px; text: "TRIG"; font-family: "DejaVu Sans Mono"; font-size: 11px; color: #9fb5aa; }
+        VerticalLayout { x: 40px; y: 236px; width: 400px; height: parent.height - 256px; spacing: 10px; alignment: start;
             Text { text: root.line; font-family: "DejaVu Sans Mono"; font-size: 15px; color: scope.trace; overflow: elide; }
             if root.heard != "": Text { text: "IN  › " + root.heard; font-family: "DejaVu Sans Mono"; font-size: 16px; color: #b7c9bf; wrap: word-wrap; }
             if root.answer != "": Rectangle { height: min(oa.preferred-height, 150px); clip: true;

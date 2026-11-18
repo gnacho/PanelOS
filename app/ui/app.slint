@@ -13,9 +13,10 @@ import "./fonts/DejaVuSansMono-Bold.ttf";
 import "./fonts/Caveat[wght].ttf";
 
 import { Theme, Act, Clock, Words } from "theme.slint";
+import { Jelly } from "widgets.slint";
 import { PairingScreen, FoundHa, SetupScreen, WifiNet, WifiScreen, WifiPasswordScreen, HiddenNetworkScreen, HaPickScreen, ConnectingScreen, OfflineScreen, Phrases } from "overlays.slint";
-import { Person, TimerInfo, ClockData, ClockFace, StatusBar, TimerChips, PageDots, People, WeatherHour, WeatherDay, WeatherData, WeatherPanel } from "panels.slint";
-import { HomeItem, HomeEvent, HomeMusic, HomeGrid } from "home.slint";
+import { Person, TimerInfo, ClockData, ClockFace, StatusBar, TimerIsland, PageDots, People, WeatherHour, WeatherDay, WeatherData, WeatherPanel } from "panels.slint";
+import { HomeItem, HomeEvent, HomeMusic, HomeGrid, WxIcons } from "home.slint";
 import { PhotoSky, WinRect } from "photo_sky.slint";
 import { FastLane } from "fast_lane.slint";
 import { MusicPlayer, MusicPage } from "music.slint";
@@ -24,13 +25,15 @@ import { ClimateDev, ClimateRoom, ThermostatPage } from "thermostat.slint";
 import { CamItem, CamAction, CameraPage } from "camera.slint";
 import { TodoItem, TodoList, TodoPage } from "todo.slint";
 import { CalEvent, CalDay, CalCell, CalBoard, WallCell, CalendarPage } from "calendar.slint";
-import { InfoNote, InfoPage, NoteCard } from "info.slint";
+import { InfoNote, InfoPage } from "info.slint";
+import { NotifWindow } from "notify_window.slint";
 import { StatusScreen, StatusPage, TopStrip } from "status.slint";
 import { VoicePage } from "voice.slint";
 import { QuickTile, QuickGroup, QuickPage } from "quick.slint";
 import { SetRow, SetBar, SetSeg, SetSection, SettingsLayer } from "settings.slint";
 import { WebLoading, PullToRefresh } from "loading.slint";
 
+export { WxIcons }
 export { Theme, Act, Words, Phrases, FoundHa, WifiNet, Person, TimerInfo, ClockData, WeatherHour, WeatherDay, WeatherData }
 export { HomeItem, HomeEvent, HomeMusic, MusicPlayer, TimerItem, AlarmItem, SwCar, ClimateDev, ClimateRoom, CamItem, CamAction }
 export { TodoItem, TodoList, CalEvent, CalDay, CalCell, CalBoard, WallCell, InfoNote, StatusScreen, QuickTile, QuickGroup }
@@ -133,6 +136,13 @@ export component AppWindow inherits Window {
     // a new notification as a card above any page (the panel's "card" setting for new notifications)
     in property <bool> pop-on;
     in property <InfoNote> pop-note;
+    in property <[InfoNote]> pop-notes;        // the window's notifications (several: "i of n")
+    in property <int> pop-index;
+    in property <int> pop-count;
+    in property <int> pop-look;                // the notifications page's look: 0 plain, 1 fridge, 2 pager, 3 TV news
+    in property <bool> pop-until;              // until answered
+    in property <float> pop-seconds: 10;
+    in property <image> pop-pager;             // the pager device for the window (375 × 320)
     in property <InfoNote> info-card-note;
     in property <int> info-card-index;
     in property <int> info-card-count;
@@ -165,6 +175,7 @@ export component AppWindow inherits Window {
     in property <QuickTile> quick-sheet-tile;
     in property <int> quick-sheet-index;
     in property <image> quick-mixer-panel; in property <image> quick-fader; in property <image> quick-deck-panel;
+    in property <[image]> quick-lever-frames;
     in property <image> quick-toggle-up; in property <image> quick-toggle-down; in property <image> quick-lamp-on;
     in property <image> quick-lamp-amber; in property <image> quick-lamp-off; in property <image> quick-screw;
     in property <image> quick-lamp-glow; in property <image> quick-lamp-spec; in property <int> quick-grid;
@@ -176,6 +187,7 @@ export component AppWindow inherits Window {
     in property <StatusScreen> status-screen;
     in property <float> conn-morse-t;
     in property <int> set-view;
+    in property <bool> set-auto;               // the shade's Auto box: the light sensor sets the brightness
     in property <string> set-shade-title; in property <float> set-brightness; in property <float> set-volume; in property <bool> set-mic-on: true;
     in property <string> set-mic-state; in property <string> set-theme-state; in property <bool> set-dnd; in property <string> set-dnd-state;
     in property <string> set-sleep-state; in property <string> set-lock-title; in property <float> set-hold; in property <string> set-title;
@@ -193,9 +205,13 @@ export component AppWindow inherits Window {
     in property <float> voice-level;
     in property <float> voice-left: -1;
     in property <string> voice-wave;
+    in property <string> voice-wave1;          // the oscilloscope's afterglow: the three traces before
+    in property <string> voice-wave2;
+    in property <string> voice-wave3;
+    in property <int> voice-peaks;             // counts the voice peaks
+    in property <string> voice-typed;          // the answer as far as it has come
     in property <image> voice-scan;
     in property <image> voice-dots;
-    in property <bool> voice-blink: true;
     in property <bool> strip-on;
     in property <string> strip-title;
     in property <string> strip-sub;
@@ -269,6 +285,7 @@ export component AppWindow inherits Window {
     in property <[TodoList]> todo-lists;
     in property <int> todo-sel;
     in property <[TodoItem]> todo-open;
+    in property <int> todo-leaving;            // ticked items still in todo-open while their tick plays (M24)
     in property <[TodoItem]> todo-done;
     in property <bool> todo-show-done;
     in property <length> todo-scroll;
@@ -426,6 +443,11 @@ export component AppWindow inherits Window {
     in property <float> timers-pulse;
     in property <int> timers-mode: 1;
     in property <int> timers-theme;
+    in property <float> timers-lap-at;
+    in property <float> timers-lap-best: -1;
+    in property <[float]> timers-lap-marks;
+    in property <int> timers-sw-look;
+    in property <int> timers-alarm-look;
     in property <int> timers-focus;
     in property <[AlarmItem]> timers-alarms;
     in property <string> timers-next-alarm;
@@ -493,6 +515,7 @@ export component AppWindow inherits Window {
     in property <bool> show-people: true;
     in property <string> wake-hint: "";
     in property <[TimerInfo]> timers;
+    in-out property <bool> island-away;       // the timer island was flicked into the timer mark (the app brings it back)
     in property <color> clock-accent: Theme.accent;
     in property <int> clock-weight: 600;
     in property <bool> clock-date: true;
@@ -697,7 +720,9 @@ export component AppWindow inherits Window {
     // A swipe down that starts on the status bar pulls the quick shade (the
     // pages are inside, so taps and sideways swipes still reach them).
     shade-swipe := SwipeGestureHandler {
-        handle-swipe-down: !root.screensaver-on && root.set-view == 0 && self.pressed-position.y < 56px;
+        // the timer island takes its own drags (29.4)
+        handle-swipe-down: !root.screensaver-on && root.set-view == 0 && self.pressed-position.y < 56px
+            && !(island.shown && self.pressed-position.y >= 44px && Math.abs(self.pressed-position.x / 1px - 240) < island.cap-w / 2px);
         moved => {
             if !root.shade-pulling {
                 root.act("shade.peek", "");
@@ -715,14 +740,18 @@ export component AppWindow inherits Window {
             }
         }
         swiped => {
+            let p = root.p-of-pull(self.current-position.y - self.pressed-position.y);
             root.shade-pulling = false;
-            if self.current-position.y - self.pressed-position.y > 136px || root.pull-v > 0.5 {
-                root.act("shade.open", "");
-            }
+            // past 1.5 straight to the second step; from 40 % (or a flick down) the first; else it closes
+            root.p-go(p, p >= 1.5 ? 2 : (p >= 0.4 || root.pull-v > 0.5) ? 1 : 0);
         }
-        cancelled => { root.shade-pulling = false; }
+        cancelled => { root.shade-pulling = false; root.p-go(root.p-of-pull(root.shade-pull), 0); }
     pager := Rectangle {
         clip: true;
+        y: 4px * root.sink-k;
+        opacity: 1 - 0.5 * root.sink-k;
+        // fully covered by the saver: not drawn at all
+        visible: root.saver-k < 0.999;
         swipe := SwipeGestureHandler {
             handle-swipe-left: root.pages.length > 1 && !Act.hold-swipe;
             handle-swipe-right: root.pages.length > 1 && !Act.hold-swipe;
@@ -993,6 +1022,7 @@ export component AppWindow inherits Window {
                     timers: root.timers-list; ringing: root.timers-ringing; ring-label: root.timers-ring-label; ring-over: root.timers-ring-over;
                     pulse: root.timers-pulse; mode: root.timers-mode; theme: slot.variant; pick: root.timers-focus; alarms: root.timers-alarms; quick: root.timers-quick; sheet: root.timers-sheet;
                     next-alarm: root.timers-next-alarm; watch: root.timers-watch; watch-running: root.timers-watch-running; laps: root.timers-laps;
+                    lap-at: root.timers-lap-at; lap-best: root.timers-lap-best; lap-marks: root.timers-lap-marks; sw-look: root.timers-sw-look; alarm-look: root.timers-alarm-look;
                     ring-alarm: root.timers-ring-alarm; ring-time: root.timers-ring-time; ring-tint: root.timers-ring-tint; settings: root.timers-settings;
                     colourful: root.timers-colourful; alarm-on: root.timers-alarm-on; timer-on: root.timers-timer-on; watch-on: root.timers-watch-on;
                     next-tint: root.timers-next-tint; watch-tint: root.timers-watch-tint;
@@ -1018,7 +1048,7 @@ export component AppWindow inherits Window {
                 if slot.kind == "quick": QuickPage {
                     look: slot.variant; tiles: root.quick-tiles; title: root.quick-title; mood: root.quick-mood; placard: root.quick-placard;
                     sheet: root.quick-sheet; sheet-tile: root.quick-sheet-tile; sheet-index: root.quick-sheet-index; mixer-panel: root.quick-mixer-panel; fader: root.quick-fader;
-                    deck-panel: root.quick-deck-panel; toggle-up: root.quick-toggle-up; toggle-down: root.quick-toggle-down; lamp-glow: root.quick-lamp-glow; lamp-spec: root.quick-lamp-spec;
+                    deck-panel: root.quick-deck-panel; toggle-up: root.quick-toggle-up; toggle-down: root.quick-toggle-down; lever-frames: root.quick-lever-frames; lamp-glow: root.quick-lamp-glow; lamp-spec: root.quick-lamp-spec;
                     grid: root.quick-grid; sheet-temp: root.quick-sheet-temp; sheet-temp-text: root.quick-sheet-temp-text; sheet-colours: root.quick-sheet-colours;
                     sheet-effects: root.quick-sheet-effects; groups: root.quick-groups;
                     lamp-amber: root.quick-lamp-amber; lamp-off: root.quick-lamp-off; screw: root.quick-screw;
@@ -1047,7 +1077,7 @@ export component AppWindow inherits Window {
                     day-sheet-free: root.cal-day-sheet-free;
                 }
                 if slot.kind == "todo": TodoPage {
-                    lists: root.todo-lists; sel: root.todo-sel; open-items: root.todo-open; done-items: root.todo-done; show-done: root.todo-show-done;
+                    lists: root.todo-lists; sel: root.todo-sel; open-items: root.todo-open; leaving: root.todo-leaving; done-items: root.todo-done; show-done: root.todo-show-done;
                     scroll: root.todo-scroll; picker: root.todo-picker; empty-title: root.todo-empty-title; empty-sub: root.todo-empty-sub;
                     adding: root.todo-adding; draft: root.todo-draft; can-due: root.todo-can-due; due-pick: root.todo-due-pick; due-picked: root.todo-due-picked;
                     kb-layer: root.todo-kb-layer; kb-layout: root.kb-layout; look: slot.variant; note-draft: root.todo-note-draft; note-on: root.todo-note-on; can-note: root.todo-can-note; stamp: root.todo-stamp;
@@ -1101,6 +1131,8 @@ export component AppWindow inherits Window {
         listening: root.voice-on && root.voice-state == 1;
         notes: root.info-notes.length;
         timers: root.timers;
+        timer-mark: island.mark-on;
+        timer-hold: island.mark-hold;
         problem: !root.connected;
         quiet: root.screensaver-on;
         on-color: root.status-on || (root.pages.length > 0 && root.on-color(root.pages[root.shown-page]));
@@ -1108,11 +1140,17 @@ export component AppWindow inherits Window {
         left-chips: root.left-k > 0.5;
         left-k: root.left-k;
     }
-    // the running timers: their own row under the status line, centred, on every page
-    if root.timers.length > 0: HorizontalLayout {
-        x: 16px; y: 44px; width: root.width - 32px; height: 26px;
-        alignment: center;
-        TimerChips { timers: root.timers; most: 2; on-k: root.status-on ? 1 : root.on-k; }
+    // the running timers: the island under the status line (29.3); a flick sends it into the timer mark
+    island := TimerIsland {
+        x: 0; y: 0; width: root.width; height: root.height;
+        timers: root.timers;
+        away <=> root.island-away;
+        light: !root.status-on && root.on-k < 0.5 && !Theme.dark;
+        hidden: root.voice-on || root.shade-pos > 0.002 || root.set-view > 0 || root.screensaver-on
+            || (root.pages.length > 0 && root.pages[root.shown-page].kind == "timers");
+        // the timer mark's place once the group has its final marks
+        mark-x: 240px + ((root.mic-muted ? 1 : 0) + (root.speaker-muted ? 1 : 0)) * 32px + 16px
+            - ((root.mic-muted ? 1 : 0) + (root.speaker-muted ? 1 : 0) + 1 + ((root.info-notes.length > 0 || root.dnd-on) && !root.screensaver-on ? 1 : 0)) * 16px;
     }
     property <bool> sheet-open: root.quick-sheet || root.thermo-sheet || root.thermo-picker || root.music-picker || root.cal-detail
         || root.timers-quick || root.todo-picker;
@@ -1182,19 +1220,51 @@ export component AppWindow inherits Window {
     // and open when let go far enough (or flicked), else slide back.
     property <bool> shade-pulling;
     property <length> shade-pull;
-    property <bool> shade-closing;          // a drag up on the open shade
-    property <length> shade-up;
     property <duration> pull-t;
     property <length> pull-last;
     property <float> pull-v;                 // px per ms, + downwards
+    // the shade in two steps (29.5): P 0 closed … 1 the first step … 2 the second; 136 px of finger travel morph one into
+    // the other; past the second a rubber band (24 px at most)
+    property <int> shade-step: 1;
+    property <bool> shade-moving;            // a vertical drag on the open shade
+    property <length> shade-d;               // … how far (+ down)
+    property <int> shade-from: 1;            // … from which step
     pure function shade-band(d: length) -> float {
-        // past fully open: 24 px · (1 − e^(−d / 80 px)), as a share of the shade's 340 px
-        return 24px * (1 - Math.pow(2.71828, -(d / 80px))) / 340px;
+        return 24px * (1 - Math.pow(2.71828, -(d / 80px))) / 136px;
     }
-    property <float> shade-pos: root.shade-pulling ? (root.shade-pull <= 340px ? max(0, root.shade-pull / 340px) : 1 + root.shade-band(root.shade-pull - 340px))
-        : root.shade-closing ? max(0, 1 - root.shade-up / 340px)
-        : (root.set-view == 1 || root.set-view == 2) ? 1 : 0;
-    animate shade-pos { duration: root.shade-pulling || root.shade-closing ? 0ms : 300ms; easing: cubic-bezier(0.22, 1, 0.36, 1); }
+    // the first step's height (what the shade slides in by): its controls, what runs now, the handle band
+    property <length> shade-h1: min(472px, 182px + (root.timers-list.length > 0 ? 28px + root.timers-list.length * 60px : 0px)
+        + (root.info-notes.length > 0 ? 28px + min(6, root.info-notes.length) * 60px + (root.info-notes.length > 6 ? 40px : 0px) : 0px) + 20px);
+    pure function p-of-pull(d: length) -> float {
+        return d <= root.shade-h1 ? max(0, d / root.shade-h1)
+            : d <= root.shade-h1 + 136px ? 1 + (d - root.shade-h1) / 136px
+            : 2 + root.shade-band(d - root.shade-h1 - 136px);
+    }
+    pure function p-of-move(from: int, d: length) -> float {
+        return from == 1 ? (d >= 0 ? (d <= 136px ? 1 + d / 136px : 2 + root.shade-band(d - 136px)) : max(0, 1 + d / root.shade-h1))
+            : (d >= 0 ? 2 + root.shade-band(d) : d >= -136px ? 2 + d / 136px : max(0, 1 + (d + 136px) / root.shade-h1));
+    }
+    // P springs to its step with J-edge(60, 320)
+    property <float> p-from;
+    property <float> p-to;
+    property <duration> p-t0;
+    property <bool> p-anim;
+    Timer { interval: 900ms; running: root.p-anim; triggered => { root.p-anim = false; } }
+    property <float> p-rest: (root.set-view == 1 || root.set-view == 2) ? root.shade-step : 0;
+    property <float> p-rest-old;
+    changed p-rest => {
+        if !root.p-anim { root.p-from = root.p-rest-old; root.p-to = root.p-rest; root.p-t0 = animation-tick(); root.p-anim = true; }
+        root.p-rest-old = root.p-rest;
+        if root.p-rest == 0 { root.shade-step = 1; }
+    }
+    function p-go(from: float, to: int) {
+        root.p-from = from; root.p-to = to; root.p-t0 = animation-tick(); root.p-anim = true;
+        if to == 0 { root.act("shade.close", ""); } else { root.shade-step = to; if root.set-view == 0 { root.act("shade.open", ""); } }
+    }
+    property <float> shade-pos: root.shade-pulling ? root.p-of-pull(root.shade-pull)
+        : root.shade-moving ? root.p-of-move(root.shade-from, root.shade-d)
+        : root.p-anim ? root.p-from + (root.p-to - root.p-from) * Jelly.edge((animation-tick() - root.p-t0) / 1ms, 60, 320)
+        : root.p-rest;
     SwipeGestureHandler {
         y: 0;
         height: 56px;
@@ -1217,10 +1287,10 @@ export component AppWindow inherits Window {
             }
         }
         swiped => {
+            let p = root.p-of-pull(self.current-position.y - self.pressed-position.y);
             root.shade-pulling = false;
-            if self.current-position.y - self.pressed-position.y > 136px || root.pull-v > 0.5 {
-                root.act("shade.open", "");
-            }
+            // past 1.5 straight to the second step; from 40 % (or a flick down) the first; else it closes
+            root.p-go(p, p >= 1.5 ? 2 : (p >= 0.4 || root.pull-v > 0.5) ? 1 : 0);
         }
         cancelled => { root.shade-pulling = false; }
     }
@@ -1236,6 +1306,9 @@ export component AppWindow inherits Window {
 
     // ---- screensaver ----
     property <float> saver-k: root.screensaver-on ? 1 : 0;
+    // M9: entering the screensaver, the page dims and sinks 4 px over 600 ms under the fading-in saver
+    property <float> sink-k: root.screensaver-on ? 1 : 0;
+    animate sink-k { duration: root.screensaver-on ? 600ms : 0ms; easing: ease-out; }
     animate saver-k { duration: root.screensaver-on ? 800ms : 200ms; easing: ease-in-out; }
     if root.saver-k > 0.001: Rectangle {
         opacity: root.saver-k;
@@ -1260,10 +1333,10 @@ export component AppWindow inherits Window {
 
     // ---- layers ----
 
-    property <float> pop-k: root.pop-on ? 1 : 0;
-    animate pop-k { duration: 260ms; easing: ease-out; }
-    if root.pop-k > 0.001: Rectangle { opacity: root.pop-k; background: Theme.scrim; TouchArea { clicked => { root.act("pop.close", ""); } } }
-    if root.pop-k > 0.001: NoteCard { x: 16px; y: root.height - (self.height + 24px) * root.pop-k; width: root.width - 32px; n: root.pop-note; index: 1; count: 1; prefix: "pop"; }
+    // the new-notification window (30), in the notifications page's look
+    NotifWindow { x: 0; y: 0; width: root.width; height: root.height;
+        on: root.pop-on; notes: root.pop-notes; index: root.pop-index; count: root.pop-count; look: root.pop-look; until: root.pop-until;
+        seconds: root.pop-seconds; clock: root.info-clock; pager: root.pop-pager; led: root.info-pager-led; }
     property <float> voice-k: root.voice-on ? 1 : 0;
     animate voice-k { duration: root.voice-on ? 200ms : 250ms; easing: ease-in-out; }
     if root.voice-k > 0.001: VoicePage {
@@ -1271,7 +1344,10 @@ export component AppWindow inherits Window {
         x: 0; y: 0; width: root.width; height: root.height;
         look: root.voice-look; state: root.voice-state; assistant: root.voice-assistant; heard: root.voice-heard; answer: root.voice-answer;
         line: root.voice-line; detail: root.voice-detail; level: root.voice-level; left: root.voice-left; wave: root.voice-wave;
-        scan: root.voice-scan; dots: root.voice-dots; blink: root.voice-blink; version: root.app-version;
+        wave1: root.voice-wave1; wave2: root.voice-wave2; wave3: root.voice-wave3; peaks: root.voice-peaks; typed: root.voice-typed; closing: !root.voice-on;
+        scan: root.voice-scan; dots: root.voice-dots; version: root.app-version;
+        // the terminal's cursor and the comic's dots blink (530 ms)
+        blink: Math.mod(animation-tick() / 1ms, 1060) < 530;
     }
     if root.strip-on: TopStrip {
         x: 0; y: 0; width: root.width;
@@ -1294,33 +1370,36 @@ export component AppWindow inherits Window {
         page-title: root.set-page-title; page-sub: root.set-page-sub; used: root.set-used; used-text: root.set-used-text; bars: root.set-bars; sections: root.set-sections;
         confirm-title: root.set-confirm-title; confirm-line: root.set-confirm-line;
         theme-mode: root.theme-mode;
-        shade-drag(up, done) => {
+        auto-bright: root.set-auto; now-timers: root.timers-list; now-notes: root.info-notes; moving: root.shade-moving;
+        shade-move(d, done) => {
             if !done {
-                if !root.shade-closing {
+                if !root.shade-moving {
+                    root.shade-from = root.shade-step;
                     root.pull-t = animation-tick();
                     root.pull-last = 0px;
                     root.pull-v = 0;
                 }
-                root.shade-closing = true;
-                root.shade-up = up;
+                root.shade-moving = true;
+                root.shade-d = d;
                 let dt = (animation-tick() - root.pull-t) / 1ms;
                 if dt >= 16 {
-                    root.pull-v = root.pull-v * 0.4 + 0.6 * ((root.pull-last - up) / 1px) / dt;
-                    root.pull-last = up;
+                    root.pull-v = root.pull-v * 0.4 + 0.6 * ((d - root.pull-last) / 1px) / dt;
+                    root.pull-last = d;
                     root.pull-t = animation-tick();
                 }
-            } else {
-                let shown = 1 - up / 340px;
-                root.shade-closing = false;
-                if root.shade-up > 4px && (shown < 0.7 || root.pull-v < -0.5) {
-                    root.act("shade.close", "");
-                }
-                root.shade-up = 0px;
+            } else if root.shade-moving {
+                let p = root.p-of-move(root.shade-from, root.shade-d);
+                root.shade-moving = false;
+                // a flick goes to the next / previous step; otherwise the nearest (the second from halfway, the first
+                // from 70 % shown)
+                root.p-go(p, root.pull-v > 0.5 ? (p >= 1 ? 2 : 1) : root.pull-v < -0.5 ? (p > 1.05 ? 1 : 0) : p >= 1.5 ? 2 : p >= 0.7 ? 1 : 0);
+                root.shade-d = 0px;
             }
         }
+        shade-step(n) => { root.p-go(root.shade-pos, n); }
     }
     // the status bar stays readable over the shade and the settings (drawn above them, theme colours there)
-    if root.set-view > 0 || root.shade-pos > 0.002: StatusBar {
+    if root.set-view > 0 || root.shade-pos > 0.002 || root.pop-on: StatusBar {
         x: 16px;
         y: 10px;
         width: root.width - 32px;
@@ -1331,9 +1410,11 @@ export component AppWindow inherits Window {
         listening: root.voice-on && root.voice-state == 1;
         notes: root.info-notes.length;
         timers: root.timers;
+        timer-mark: island.mark-on;
+        timer-hold: island.mark-hold;
         problem: !root.connected;
         quiet: root.screensaver-on;
-        on-k: root.set-view >= 3 ? 0 : (root.status-on ? 1 : root.on-k) * (1 - min(1, root.shade-pos));
+        on-k: root.pop-on && root.set-view == 0 && root.shade-pos < 0.002 ? 1 : root.set-view >= 3 ? 0 : (root.status-on ? 1 : root.on-k) * (1 - min(1, root.shade-pos));
         left-chips: root.left-k > 0.5;
         left-k: root.left-k;
     }

@@ -27,6 +27,14 @@ thread_local! {
     static ITEMS: std::cell::RefCell<Vec<Item>> = const { std::cell::RefCell::new(Vec::new()) };
     /// The third due date chip: days from today.
     static DUE_DAYS: std::cell::Cell<u32> = const { std::cell::Cell::new(2) };
+    /// Items just ticked on the panel: they stay in the open list (ticked, struck through, folding: spec M24) for
+    /// LEAVE_MS, then move down.
+    static LEAVING: std::cell::RefCell<Vec<(String, Instant)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+const LEAVE_MS: u64 = 640;
+
+fn item_key(i: &Item) -> String {
+    if i.uid.is_empty() { i.summary.clone() } else { i.uid.clone() }
 }
 /// The list to read, and a request to read it now.
 static WANTED: Mutex<(String, bool)> = Mutex::new((String::new(), false));
@@ -216,8 +224,15 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         }
         r
     };
-    let open: Vec<TodoItem> = items.iter().filter(|i| !i.done).map(|i| drawn(i, false)).collect();
-    let done: Vec<TodoItem> = items.iter().filter(|i| i.done).map(|i| drawn(i, true)).collect();
+    let leaving: Vec<String> = LEAVING.with(|l| {
+        let mut l = l.borrow_mut();
+        l.retain(|(_, t)| t.elapsed() < Duration::from_millis(LEAVE_MS));
+        l.iter().map(|(k, _)| k.clone()).collect()
+    });
+    let stays = |i: &&Item| i.done && leaving.contains(&item_key(i));
+    let open: Vec<TodoItem> = items.iter().filter(|i| !i.done || stays(i)).map(|i| drawn(i, false)).collect();
+    let done: Vec<TodoItem> = items.iter().filter(|i| i.done && !stays(i)).map(|i| drawn(i, true)).collect();
+    ui.set_todo_leaving(items.iter().filter(|i| stays(i)).count() as i32);
     // the receipt and terminal looks' own lines and the receipt's stamp
     ui.set_todo_receipt_footer(texts::kept("todo.receipt.footers", 0).into());
     ui.set_todo_receipt_empty(texts::kept("todo.receipt.empty", 0).into());
@@ -227,7 +242,7 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         ui.set_todo_empty_title(texts::kept("todo.empty.titles", 0).into());
         ui.set_todo_empty_sub(texts::kept("todo.empty.subs", 0).into());
     }
-    let n_open = open.len();
+    let n_open = open.iter().filter(|i| !i.done).count();
     if tapes {
         let count = if n_open == 0 { "ALL CLEAR".to_string() } else { format!("{n_open} TO DO") };
         ui.set_todo_label_head(draw::get(Job::TapeHead { name: name.clone(), count, seed: draw::seed(&name) }));
@@ -264,8 +279,18 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             let pick: Vec<&Item> = items.iter().filter(|i| i.done == (what == "todo.uncheck")).collect();
             let Some(item) = pick.get(n) else { return };
             let status = if what == "todo.check" { "completed" } else { "needs_action" };
-            let key = if item.uid.is_empty() { item.summary.clone() } else { item.uid.clone() };
+            let key = item_key(item);
             crate::call("todo", "update_item", &list, json!({ "item": key, "status": status }));
+            // ticked here: it stays in the open list while its tick plays, then moves down
+            if what == "todo.check" {
+                LEAVING.with(|l| l.borrow_mut().push((key.clone(), Instant::now())));
+                let weak = ui.as_weak();
+                slint::Timer::single_shot(Duration::from_millis(LEAVE_MS + 20), move || {
+                    if let Some(ui) = weak.upgrade() {
+                        with_state(|s| refresh(&ui, s));
+                    }
+                });
+            }
             // Shown ticked at once; the list is read again right after.
             let uid = item.uid.clone();
             ITEMS.with(|i| {

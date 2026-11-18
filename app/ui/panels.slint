@@ -2,7 +2,7 @@
 // first, also usable as a panel) and the shared frame.
 
 import { Theme, Act, Clock } from "theme.slint";
-import { Icon, GlowText } from "widgets.slint";
+import { Icon, GlowText, RollPair, Jelly } from "widgets.slint";
 import { PhotoSky } from "photo_sky.slint";
 
 export struct Person {
@@ -14,152 +14,284 @@ export struct Person {
 export struct TimerInfo {
     label: string,       // "Pasta", "" if unnamed
     text: string,        // "4:59"
-    urgent: bool,        // last minute
+    urgent: bool,        // running, in its last minute
     hours: bool,         // an hour or longer: room for "0:00:00" from the start
+    tint: color,         // its colour (as on the timers page)
+    fr: float,           // the part left (remaining / total)
+    paused: bool,
+    index: int,          // its place on the timers page
 }
 
-// One running timer; the chip grows with its text.
-component TimerChip inherits Rectangle {
-    in property <TimerInfo> timer;
-    in property <bool> compact;          // the time only (beside a page's own chip)
-    // on a coloured or dark page background (1) the chip keeps the dark palette, whatever the theme
-    in property <float> on-k;
-    property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
-    property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
-    probe := Text { visible: false; text: root.timer.hours ? "0:00:00" : "00:00"; font-size: Theme.font-caption; font-weight: Theme.weight-strong; }
-    // a new chip fades in (200 ms)
-    property <bool> came;
-    init => { root.came = true; }
-    opacity: root.came ? 1 : 0;
-    animate opacity { duration: 200ms; easing: ease-out; }
-    height: 26px;
-    border-radius: 13px;
-    background: root.timer.urgent ? root.alert.with-alpha(0.2) : root.warn.with-alpha(0.18);
-    animate background { duration: 300ms; easing: ease-in-out; }
-    HorizontalLayout {
-        padding-left: 8px;
-        padding-right: 10px;
-        spacing: 4px;
-        Icon {
-            text: "\u{F051B}";
-            font-size: 15px;
-            color: root.timer.urgent ? root.alert : root.warn;
-            animate color { duration: 300ms; easing: ease-in-out; }
-        }
-        if root.timer.label != "" && !root.compact: Text {
-            text: root.timer.label;
-            max-width: 72px;
-            overflow: elide;
-            font-size: Theme.font-caption;
-            color: (#A3A19C).mix(Theme.muted, root.on-k);
-            vertical-alignment: center;
-        }
-        // the time keeps one width while it counts down (no jumping of the bar): as wide as "00:00", or
-        // "0:00:00" for a timer of an hour or more
-        Text {
-            text: root.timer.text;
-            min-width: probe.preferred-width;
-            font-size: Theme.font-caption;
-            font-weight: Theme.weight-strong;
-            color: (#F5F3EE).mix(Theme.text, root.on-k);
-            horizontal-alignment: right;
-            vertical-alignment: center;
-        }
+// One mark of the status bar's centre group (29.2): a 32 px cell whose width opens 0 → 32 px with a capped jelly
+// overshoot (J-edge 90/240, at most 4 px over) and whose icon pops 0.6 → 1 with a wobble; it goes by shrinking and
+// fading the icon (120 ms), then closing the width. hold: the cell opens but its icon waits (the timer island flies in).
+component MarkCell inherits Rectangle {
+    in property <bool> on;
+    in property <bool> hold;
+    in property <string> glyph;
+    in property <color> ink;
+    in property <int> badge: 0;           // the bell's count (0: none)
+    callback tapped;
+    property <duration> wt0;
+    property <bool> wmove;
+    changed on => { root.wt0 = animation-tick(); root.wmove = true; }
+    Timer { interval: 820ms; running: root.wmove; triggered => { root.wmove = false; } }
+    property <float> wt: root.wmove ? (animation-tick() - root.wt0) / 1ms : 100000;
+    property <float> wv: root.on ? 32 * Jelly.edge(root.wt, 90, 240) : 32 * (1 - Jelly.edge(root.wt - 90, 90, 240));
+    width: root.on ? max(0px, (32 + Jelly.cap(root.wv - 32, 4)) * 1px) : max(0px, root.wv * 1px);
+    height: 32px;
+    // the icon
+    property <bool> showing: root.on && !root.hold;
+    property <duration> it0;
+    property <bool> imove;
+    changed showing => { root.it0 = animation-tick(); root.imove = true; }
+    Timer { interval: 820ms; running: root.imove; triggered => { root.imove = false; } }
+    property <float> itt: root.imove ? (animation-tick() - root.it0) / 1ms : 100000;
+    property <float> gone: clamp(root.itt / 120, 0, 1);
+    property <float> k: root.showing ? (0.6 + 0.4 * Jelly.edge(root.itt - 40, 90, 230)) * Jelly.wobble(root.itt - 40, 0.18) : 1 - 0.4 * root.gone * root.gone;
+    property <float> io: root.showing ? clamp((root.itt - 20) / 80, 0, 1) : 1 - root.gone * root.gone;
+    // a press squashes the icon a little, the release springs back
+    property <float> press: touch.pressed ? 0.9 : 1;
+    animate press { duration: touch.pressed ? 90ms : 200ms; easing: cubic-bezier(0.34, 1.6, 0.64, 1); }
+    if root.io > 0.01: Icon { x: (root.width - 32px) / 2; y: 0; width: 32px; height: 32px; text: root.glyph; font-size: 18px * root.k * root.press;
+        color: root.ink; opacity: root.io; }
+    // the bell's count: a new one pops the badge 1 → 1.3 → 1 and rolls the number in from below (160 ms)
+    property <int> last-badge;
+    property <duration> bt0;
+    property <bool> bmove;
+    init => { root.last-badge = root.badge; }
+    changed badge => { if root.badge > root.last-badge { root.bt0 = animation-tick(); root.bmove = true; } root.last-badge = root.badge; }
+    Timer { interval: 540ms; running: root.bmove; triggered => { root.bmove = false; } }
+    property <float> btt: root.bmove ? (animation-tick() - root.bt0) / 1ms : 100000;
+    property <float> bk: root.btt < 160 ? 1 + 0.3 * Math.sin(180deg * root.btt / 160) : Jelly.wobble(root.btt - 160, 0.08);
+    property <float> broll: clamp(root.btt / 160, 0, 1);
+    if root.badge > 0 && root.io > 0.01: Rectangle {
+        property <length> bw: max(15px, bt.preferred-width + 8px);
+        x: (root.width - 32px) / 2 + 16px + (self.bw - self.bw * root.bk) / 2; y: 1px + (15px - 15px * root.bk) / 2;
+        width: self.bw * root.bk; height: 15px * root.bk; border-radius: self.height / 2;
+        background: #FF4A1C; opacity: root.io; clip: true;
+        bt := Text { y: 6px * (1 - (1 - Math.pow(1 - root.broll, 3))); width: parent.width; height: parent.height; text: root.badge > 9 ? "9+" : root.badge;
+            font-size: 10px * root.bk; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center;
+            opacity: root.bmove ? root.broll : 1; }
     }
+    touch := TouchArea { x: 0; y: -8px; width: root.width; height: 46px; enabled: root.on; clicked => { root.tapped(); } }
 }
 
-// Running timers: the two nearest ones, then "+N".
-export component TimerChips inherits HorizontalLayout {
-    in property <[TimerInfo]> timers;
-    in property <int> most: 2;           // chips shown before "+N"
-    in property <bool> compact;          // times only
-    in property <float> on-k;
-    spacing: 6px;
-    if root.timers.length > 0: TimerChip { timer: root.timers[0]; compact: root.compact; on-k: root.on-k; }
-    if root.timers.length > 1 && root.most > 1: TimerChip { timer: root.timers[1]; compact: root.compact; on-k: root.on-k; }
-    if root.timers.length > root.most: Rectangle {
-        height: 26px;
-        border-radius: 13px;
-        background: (#f5a524).mix(Theme.warning, root.on-k).with-alpha(0.18);
-        HorizontalLayout {
-            padding-left: 9px;
-            padding-right: 9px;
-            Text {
-                text: "+" + (root.timers.length - root.most);
-                font-size: Theme.font-caption;
-                font-weight: Theme.weight-strong;
-                color: (#F5F3EE).mix(Theme.text, root.on-k);
-                vertical-alignment: center;
-            }
-        }
-    }
-}
-
-// Thin status line at the top of a panel. On the screensaver only the
-// timers and problems show.
+// Thin status line at the top of a panel (29.1): the hint at x 16–168, the mark group centred on x 240, the page's
+// own chip at x 312–464 (drawn by the page). On the screensaver the hint and the bell rest.
 export component StatusBar inherits Rectangle {
-    in property <string> hint;           // wake word hint
+    in property <string> hint;           // wake word hint, or the muted microphone's line (the app picks it)
     in property <bool> mic-muted;
     in property <bool> speaker-muted;    // the panel's volume at 0
-    in property <bool> dnd;              // do not disturb is on
-    in property <bool> listening;        // the assistant is hearing now (after the wake word)
-    in property <int> notes;             // notifications waiting (a bell with the number; a tap opens their list)
-    in property <[TimerInfo]> timers;
-    in property <bool> problem;          // connection problem
-    in property <bool> quiet;            // screensaver: no hint, no microphone
-    in property <bool> on-color;         // drawn over a coloured panel background
+    in property <bool> dnd;              // do not disturb is on: the bell sleeps
+    in property <bool> listening;        // the assistant is hearing now (the voice screen covers the bar)
+    in property <int> notes;             // notifications waiting (the bell with the number; a tap opens their list)
+    in property <[TimerInfo]> timers;    // nearest first
+    in property <bool> timer-mark;       // the timer island is away (or flying there): the timer mark shows
+    in property <bool> timer-hold;       // … its icon waits for the flying capsule
+    in property <bool> problem;          // connection problem: the hint line says it
+    in property <bool> quiet;            // screensaver
+    in property <bool> on-color;         // drawn over a plain page background (the theme's colours)
     in property <float> on-k: root.on-color ? 1 : 0;   // the same, mixed while a swipe crosses pages
-    // the page has its own chip at the top right (speaker, room, camera, view, list): the problem mark and the
-    // timers (as one chip and "+N") move to the left half, and the texts give way, so nothing lies on or under it
-    in property <bool> left-chips;
-    in property <float> left-k: root.left-chips ? 1 : 0;
+    in property <bool> left-chips;       // (the page has its own chip at the right: every part has its fixed place anyway)
+    in property <float> left-k;
     property <color> soft: (#ffffffb3).mix(Theme.faint, root.on-k);
-    property <bool> bell-on: root.notes > 0 && !root.quiet;
-    // the warning and error colours keep the dark palette on a coloured page background
     property <color> warn: (#f5a524).mix(Theme.warning, root.on-k);
     property <color> alert: (#ff5a5f).mix(Theme.danger, root.on-k);
-    // the bell has its own place in the middle of the line on every page, the state marks (listening,
-    // microphone off, speaker off, do not disturb, connection problem) line up left of it; the sides never reach
-    // them, and a page's own chip at the top right starts right of the bell
-    property <length> ctr-right: root.width / 2 + 17px;
     height: 32px;
-    HorizontalLayout {
-        x: 0; y: 0; width: max(0px, ctr.x - 8px); height: root.height;
-        spacing: 8px;
-        // the wake word hint, or with the microphone muted its own line (the app picks it), on every page
-        Text {
-            horizontal-stretch: 1;
-            text: root.quiet && !root.mic-muted ? "" : root.hint;
-            font-size: Theme.font-caption;
-            color: root.mic-muted ? root.alert : root.soft;
-            vertical-alignment: center;
-            overflow: elide;
+    // the hint: the connection problem first, then the muted microphone's line, then the wake hint
+    Text {
+        x: 0; y: 0; width: 152px; height: root.height;
+        text: root.problem ? "No connection to Home Assistant" : root.quiet && !root.mic-muted ? "" : root.hint;
+        font-size: Theme.font-caption;
+        color: root.problem ? root.warn : root.mic-muted ? root.alert : root.soft;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    // the mark group: microphone off · speaker off · timers · bell, always centred
+    property <TimerInfo> near: root.timers.length > 0 ? root.timers[0] : { tint: #ffffff };
+    grp := HorizontalLayout {
+        x: (root.width - self.preferred-width) / 2; y: 0; width: self.preferred-width; height: root.height;
+        spacing: 0;
+        MarkCell { on: root.mic-muted; glyph: "\u{F036D}"; ink: root.alert; tapped => { Act.act("mark.mic", ""); } }
+        MarkCell { on: root.speaker-muted; glyph: "\u{F075F}"; ink: root.warn; tapped => { Act.act("mark.speaker", ""); } }
+        MarkCell { on: root.timer-mark && root.timers.length > 0; hold: root.timer-hold; glyph: "\u{F13AB}";
+            ink: root.near.urgent ? root.alert : root.near.tint; tapped => { Act.act("mark.timers", ""); } }
+        MarkCell { on: (root.notes > 0 || root.dnd) && !root.quiet; glyph: root.dnd ? "\u{F00A0}" : "\u{F009A}"; ink: root.soft; badge: root.notes;
+            tapped => { Act.act("notes.open", ""); } }
+    }
+}
+
+// The timer island's ring (18 px, 2.5 px stroke).
+component IslandRing inherits Rectangle {
+    in property <float> fr;
+    in property <color> arc;
+    in property <color> track;
+    in property <bool> paused;
+    in property <color> bars;
+    width: 18px; height: 18px;
+    property <float> r: 7.75;
+    property <angle> a: min(0.9999, max(0, root.fr)) * 360deg;
+    Rectangle { border-radius: 9px; border-width: 2.5px; border-color: root.track; }
+    if root.fr > 0.001: Path {
+        x: -1.25px; y: -1.25px; width: 20.5px; height: 20.5px; viewbox-width: 18; viewbox-height: 18;
+        stroke: root.arc; stroke-width: 2.5px;
+        commands: "M 9 " + (9 - root.r) + " A " + root.r + " " + root.r + " 0 " + (root.a > 180deg ? "1" : "0") + " 1 "
+            + (9 + root.r * Math.sin(root.a)) + " " + (9 - root.r * Math.cos(root.a));
+    }
+    if root.paused: Rectangle { x: 6px; y: 5px; width: 2px; height: 8px; background: root.bars; }
+    if root.paused: Rectangle { x: 10px; y: 5px; width: 2px; height: 8px; background: root.bars; }
+}
+
+// The timer island (29.3): one capsule under the status bar (y 46–74, centred) with the two nearest timers (a ring in
+// the timer's colour, the name, the time) and "+N". A flick up flies it into the timer mark (closed-form jelly edges,
+// ~600 ms); it comes back the same way when the app clears `away` (a new timer, a last minute). The element covers the
+// screen, only the capsule takes touches.
+export component TimerIsland inherits Rectangle {
+    in property <[TimerInfo]> timers;
+    in property <bool> light;            // a plain light page: the white capsule
+    in property <bool> hidden;           // under the shade, the voice screen, on the timers page
+    in property <length> mark-x: 240px;  // where the timer mark will sit (its centre)
+    in-out property <bool> away;
+    out property <bool> mark-on: root.timers.length > 0 && (root.away || root.flying == 1);
+    out property <bool> mark-hold: root.flying == 1 && root.ft < 420;
+    out property <length> cap-w: root.rest-w;
+    out property <bool> shown: root.timers.length > 0 && !root.hidden && (!root.away || root.flying != 0);
+    property <color> ink: root.light ? #101114 : #F5F3EE;
+    property <color> lab: root.light ? #5F5E5A : #B4B2AC;
+    property <color> alert: root.light ? #d0222a : #ff5a5f;
+    property <color> track: root.light ? #10111424 : #F5F3EE2e;
+    // the flight: 0 none, 1 out (to the mark), 2 back
+    property <int> flying;
+    property <duration> ft0;
+    property <float> ft: root.flying != 0 ? (animation-tick() - root.ft0) / 1ms : 0;
+    Timer { interval: 620ms; running: root.flying != 0; triggered => { if root.flying == 1 { root.away = true; } root.flying = 0; } }
+    changed away => { if !root.away && root.flying == 0 && root.timers.length > 0 { root.ft0 = animation-tick(); root.flying = 2; } }
+    // the resting capsule
+    property <length> rest-w: root.w0 + (root.timers.length > 1 ? 1px + root.w1 : 0px) + (root.more > 0 ? 1px + 34px : 0px);
+    property <length> rest-x: (root.width - root.rest-w) / 2;
+    property <length> rest-y: 46px;
+    // the drag: up 1:1 with a little stretch, down at most 6 px; release up > 14 px or faster than 0.4 px/ms flies
+    property <length> dy;
+    property <bool> dragging;
+    property <length> last-y;
+    property <duration> last-t;
+    property <float> vel;                // px/ms, negative = up
+    property <length> rel-dy;
+    property <duration> back-t0;
+    property <bool> backing;
+    Timer { interval: 520ms; running: root.backing; triggered => { root.backing = false; } }
+    property <length> pose-dy: root.dragging ? root.dy : root.backing ? root.rel-dy * (1 - Jelly.edge((animation-tick() - root.back-t0) / 1ms, 70, 220)) : 0px;
+    property <float> up: max(0, -root.pose-dy / 1px);
+    property <float> down: max(0, root.pose-dy / 1px);
+    property <float> sy: 1 + Jelly.cap(root.up * 0.16 / 50, 0.16);
+    property <length> pose-y: (Jelly.cap(root.down / 5, 6) - root.up) * 1px;
+    function press(y: length) { root.dragging = true; root.dy = 0; root.last-y = y; root.last-t = animation-tick(); root.vel = 0; root.backing = false; }
+    function move(y: length, y0: length) {
+        root.dy = y - y0;
+        if animation-tick() > root.last-t {
+            root.vel = 0.5 * root.vel + 0.5 * (y - root.last-y) / 1px / ((animation-tick() - root.last-t) / 1ms);
+        }
+        root.last-y = y; root.last-t = animation-tick();
+    }
+    function release(tap: int) {
+        root.dragging = false;
+        if root.dy < -14px || root.vel < -0.4 {
+            root.ft0 = animation-tick(); root.flying = 1;
+        } else {
+            if Math.abs(root.dy / 1px) < 6 && tap >= -1 { if tap >= 0 { Act.act("island.timer", tap); } else { Act.act("mark.timers", ""); } }
+            root.rel-dy = root.dy; root.back-t0 = animation-tick(); root.backing = true;
+        }
+        root.dy = 0;
+    }
+    // the edges of the flight (closed form)
+    property <float> ea: Jelly.edge(root.ft, 90, 240);
+    property <float> eb: Jelly.edge(root.ft - 30, 130, 340);
+    property <float> ec: Jelly.edge(root.flying == 2 ? root.ft - 20 : root.ft, 48, 300);
+    property <length> tl: root.mark-x - 9px;
+    property <length> tr: root.mark-x + 9px;
+    property <length> tt: 17px;
+    property <length> tb: 35px;
+    property <length> sl: root.rest-x;
+    property <length> sr: root.rest-x + root.rest-w;
+    property <length> st: root.rest-y;
+    property <length> sb: root.rest-y + 28px;
+    pure function lerp(a: length, b: length, k: float) -> length { a + (b - a) * k }
+    pure function soft(x: length, c: float) -> length { Jelly.cap(x / 1px, c) * 1px }
+    // out: the top races to the mark, the bottom follows 30 ms later, the sides squeeze in (never crossing)
+    property <length> o-top: root.tt - root.soft(root.tt - root.lerp(root.st, root.tt, root.ea), 4);
+    property <length> o-bot: root.tb - root.soft(root.tb - root.lerp(root.sb, root.tb, root.eb), 5);
+    property <length> o-l: root.tl + root.soft(root.lerp(root.sl, root.tl, root.ec) - root.tl, 3);
+    property <length> o-r: root.tr - root.soft(root.tr - root.lerp(root.sr, root.tr, root.ec), 3);
+    // back: the bottom leads down, the top follows, the sides open
+    property <length> b-bot: root.sb + root.soft(root.lerp(root.tb, root.sb, root.ea) - root.sb, 5);
+    property <length> b-top: root.st + root.soft(root.lerp(root.tt, root.st, root.eb) - root.st, 4);
+    property <length> b-l: root.sl - root.soft(root.sl - root.lerp(root.tl, root.sl, root.ec), 3);
+    property <length> b-r: root.sr + root.soft(root.lerp(root.tr, root.sr, root.ec) - root.sr, 3);
+    property <length> cx: root.flying == 1 ? root.o-l : root.flying == 2 ? root.b-l : root.rest-x + (root.rest-w - root.rest-w / root.sy) / 2;
+    property <length> cy: root.flying == 1 ? root.o-top : root.flying == 2 ? root.b-top : root.rest-y + root.pose-y + (28px - 28px * root.sy) / 2;
+    property <length> cw: root.flying == 1 ? max(12px, root.o-r - root.o-l) : root.flying == 2 ? max(12px, root.b-r - root.b-l) : root.rest-w / root.sy;
+    property <length> ch: root.flying == 1 ? max(12px, root.o-bot - root.o-top) : root.flying == 2 ? max(12px, root.b-bot - root.b-top) : 28px * root.sy;
+    property <float> body-o: root.flying == 1 ? 1 - clamp(root.ft / 120, 0, 1) : root.flying == 2 ? clamp((root.ft - 300) / 160, 0, 1) : 1;
+    property <float> cap-o: root.flying == 1 ? 1 - clamp((root.ft - 420) / 100, 0, 1) : 1;
+    property <TimerInfo> t0: root.timers.length > 0 ? root.timers[0] : { tint: #ffffff };
+    property <TimerInfo> t1: root.timers.length > 1 ? root.timers[1] : { tint: #ffffff };
+    property <int> more: max(0, root.timers.length - 2);
+    probe-m := Text { visible: false; text: "00:00"; font-size: 15px; font-weight: 600; }
+    probe-h := Text { visible: false; text: "0:00:00"; font-size: 15px; font-weight: 600; }
+    if root.shown: Rectangle {
+        x: root.cx; y: root.cy; width: root.cw; height: root.ch; border-radius: min(self.width, self.height) / 2;
+        background: root.light ? #FFFFFFf5 : #121314e8;
+        border-width: 1px; border-color: root.light ? #10111417 : #ffffff1f;
+        drop-shadow-offset-y: 2px; drop-shadow-blur: 7px; drop-shadow-color: root.light ? #00000014 : #00000059;
+        opacity: root.cap-o;
+        clip: root.flying != 0;
+        // the content keeps its resting size and stays centred in the capsule
+        body := HorizontalLayout {
+            x: (parent.width - root.rest-w) / 2; y: (parent.height - 28px) / 2; width: root.rest-w; height: 28px;
+            opacity: root.body-o;
+            spacing: 0;
+            for seg[i] in [root.t0, root.t1]: HorizontalLayout {
+                visible: i < root.timers.length;
+                width: i < root.timers.length ? self.preferred-width : 0px;
+                spacing: 0;
+                if i > 0: VerticalLayout { alignment: center; Rectangle { width: 1px; height: 14px; background: root.track; } }
+                HorizontalLayout {
+                    padding-left: 9px; padding-right: 11px; spacing: 6px; alignment: start;
+                    VerticalLayout { alignment: center;
+                        IslandRing { fr: seg.fr; paused: seg.paused; bars: root.lab; track: root.track;
+                            arc: seg.urgent ? root.alert : seg.paused ? seg.tint.with-alpha(0.5) : seg.tint; } }
+                    if seg.label != "": Text { text: seg.label; max-width: 92px; font-size: 13px; font-weight: 500; color: root.lab; vertical-alignment: center; overflow: elide; }
+                    Text { text: seg.text; min-width: seg.hours ? probe-h.preferred-width : probe-m.preferred-width; font-size: 15px; font-weight: 600;
+                        color: seg.urgent ? root.alert : seg.paused ? root.lab : root.ink; horizontal-alignment: right; vertical-alignment: center; }
+                }
+            }
+            if root.more > 0: VerticalLayout { alignment: center; Rectangle { width: 1px; height: 14px; background: root.track; } }
+            if root.more > 0: Text { text: "+" + root.more; min-width: 34px; font-size: 13px; font-weight: 600; color: root.lab;
+                horizontal-alignment: center; vertical-alignment: center; }
         }
     }
-    ctr := HorizontalLayout {
-        x: root.ctr-right - self.preferred-width; y: 0; width: self.preferred-width; height: root.height;
-        spacing: 6px;
-        if root.listening: VerticalLayout {
-            alignment: center;
-            Rectangle { width: 8px; height: 8px; border-radius: 4px; background: #2fd27a; }
-        }
-        if root.mic-muted: Icon { text: "\u{F036D}"; font-size: 17px; color: root.alert; }
-        if root.speaker-muted: Icon { text: "\u{F075F}"; font-size: 17px; color: root.warn; }
-        if root.dnd: Icon { text: "\u{F009B}"; font-size: 17px; color: root.soft; }
-        if root.problem: VerticalLayout {
-            alignment: center;
-            Icon { text: "\u{F092B}"; font-size: 18px; color: root.warn; }
-        }
-        if root.bell-on: Rectangle {
-            width: 34px;
-            Icon { text: "\u{F009A}"; font-size: 18px; color: root.soft; }
-            Rectangle {
-                x: 18px; y: (parent.height - 26px) / 2; width: max(15px, nt.preferred-width + 8px); height: 15px; border-radius: 7.5px;
-                background: Theme.accent;
-                nt := Text { text: root.notes > 9 ? "9+" : root.notes; font-size: 10px; font-weight: 700; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+    // touches (a static area over the resting capsule, so the drag is measured against the screen): a tap on a timer
+    // opens its sheet, on "+N" the timers page; a drag flicks
+    lp0 := Text { visible: false; text: root.t0.label; font-size: 13px; font-weight: 500; }
+    lp1 := Text { visible: false; text: root.t1.label; font-size: 13px; font-weight: 500; }
+    tp0 := Text { visible: false; text: root.t0.text; font-size: 15px; font-weight: 600; }
+    tp1 := Text { visible: false; text: root.t1.text; font-size: 15px; font-weight: 600; }
+    property <length> w0: 44px + (root.t0.label != "" ? min(92px, lp0.preferred-width) + 6px : 0px)
+        + max(tp0.preferred-width, root.t0.hours ? probe-h.preferred-width : probe-m.preferred-width);
+    property <length> w1: 44px + (root.t1.label != "" ? min(92px, lp1.preferred-width) + 6px : 0px)
+        + max(tp1.preferred-width, root.t1.hours ? probe-h.preferred-width : probe-m.preferred-width);
+    if root.shown && root.flying == 0: TouchArea {
+        x: root.rest-x; y: root.rest-y - 6px; width: root.rest-w; height: 40px;
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.down { root.press(self.mouse-y); }
+            if ev.kind == PointerEventKind.up {
+                root.release(self.mouse-x < root.w0 || root.timers.length == 1 ? root.t0.index
+                    : self.mouse-x < root.w0 + 1px + root.w1 || root.timers.length == 2 ? root.t1.index : -1);
             }
-            TouchArea { x: -8px; y: -6px; width: parent.width + 16px; height: parent.height + 12px; clicked => { Act.act("notes.open", ""); } }
+            if ev.kind == PointerEventKind.cancel { root.release(-2); }
         }
+        moved => { root.move(self.mouse-y, self.pressed-y); }
     }
 }
 
@@ -666,9 +798,9 @@ export component ClockFace inherits Rectangle {
             transform-scale-x: min(root.width-k, (root.width - 52px) / max(1px, r0.preferred-width), 1 + 28px / ((root.width - 52px) / 2));
             r0 := HorizontalLayout {
                 alignment: root.clock-only ? center : start;
-                Text { text: root.data.hh; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+                RollPair { text: root.data.hh; font-size: 128px; font-weight: root.weight; color: Theme.text; }
                 Text { text: ":"; font-size: 128px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
-                Text { text: root.data.mm; font-size: 128px; font-weight: root.weight; color: Theme.text; }
+                RollPair { text: root.data.mm; font-size: 128px; font-weight: root.weight; color: Theme.text; }
             }
         }
         if root.show-date: Text { text: root.data.date; font-size: 22px; color: Theme.muted; }
@@ -705,9 +837,9 @@ export component ClockFace inherits Rectangle {
             transform-scale-x: min(root.width-k, (root.width - 24px) / max(1px, r1.preferred-width));
             r1 := HorizontalLayout {
                 alignment: center;
-                Text { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+                RollPair { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; }
                 Text { text: ":"; font-size: 176px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
-                Text { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+                RollPair { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; }
             }
         }
         if root.show-seconds: HorizontalLayout {
@@ -856,9 +988,9 @@ export component ClockFace inherits Rectangle {
             transform-scale-x: min(root.width-k, root.wander-w / max(1px, r6.preferred-width));
             r6 := HorizontalLayout {
                 alignment: center;
-                Text { text: root.data.hh; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+                RollPair { text: root.data.hh; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
                 Text { text: ":"; font-size: 84px; font-weight: root.weight; color: root.accent.with-alpha(0.85); opacity: root.colon; }
-                Text { text: root.data.mm; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
+                RollPair { text: root.data.mm; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
             }
         }
         if root.show-date || root.show-weather: InfoLine { data: root.data; show-date: root.show-date; show-weather: root.show-weather; size: 16px; color: Theme.faint; }
@@ -912,119 +1044,6 @@ export struct WeatherData {
     moon-phase: float,   // 0 new, 0.5 full
     sun-veil: float,     // 0..1 how much the sun is behind a widget (the app computes it)
     moon-veil: float,
-}
-
-// Animated sky for the mood variant (cheap shapes, driven by the clock).
-component Sky inherits Rectangle {
-    in property <int> mood;
-    property <float> t: (animation-tick() - Clock.base) / 1ms / 1000;
-    property <bool> night: root.mood == 7;
-    // Background per condition.
-    background: root.mood == 0 ? @linear-gradient(180deg, #2f7fd6 0%, #8cc6ff 100%)
-        : root.mood == 1 ? @linear-gradient(180deg, #3f6f9f 0%, #a7c6e2 100%)
-        : root.mood == 2 ? @linear-gradient(180deg, #4d5966 0%, #8c99a6 100%)
-        : root.mood == 3 ? @linear-gradient(180deg, #1f2c3a 0%, #46596c 100%)
-        : root.mood == 4 ? @linear-gradient(180deg, #7d90a6 0%, #dbe5ef 100%)
-        : root.mood == 5 ? @linear-gradient(180deg, #6f7780 0%, #b9c0c6 100%)
-        : root.mood == 6 ? @linear-gradient(180deg, #3b6a86 0%, #94b9cd 100%)
-        : root.mood == 7 ? @linear-gradient(180deg, #070d24 0%, #1b2a55 100%)
-        : @linear-gradient(180deg, #14161f 0%, #3a3f55 100%);
-    clip: true;
-
-    // Sun with slowly turning rays (sunny, partly cloudy)
-    if root.mood == 0 || root.mood == 1: Rectangle {
-        x: root.width - 150px; y: -60px; width: 240px; height: 240px;
-        Rectangle {
-            x: 60px; y: 60px; width: 120px; height: 120px; border-radius: 60px;
-            background: #ffe58a.with-alpha(0.18 + 0.06 * Math.sin(root.t * 90deg));
-        }
-        for i in 12: Path {
-            width: 240px; height: 240px; viewbox-width: 240; viewbox-height: 240;
-            stroke: #fff3b0.with-alpha(0.55);
-            stroke-width: 4px;
-            commands: "M " + (120 + 70 * Math.sin((i * 30 + root.t * 8) * 1deg)) + " " + (120 - 70 * Math.cos((i * 30 + root.t * 8) * 1deg))
-                + " L " + (120 + 100 * Math.sin((i * 30 + root.t * 8) * 1deg)) + " " + (120 - 100 * Math.cos((i * 30 + root.t * 8) * 1deg));
-        }
-        Rectangle {
-            x: 80px; y: 80px; width: 80px; height: 80px; border-radius: 40px;
-            background: #ffd84d;
-        }
-    }
-    // Moon and twinkling stars (clear night)
-    if root.night: Rectangle {
-        for i in 24: Rectangle {
-            x: Math.mod(i * 197 + 31, 470) * 1px;
-            y: Math.mod(i * 113 + 17, 260) * 1px;
-            width: Math.mod(i, 3) == 0 ? 3px : 2px;
-            height: self.width;
-            border-radius: 1.5px;
-            background: #ffffff;
-            opacity: 0.35 + 0.65 * abs(Math.sin((root.t * 0.8 + i * 0.37) * 180deg));
-        }
-        Rectangle {
-            x: root.width - 130px; y: 50px; width: 70px; height: 70px; border-radius: 35px;
-            background: #f4f1de;
-            Rectangle { x: 18px; y: -8px; width: 70px; height: 70px; border-radius: 35px; background: #101a3c; }
-        }
-    }
-    // Drifting clouds (partly cloudy, cloudy, rain, thunder, snow)
-    if root.mood == 1 || root.mood == 2 || root.mood == 3 || root.mood == 4 || root.mood == 8: Rectangle {
-        for i in 4: Rectangle {
-            property <float> speed: 6 + i * 4;
-            property <length> cw: (140 + Math.mod(i * 37, 60)) * 1px;
-            x: (Math.mod(root.t * self.speed + i * 170, 480 + 200) - 200) * 1px;
-            y: (20 + i * 46) * 1px;
-            width: self.cw; height: self.cw * 0.45;
-            opacity: root.mood == 1 ? 0.55 : 0.75;
-            Rectangle { x: 0; y: parent.height * 0.45; width: parent.width; height: parent.height * 0.55; border-radius: parent.height * 0.27;
-                background: root.mood == 3 || root.mood == 8 ? #5b6876 : #f2f5f8; }
-            Rectangle { x: parent.width * 0.18; y: parent.height * 0.12; width: parent.width * 0.38; height: parent.width * 0.38; border-radius: parent.width * 0.19;
-                background: root.mood == 3 || root.mood == 8 ? #5b6876 : #f2f5f8; }
-            Rectangle { x: parent.width * 0.45; y: 0; width: parent.width * 0.42; height: parent.width * 0.42; border-radius: parent.width * 0.21;
-                background: root.mood == 3 || root.mood == 8 ? #5b6876 : #f2f5f8; }
-        }
-    }
-    // Rain streaks (rain, thunder)
-    if root.mood == 3 || root.mood == 8: Rectangle {
-        for i in 40: Rectangle {
-            x: (Math.mod(i * 73 + root.t * 60, 520) - 20) * 1px;
-            y: (Math.mod(i * 137 + root.t * 420, 540) - 30) * 1px;
-            width: 2px; height: 16px; border-radius: 1px;
-            background: #cfe3ff.with-alpha(0.38);
-        }
-    }
-    // Lightning flash every ~4 s (thunder)
-    if root.mood == 8: Rectangle {
-        background: #ffffff.with-alpha(Math.mod(root.t, 4) < 0.12 ? 0.55 : (Math.mod(root.t, 4) < 0.24 ? 0.15 : 0));
-    }
-    // Snow (snow)
-    if root.mood == 4: Rectangle {
-        for i in 45: Rectangle {
-            x: (Math.mod(i * 97, 480) + 10 * Math.sin((root.t * 40 + i * 50) * 1deg)) * 1px;
-            y: (Math.mod(i * 151 + root.t * (30 + Math.mod(i, 5) * 8), 520) - 20) * 1px;
-            width: Math.mod(i, 3) == 0 ? 6px : 4px; height: self.width; border-radius: self.width / 2;
-            background: #ffffff.with-alpha(0.85);
-        }
-    }
-    // Fog bands drifting slowly
-    if root.mood == 5: Rectangle {
-        for i in 5: Rectangle {
-            x: (-80 + 60 * Math.sin((root.t * 10 + i * 70) * 1deg)) * 1px;
-            y: (70 + i * 78) * 1px;
-            width: root.width + 160px; height: 46px; border-radius: 23px;
-            background: #ffffff.with-alpha(0.16 + 0.05 * Math.sin((root.t * 20 + i * 40) * 1deg));
-        }
-    }
-    // Wind streaks racing across
-    if root.mood == 6: Rectangle {
-        for i in 12: Rectangle {
-            property <float> speed: 220 + Math.mod(i * 53, 160);
-            x: (Math.mod(root.t * self.speed + i * 97, 640) - 160) * 1px;
-            y: (40 + Math.mod(i * 71, 400)) * 1px;
-            width: (60 + Math.mod(i * 29, 90)) * 1px; height: 2px; border-radius: 1px;
-            background: #ffffff.with-alpha(0.35);
-        }
-    }
 }
 
 // Weather panel. variant: 0 full, 1 mood (animated sky), 2 compact, 3 chart.

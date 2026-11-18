@@ -93,6 +93,9 @@ const PAGER_FINISH = [
   { id: "clear", name: "Clear", c: "linear-gradient(135deg,#c9d6df,#8fa3b0)" }, { id: "offwhite", name: "Off-white", c: "#d5d0c3" },
 ];
 const TIMER_FUNCTIONS = [["timer", "Timers"], ["alarm", "Alarms"], ["stopwatch", "Stopwatch"]];
+// the stopwatch's and the alarms' own looks (spec 24)
+const SW_LOOKS = ["Plain", "Chronograph", "Timing tower"];
+const ALARM_LOOKS = ["Plain"];
 const VOICE_LOOKS = ["Plain", "Terminal", "Comic", "Oscilloscope"];
 
 // Sounds. Stored values: "auto" (the place's default), "lib:<id>" (a PanelOS sound, {STATIC}/sounds/<id>.mp3
@@ -189,7 +192,7 @@ const DND_ITEMS = [
 const DND_DEFAULT_ALLOW = { alarms: true, timers: true, status: true, ring: true, voice: true, calls: true };
 const DEFAULT_SCREENSAVER = { when: "dark", lux: 3, from: "22:00", to: "06:00", light_entity: "", face: 1, seconds: true, date: true, weather: true, next: true, weight: 600, width: 100, speed: 20, colour: "" };
 const DEFAULT_DND = { mode: "off", from: "22:00", to: "07:00", allow: DND_DEFAULT_ALLOW };
-const DEFAULT_POPUPS = { kind: "card", sound: true, seconds: 10 };
+const DEFAULT_POPUPS = { kind: "card", sound: true, seconds: 10, until: false };
 
 const SECTIONS = [
   { id: "overview", name: "Overview", icon: "monitor-dashboard" },
@@ -643,6 +646,7 @@ button { cursor: pointer; }
 .seg button.on { background: var(--text); color: var(--ground); }
 .seg button:disabled { opacity: .4; cursor: default; }
 .sel { position: relative; max-width: 100%; min-width: 0; flex: 0 1 auto; display: inline-block; }
+.sel.disabled { opacity: .45; pointer-events: none; }
 .sel select { appearance: none; -webkit-appearance: none; max-width: 100%; font-size: 14px; color: var(--text); background: var(--raised); border: 1px solid transparent; border-radius: 12px; padding: 9px 36px 9px 14px; }
 .sel.full, .sel.full select { width: 100%; }
 .sel select:focus-visible, .inp:focus-visible, button:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
@@ -681,19 +685,53 @@ input[type=range]:disabled { opacity: .4; cursor: default; }
 .btn.small { padding: 5px 12px; font-size: 13px; }
 .btn.pickbtn { background: var(--raised); border-color: transparent; border-radius: 14px; padding: 7px 10px 7px 12px; font-size: 14px; overflow-wrap: anywhere; }
 .btn.pickbtn > .mdi:last-child { color: var(--muted); }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 100%; }
-.chip { display: inline-flex; align-items: center; gap: 6px; background: var(--raised); border: 1px solid transparent; border-radius: 18px; padding: 6px 14px; font-size: 14px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; text-align: left; }
-.chip .x { border: 0; background: none; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center; color: var(--muted); margin-right: -8px; padding: 0; flex: none; }
-.chip .x:hover { color: var(--signal); }
-.chip .x .mdi { --mdc-icon-size: 16px; }
-.chip > .mdi { --mdc-icon-size: 17px; }
-.chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
-button.chip:hover { border-color: var(--signal-line); }
-.chip.on { background: var(--signal-soft); border-color: var(--signal); }
-.chip.on > .mdi { color: var(--signal); }
-.chip.add { background: none; border: 1px dashed var(--line); color: var(--muted); }
-.chip.add:hover { color: var(--text); border-color: var(--signal-line); }
-.chip.small-chip { padding: 3px 11px; font-size: 13px; }
+.ddw { position: relative; display: inline-block; width: fit-content; max-width: 100%; min-width: 0; }
+.ddw.full { display: block; width: 100%; }
+.ddw.full .ddm { left: 0; right: auto; }
+.dd { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; height: 38px; font-size: 14px; color: var(--text); background: var(--raised); border: 1px solid transparent; border-radius: 12px; padding: 0 10px 0 14px; text-align: left; }
+.dd.full { width: 100%; }
+.dd:hover, .dd.open { border-color: var(--signal-line); }
+.dd:disabled { opacity: .45; cursor: default; }
+.dd .v { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dd .v.none { color: var(--muted); }
+.dd .more { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--line); border-radius: 9px; padding: 0 7px; line-height: 18px; flex: none; }
+.dd > .mdi { color: var(--muted); flex: none; }
+.ddm { position: absolute; z-index: 30; top: calc(100% + 6px); right: 0; min-width: 100%; width: max-content; max-width: min(420px, 92vw); background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.22); animation: ddin .14s ease-out; transform-origin: top left; }
+.ddm.up { top: auto; bottom: calc(100% + 6px); transform-origin: bottom left; }
+@keyframes ddin { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+.ddl { max-height: 288px; overflow-y: auto; display: flex; flex-direction: column; }
+.ddr { display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 10px; border: 0; background: none; border-radius: 10px; font-size: 14px; color: var(--text); text-align: left; }
+.ddr:hover, .ddr:focus-visible { background: var(--raised); outline: none; }
+.ddr.on { font-weight: 600; }
+.ddr > .mdi { color: var(--signal); --mdc-icon-size: 18px; flex: none; }
+.ddr .sp { width: 18px; flex: none; }
+.ddr .t { min-width: 0; overflow-wrap: anywhere; }
+.ddr:disabled { opacity: .4; }
+.ddr .cb { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--faint); flex: none; display: grid; place-items: center; transition: background .16s, border-color .16s; }
+.ddr .cb.on { background: var(--signal); border-color: var(--signal); animation: cbpop .23s cubic-bezier(.34,1.6,.64,1); }
+.ddr .cb .mdi { --mdc-icon-size: 14px; color: #F5F3EE; }
+@keyframes cbpop { from { transform: scale(.6); } to { transform: none; } }
+.ddbar { display: flex; gap: 4px; padding: 0 0 6px; border-bottom: 1px solid var(--line); margin-bottom: 6px; }
+.dds { margin-bottom: 6px; }
+.dddone { display: none; padding-top: 6px; justify-content: flex-end; }
+.wdays { display: flex; gap: 6px; flex-wrap: wrap; }
+.wd { width: 32px; height: 32px; border-radius: 50%; border: 0; background: var(--raised); color: var(--muted); font-size: 13px; font-weight: 500; display: grid; place-items: center; padding: 0; transition: background .16s, color .16s; }
+.wd.on { background: var(--text); color: var(--ground); animation: cbpop .23s cubic-bezier(.34,1.6,.64,1); }
+/* the touch density (the Home Assistant app on a phone): the panel's sizes (spec 28) */
+@media (pointer: coarse) {
+  .dd { height: 48px; font-size: 15px; border-radius: 14px; }
+  .ddr { min-height: 48px; font-size: 15px; }
+  .ddr .cb { width: 22px; height: 22px; border-radius: 6px; }
+  .dddone { display: flex; }
+  .seg { padding: 2px; border-radius: 20px; }
+  .seg button { min-height: 36px; font-size: 15px; padding: 8px 16px; }
+  .switch { width: 56px; height: 32px; }
+  .switch span::after { width: 24px; height: 24px; left: 3px; top: 3px; }
+  .switch input:checked + span::after { transform: translateX(24px); }
+  .btn { min-height: 48px; font-size: 16px; font-weight: 600; padding: 0 22px; }
+  .btn.small { min-height: 36px; font-size: 14px; padding: 0 16px; }
+  .wd { width: 40px; height: 40px; }
+}
 .badge { font-size: 11.5px; line-height: 18px; padding: 0 7px; border-radius: 9px; background: var(--raised); color: var(--muted); font-weight: 500; white-space: nowrap; }
 .badge.lit { background: var(--signal); color: var(--on-signal); font-weight: 600; }
 .tag { font-size: 12px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
@@ -913,9 +951,6 @@ button.chip:hover { border-color: var(--signal-line); }
 .picto img { width: 34px; height: 34px; }
 .picto .mdi { --mdc-icon-size: 26px; }
 .picto.on { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--signal); }
-.pchips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
-.pchip { font-size: 11.5px; border-radius: 6px; padding: 1px 6px; background: var(--raised); color: var(--muted); overflow-wrap: anywhere; }
-.pchip.on { background: var(--signal-soft); color: var(--text); }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) 250px; gap: 22px; align-items: start; }
 .split .stick { position: sticky; top: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; }
 :host([size=narrow]) .split { grid-template-columns: minmax(0, 1fr); }
@@ -1000,8 +1035,6 @@ button.chip:hover { border-color: var(--signal-line); }
 .alarm.off .tm, .alarm.off .d { opacity: .5; }
 :host([size=narrow]) .alarm, :host([size=narrow]) .alarm .open { gap: 12px; }
 :host([size=narrow]) .alarm .tm { font-size: 22px; }
-.chips.days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
-.chips.days .chip { justify-content: center; text-align: center; padding: 6px 2px; }
 .inp.alarm-time { width: 210px; max-width: 100%; font-size: 34px; text-align: center; font-family: "PanelOS Heading", "Space Grotesk", sans-serif; font-variant-numeric: tabular-nums; padding: 8px 12px; }
 .only-narrow { display: none; }
 :host([size=narrow]) .only-narrow { display: flex; }
@@ -1021,13 +1054,15 @@ class PanelOSPage extends HTMLElement {
     const follow = () => { if (this._ui && (this._ui.info || this._ui.allInfo)) requestAnimationFrame(() => this._placePops()); };
     this.shadowRoot.addEventListener("scroll", follow, true);
     window.addEventListener("resize", follow);
+    // an open dropdown closes on a click anywhere else (its field and menu keep their clicks)
+    this.shadowRoot.addEventListener("click", () => { if (this._ui && this._ui.dd) { this._ui.dd = null; this._ui.ddq = ""; this._render(); } });
     this._data = null;
     this._reg = null; // registries from the websocket API when hass has none
     this._path = "";
     this._routed = false;
     this._prefix = "/panelos";
     this._static = "/panelos_static";
-    this._ui = { info: null, more: {}, sheet: null, armed: null, sel: null, allMore: false, playing: null, uploading: null, delSounds: new Set() };
+    this._ui = { info: null, more: {}, sheet: null, armed: null, sel: null, allMore: false, playing: null, uploading: null, delSounds: new Set(), dd: null, ddq: "" };
     // sound previews: the one playing, and the uploaded sounds fetched so far (id -> object URL)
     this._audio = null;
     this._soundUrls = {};
@@ -2130,12 +2165,106 @@ class PanelOSPage extends HTMLElement {
       }, text)));
   }
 
-  _select(options, value, onchange, { label = "Choose", full = false } = {}) {
+  _select(options, value, onchange, { label = "Choose", full = false, disabled = false } = {}) {
+    return this._dropdown(options, value, onchange, { label, full, disabled });
+  }
+
+  // A dropdown (spec 28.5, 28.6): a field with the chosen name (several: as many as fit, then "+N") and a chevron; the
+  // menu opens under it (above when there is no room), the chosen row ticked. Multi: a checkbox per row, it stays open,
+  // "All" / "None" from 5 options, "Done" on touch. Over 12 options a search field. Keys: ↓ / Enter / Space open,
+  // ↑ / ↓ move, Enter picks, Esc closes, a letter jumps to the next match.
+  //   single: options [[value, label, disabled?]], value, onchange(value)
+  //   multi:  items [{ on, label, onclick }] (each row toggles itself)
+  _dd({ label = "Choose", key = null, full = false, disabled = false, multi = false }, rows, current, onpick) {
+    const id = key || `dd:${label}:${rows.length}`;
+    const open = this._ui.dd === id && !disabled;
+    const chosen = multi ? rows.filter((r) => r.on) : rows.filter((r) => r.value === current);
+    const q = open && rows.length > 12 ? (this._ui.ddq || "").toLowerCase() : "";
+    const shown = q ? rows.filter((r) => String(r.label).toLowerCase().includes(q)) : rows;
+    const close = () => { this._ui.dd = null; this._ui.ddq = ""; this._render(); };
+    // (the state at the click, not at the render: a click may come before the next render)
+    const toggle = (e) => { e.stopPropagation(); const was = this._ui.dd === id; this._ui.dd = was ? null : id; this._ui.ddq = ""; this._render(); if (!was) requestAnimationFrame(() => this._ddPlace(id)); };
+    const pick = (r) => {
+      if (r.disabled) return;
+      if (multi) { r.onclick(); return; }
+      this._ui.dd = null; this._ui.ddq = "";
+      onpick(r.value);
+    };
+    const keys = (e) => {
+      const list = [...(e.currentTarget.closest(".ddw")?.querySelectorAll(".ddr") || [])];
+      const at = list.indexOf(document.activeElement);
+      if (e.key === "Escape") { e.preventDefault(); close(); return; }
+      const isOpen = this._ui.dd === id;
+      if (!isOpen && (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggle(e); requestAnimationFrame(() => this._ddFocus(id)); return; }
+      if (!isOpen) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); list[Math.max(0, Math.min(list.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)))]?.focus(); return; }
+      if (e.key.length === 1 && /\S/.test(e.key) && !e.target.matches("input")) {
+        const k = e.key.toLowerCase();
+        const next = list.slice(at + 1).concat(list.slice(0, at + 1)).find((b) => b.textContent.trim().toLowerCase().startsWith(k));
+        if (next) next.focus();
+      }
+    };
+    const names = chosen.map((r) => r.label);
+    const field = h("button", { class: `dd${open ? " open" : ""}${full ? " full" : ""}`, type: "button", disabled, "aria-haspopup": "listbox", "aria-expanded": open ? "true" : "false", "aria-label": label, onclick: toggle, onkeydown: keys },
+      h("span", { class: `v${names.length ? "" : " none"}` }, names.length ? (multi ? names.slice(0, 2) : names).join(", ") : (multi ? "None" : "Choose")),
+      multi && names.length > 2 ? h("span", { class: "more" }, `+${names.length - 2}`) : null,
+      icon(open ? "chevron-up" : "chevron-down"));
+    const menu = open ? h("div", { class: "ddm", role: "listbox", "aria-multiselectable": multi ? "true" : null, onclick: (e) => e.stopPropagation(), onkeydown: keys },
+      rows.length > 12 ? h("input", { class: "inp dds", value: this._ui.ddq || "", placeholder: "Search", "aria-label": "Search", oninput: (e) => { this._ui.ddq = e.target.value; this._renderNow(); requestAnimationFrame(() => { const f = this.shadowRoot?.querySelector(`.ddw[data-dd="${CSS.escape(id)}"] .dds`); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }); } }) : null,
+      multi && rows.length >= 5 ? h("div", { class: "ddbar" },
+        this._btn("All", () => rows.filter((r) => !r.on && !r.disabled).forEach((r) => r.onclick()), { cls: "small ghost" }),
+        this._btn("None", () => rows.filter((r) => r.on).forEach((r) => r.onclick()), { cls: "small ghost" })) : null,
+      h("div", { class: "ddl" }, shown.map((r) => h("button", { class: `ddr${(multi ? r.on : r.value === current) ? " on" : ""}`, type: "button", role: "option", disabled: Boolean(r.disabled),
+        "aria-selected": (multi ? r.on : r.value === current) ? "true" : "false", onclick: () => pick(r) },
+        multi ? h("span", { class: `cb${r.on ? " on" : ""}` }, r.on ? icon("check") : null) : (r.value === current ? icon("check") : h("span", { class: "sp" })),
+        h("span", { class: "t" }, r.label)))),
+      multi ? h("div", { class: "dddone" }, this._btn("Done", close, { cls: "primary" })) : null) : null;
+    return h("div", { class: `ddw${full ? " full" : ""}`, "data-dd": id }, field, menu);
+  }
+
+  // the open menu above its field when there is no room below
+  _ddPlace(id) {
+    const w = this.shadowRoot?.querySelector(`.ddw[data-dd="${CSS.escape(id)}"]`);
+    const m = w?.querySelector(".ddm");
+    if (!w || !m) return;
+    const r = w.getBoundingClientRect();
+    const below = window.innerHeight - r.bottom, above = r.top;
+    m.classList.toggle("up", m.offsetHeight + 12 > below && above > below);
+    m.querySelector(".ddr.on")?.scrollIntoView({ block: "nearest" });
+  }
+
+  _ddFocus(id) {
+    const w = this.shadowRoot?.querySelector(`.ddw[data-dd="${CSS.escape(id)}"]`);
+    (w?.querySelector(".ddr.on") || w?.querySelector(".ddr"))?.focus();
+  }
+
+  // A single choice: segmented when it fits (up to 3 options, or 4 with labels of up to 10 characters), else a dropdown
+  _choice(options, value, onchange, { label = "Choose", full = false } = {}) {
+    const list = options.map((o) => (Array.isArray(o) ? o : [o, o]));
+    const fits = list.length <= 3 ? list.every(([, l]) => String(l).length <= 16) : list.length === 4 && list.every(([, l]) => String(l).length <= 10);
+    if (fits) return this._seg(list, value, onchange, { label });
+    return this._dropdown(list, value, onchange, { label, full });
+  }
+
+  _dropdown(options, value, onchange, { label = "Choose", full = false, disabled = false, key = null } = {}) {
     const list = options.map((o) => (Array.isArray(o) ? o : [o, o]));
     if (value != null && value !== "" && !list.some(([v]) => v === value)) list.push([value, value]);
-    return h("div", { class: `sel${full ? " full" : ""}` },
-      h("select", { "aria-label": label, onchange: (e) => { const v = e.target.value; e.target.blur(); onchange(v); } }, list.map(([v, l, dis]) => h("option", { value: v, selected: v === value, disabled: Boolean(dis) }, l))),
-      icon("chevron-down"));
+    return this._dd({ label, full, disabled, key }, list.map(([v, l, dis]) => ({ value: v, label: l, disabled: Boolean(dis) })), value, onchange);
+  }
+
+  // several choices: rows of { on, label, onclick } (see _mi)
+  _multi({ label = "Choose", key = null, full = true } = {}, items) {
+    return h("div", { class: "below" }, this._dd({ label, key, full, multi: true }, items.filter(Boolean), null, null));
+  }
+
+  _mi(on, label, onclick) {
+    return { on: Boolean(on), label, onclick };
+  }
+
+  // A weekday row (spec 28.10): seven round toggles with two-letter names
+  _weekdays(days, onchange) {
+    return h("div", { class: "wdays", role: "group", "aria-label": "Days" }, DAY_NAMES.map((n, k) => h("button", {
+      class: `wd${days[k] ? " on" : ""}`, type: "button", "aria-pressed": days[k] ? "true" : "false", "aria-label": n, onclick: () => onchange(k) }, n.slice(0, 2))));
   }
 
   // The letters' weight: a slider over the four weights (the nearest one to a stored value).
@@ -2177,12 +2306,6 @@ class PanelOSPage extends HTMLElement {
     const name = current ? this._ename(current) : none || "Choose";
     return h("button", { class: "btn small pickbtn", "aria-label": `${title}: ${name}`, onclick: () => this._openSheet({ kind: "pick", title, domains, current, none, filter, exclude, panel: p?.entry_id, onPick, back }) },
       current ? icon(this._eicon(current)) : null, h("span", null, name), icon("chevron-down"));
-  }
-
-  // One of a few choices as chips that wrap (panels, rooms, screens).
-  _radioChips(options, value, onchange) {
-    return h("div", { class: "chips", role: "radiogroup" }, options.map(([v, label]) =>
-      h("button", { class: `chip${v === value ? " on" : ""}`, role: "radio", "aria-checked": v === value ? "true" : "false", onclick: () => onchange(v) }, v === value ? icon("check") : null, h("span", null, label))));
   }
 
   _times(from, to, onchange) {
@@ -2263,10 +2386,6 @@ class PanelOSPage extends HTMLElement {
     return h("div", { class: "swatches" }, items.map((it) =>
       h("button", { class: `sw-lab${it.id === value ? " on" : ""}`, onclick: () => onpick(it.id), "aria-pressed": it.id === value ? "true" : "false" },
         h("span", { class: `sw${wood ? " wood" : ""}${it.id === value ? " on" : ""}`, style: { background: it.c } }), it.name)));
-  }
-
-  _chipToggle(on, label, onclick, extra = null) {
-    return h("button", { class: `chip${on ? " on" : ""}`, onclick, "aria-pressed": on ? "true" : "false" }, on ? icon("check") : extra, h("span", null, label));
   }
 
   // -- sounds ------------------------------------------------------------------------
@@ -2718,7 +2837,7 @@ class PanelOSPage extends HTMLElement {
       info: "The panel can show a Home Assistant dashboard instead of its own pages, custom cards included. It is logged in as its own Home Assistant user: dashboards for administrators only, or views shown only to some users, stay empty on it. \"Chosen on the panel\" leaves the choice to the panel's own setting.",
     },
     modes.length ? this._row("The panel shows", this._seg(modes.map((m) => [m, m]), s.display_mode, (v) => this._command(p, "display_mode", v), { label: "Display mode" })) : null,
-    this._row("Dashboard", this._radioChips((this._data.dashboards || []).map((d) => [d.value, d.label]), st.dashboard || "", (v) => this._options(p, { dashboard: v }, { optimistic: (x) => { x.dashboard = v; } })), { stack: true }),
+    this._row("Dashboard", this._dropdown((this._data.dashboards || []).map((d) => [d.value, d.label]), st.dashboard || "", (v) => this._options(p, { dashboard: v }, { optimistic: (x) => { x.dashboard = v; } }), { label: "Dashboard" })),
     this._row("Header", this._toggle(st.show_header, (v) => this._options(p, { show_header: v }, { optimistic: (x) => { x.show_header = v; } }), { label: "Header" })),
     this._row("Sidebar", this._toggle(st.show_sidebar, (v) => this._options(p, { show_sidebar: v }, { optimistic: (x) => { x.show_sidebar = v; } }), { label: "Sidebar" })),
     this._more(`dash:${p.entry_id}`,
@@ -2928,10 +3047,10 @@ class PanelOSPage extends HTMLElement {
         h("button", { class: "ib", "aria-label": "Move up", disabled: k === 0, onclick: () => { const n = [...ents]; n.splice(k - 1, 0, n.splice(k, 1)[0]); save(n); } }, icon("arrow-up")),
         h("button", { class: "ib", "aria-label": `Remove ${this._ename(id)}`, onclick: () => save(ents.filter((x) => x !== id)) }, icon("close"))),
       { lead: h("span", { class: "lead" }, icon(leadIcon || this._eicon(id))), keep: true, cls: k === 0 ? "first" : "" }))) : h("div", { class: "empty" }, "Nothing chosen yet."),
-      ents.length < most ? h("div", { class: "below" }, h("button", { class: "chip add", onclick: () => this._openSheet({
+      ents.length < most ? h("div", { class: "below" }, this._btn(addLabel, () => this._openSheet({
         kind: "pick", title: addLabel, domains, exclude: ents, panel: p.entry_id,
         onPick: (id) => { const fresh = this._pages(p)[i]; const cur = (fresh.entities || []).filter((e) => domains.includes(e.split(".")[0])); save([...cur, id]); },
-      }) }, icon("plus"), addLabel)) : null,
+      }), { cls: "small", icon: "plus" })) : null,
     ];
   }
 
@@ -2970,12 +3089,14 @@ class PanelOSPage extends HTMLElement {
     const fns = Array.isArray(o.functions) && o.functions.length ? o.functions : TIMER_FUNCTIONS.map(([k]) => k);
     return [this._card("Options", {},
       this._row("On the panel", null, { stack: true, info: "Which tabs the page has. At least one stays." }),
-      h("div", { class: "chips below" }, TIMER_FUNCTIONS.map(([k, l]) => this._chipToggle(fns.includes(k), l, () => {
+      TIMER_FUNCTIONS.map(([k, l]) => this._row(l, this._toggle(fns.includes(k), () => {
         const next = fns.includes(k) ? fns.filter((x) => x !== k) : [...fns, k];
         if (!next.length) { this._toast("At least one stays"); return; }
         this._setPageOption(p, i, "functions", TIMER_FUNCTIONS.map(([x]) => x).filter((x) => next.includes(x)));
-      }))),
+      }, { label: l }))),
       (page.variant || 0) === 3 ? this._row("Scene", this._seg(SW_SCENES.map((n, k) => [k, n]), Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", v), { label: "Scene" })) : null,
+      fns.includes("stopwatch") ? this._row("Stopwatch look", this._dropdown(SW_LOOKS.map((n, k) => [k, n]), Number.isInteger(o.sw_look) ? o.sw_look : 0, (v) => this._setPageOption(p, i, "sw_look", v), { label: "Stopwatch look" })) : null,
+      fns.includes("alarm") && ALARM_LOOKS.length > 1 ? this._row("Alarm look", this._dropdown(ALARM_LOOKS.map((n, k) => [k, n]), Number.isInteger(o.alarm_look) ? o.alarm_look : 0, (v) => this._setPageOption(p, i, "alarm_look", v), { label: "Alarm look" })) : null,
       this._soundRow("Timer sound", o.sound, { def: TIMER_LOOK_SOUND[page.variant || 0] || TIMER_LOOK_SOUND[0], defNote: "This look's own sound", title: "Timer sound", p },
         (v) => this._setPageOption(p, i, "sound", v), { info: "Each look has its own sound; another one, or your own, can be chosen." }),
       this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null }),
@@ -3134,7 +3255,7 @@ class PanelOSPage extends HTMLElement {
     const all = this._ents(["calendar"], { p });
     const wall = Array.isArray(o.wall_calendars) ? o.wall_calendars : ents;
     return [this._card("Calendars", { info: "The calendars the page shows." },
-      all.length ? h("div", { class: "chips below", style: { paddingTop: "10px" } }, all.map((e) => this._chipToggle(ents.includes(e.id), e.name, () => {
+      all.length ? this._multi({ label: "Calendars", key: `cals:${p.entry_id}:${i}` }, all.map((e) => this._mi(ents.includes(e.id), e.name, () => {
         const next = ents.includes(e.id) ? ents.filter((x) => x !== e.id) : [...ents, e.id];
         if (next.length > 8) { this._toast("At most 8 calendars"); return; }
         const opts = { ...o };
@@ -3142,7 +3263,7 @@ class PanelOSPage extends HTMLElement {
         this._setPage(p, i, { entities: next, options: opts });
       }))) : h("div", { class: "empty" }, "No calendars in Home Assistant."),
       (page.variant || 0) === 3 && ents.length ? this._row("Written on the wall calendar", null, { stack: true, info: "Calendars with many daily entries (routines) would fill every day; leave them off here." }) : null,
-      (page.variant || 0) === 3 && ents.length ? h("div", { class: "chips below" }, ents.map((id) => this._chipToggle(wall.includes(id), this._ename(id), () => {
+      (page.variant || 0) === 3 && ents.length ? this._multi({ label: "Written on the wall calendar", key: `wall:${p.entry_id}:${i}` }, ents.map((id) => this._mi(wall.includes(id), this._ename(id), () => {
         const next = wall.includes(id) ? wall.filter((x) => x !== id) : [...wall, id];
         this._setPageOption(p, i, "wall_calendars", ents.filter((x) => next.includes(x)));
       }))) : null)];
@@ -3256,7 +3377,7 @@ class PanelOSPage extends HTMLElement {
         this._pageEntityRow(p, i, "Weather from", "weather", "The panel's weather"),
         hasKind(7) ? this._pageEntityRow(p, i, "Player", "media_player", "The panel's player") : null,
         hasKind(3) ? this._row("Calendars for the next event", null, { stack: true }) : null,
-        hasKind(3) ? (cals.length ? h("div", { class: "chips below" }, cals.map((e) => this._chipToggle(ents.includes(e.id), e.name, () => {
+        hasKind(3) ? (cals.length ? this._multi({ label: "Calendars", key: `hcals:${p.entry_id}:${i}` }, cals.map((e) => this._mi(ents.includes(e.id), e.name, () => {
           const next = ents.includes(e.id) ? ents.filter((x) => x !== e.id) : [...ents, e.id];
           this._setPage(p, i, { entities: next.slice(0, 16) });
         }))) : h("div", { class: "empty" }, "No calendars in Home Assistant.")) : null),
@@ -3418,8 +3539,8 @@ class PanelOSPage extends HTMLElement {
         r.panels = v ? [...new Set([...r.panels, p.entry_id])] : r.panels.filter((e) => e !== p.entry_id);
       }, { toast: `${v ? "Shown on" : "No longer on"} ${this._pname(p)}` }), { label: "On this panel" }), {
         lead: this._stLead(x),
-        sub: [this._trigText(x), active.status.includes(x.id) ? "on now" : null, x.on ? null : "switched off"].filter(Boolean).join(" · "),
-        extra: this._panels.length > 1 ? h("span", { class: "pchips" }, this._panels.map((q) => h("span", { class: `pchip${x.panels.includes(q.entry_id) ? " on" : ""}` }, this._pname(q)))) : null,
+        sub: [this._trigText(x), active.status.includes(x.id) ? "on now" : null, x.on ? null : "switched off",
+          this._panels.length > 1 ? `On: ${this._panels.filter((q) => x.panels.includes(q.entry_id)).map((q) => this._pname(q)).join(" · ") || "none"}` : null].filter(Boolean).join(" · "),
         click: () => this._openSheet({ kind: "status", id: x.id, panel: p.entry_id, pv: p.entry_id }), dim: !here, keep: true,
       });
     });
@@ -3455,10 +3576,11 @@ class PanelOSPage extends HTMLElement {
           h("input", { type: "checkbox", checked: it.locked ? true : dnd.allow[it.id], disabled: Boolean(it.locked), onchange: (e) => setDnd({ allow: { [it.id]: e.target.checked } }) }),
           h("span", { class: "t" }, h("span", null, it.name), it.locked ? h("small", null, "Always") : null)))),
         changed ? h("div", { class: "below" }, this._btn("Back to the default", () => setDnd({ allow: { ...DND_DEFAULT_ALLOW } }), { cls: "small ghost", icon: "restore" })) : null),
-      this._card("New notifications", {},
-        this._row("Show", this._seg([["strip", "Strip at the top"], ["card", "Card"], ["off", "Only in the list"]], pops.kind, (v) => setPops({ kind: v }), { label: "New notifications" })),
+      this._card("New notifications", { info: "The window shows in the middle, in the notifications page's look. Until answered keeps the newest in front until it is confirmed or dismissed on the panel." },
+        this._row("Show", this._seg([["strip", "Strip at the top"], ["card", "Window"], ["off", "Only in the list"]], pops.kind, (v) => setPops({ kind: v }), { label: "New notifications" })),
         this._has(p, "speaker") ? this._row("Sound", this._toggle(pops.sound, (v) => setPops({ sound: v }), { label: "Sound" })) : null,
-        pops.kind !== "off" ? this._more(`pop:${p.entry_id}`, this._row("Stays for", this._select([["5", "5 s"], ["10", "10 s"], ["30", "30 s"], ["60", "1 min"]], String(pops.seconds), (v) => setPops({ seconds: Number(v) }), { label: "Stays for" }))) : null),
+        pops.kind === "card" ? this._row("Until answered", this._toggle(Boolean(pops.until), (v) => setPops({ until: v }), { label: "Until answered" })) : null,
+        pops.kind !== "off" ? this._more(`pop:${p.entry_id}`, this._row("Stays for", this._select([["5", "5 s"], ["10", "10 s"], ["30", "30 s"], ["60", "1 min"]], String(pops.seconds), (v) => setPops({ seconds: Number(v) }), { label: "Stays for", disabled: pops.kind === "card" && Boolean(pops.until) }))) : null),
     ];
   }
 
@@ -3491,7 +3613,7 @@ class PanelOSPage extends HTMLElement {
       const domain = id.split(".")[0];
       const call = (service, data) => this._hass.callService(domain, service, { entity_id: id, ...data }).catch((err) => this._toast(err.message || String(err), null, true));
       if (domain === "switch") return this._toggle(s.state === "on", (v) => call(v ? "turn_on" : "turn_off", {}), { label: this._ename(id), disabled: s.state === "unavailable" });
-      if (domain === "select") return this._radioChips((s.attributes.options || []).map((o) => [o, o]), s.state, (v) => call("select_option", { option: v }));
+      if (domain === "select") return this._choice((s.attributes.options || []).map((o) => [o, o]), s.state, (v) => call("select_option", { option: v }), { label: this._ename(id) });
       const a = s.attributes;
       const v = Number(s.state);
       return this._slider(Number.isNaN(v) ? a.min || 0 : v, a.min ?? 0, a.max ?? 100, a.step ?? 1, (x) => call("set_value", { value: x }), (x) => `${x}${a.unit_of_measurement ? ` ${a.unit_of_measurement}` : ""}`, { label: this._ename(id), disabled: s.state === "unavailable" });
@@ -3560,8 +3682,7 @@ class PanelOSPage extends HTMLElement {
       this._card("Screensaver", {},
         (opts.screensaver || []).length ? this._row("Starts after", this._select(opts.screensaver, s.screensaver, (v) => this._command(p, "screensaver", v), { label: "Screensaver starts after" }), { info: "How long nobody has to touch the panel before the screensaver comes." }) : null,
         never ? null : whenRows,
-        never || !styles.length ? null : this._row("Style", null, { stack: true }),
-        never || !styles.length ? null : h("div", { class: "chips below" }, styles.map((x) => this._chipToggle(s.screensaver_style === x, x, () => this._command(p, "screensaver_style", x).then(() => this._showSaver(p))))),
+        never || !styles.length ? null : this._row("Style", this._dropdown(styles.map((x) => [x, x]), s.screensaver_style, (x) => this._command(p, "screensaver_style", x).then(() => this._showSaver(p)), { label: "Screensaver style" })),
         never || (styles.length && s.screensaver_style !== "Clock") ? null : this._saverClock(saver, setSaver, p),
         never || !light || saver.when !== "dark" ? null : this._more(`saver:${p.entry_id}`, this._row("Light from", this._entityButton(saver.light_entity, { title: "Light from", domains: ["sensor"], filter: luxFilter, none: "This panel's sensor", p, onPick: (v) => setSaver({ light_entity: v }) })))),
       this._has(p, "proximity") ? this._card("Waking", {},
@@ -3589,7 +3710,7 @@ class PanelOSPage extends HTMLElement {
         this._row("Address", h("span", { class: "muted num wrap" }, s.ip_address || "–")),
         this._row("Panel ID", h("span", { class: "muted wrap" }, st.panel_id || "–")),
         this._row("What it can do", null, { stack: true, sub: p.caps_reported ? "As the panel reports it" : "Not reported yet: treated as an NSPanel Pro" }),
-        h("div", { class: "chips below" }, this._caps(p).map((c) => h("span", { class: "chip" }, CAP_NAMES[c] || c)))),
+        h("div", { class: "below muted" }, this._caps(p).map((c) => CAP_NAMES[c] || c).join(" · "))),
       this._card("Wi-Fi", { info: "When idle, the panel moves to a clearly stronger access point of the same network." },
         this._row("Signal", h("span", { style: { display: "inline-flex", gap: "10px", alignItems: "center" } }, bars, h("span", { class: "muted num" }, typeof rssi === "number" ? `${rssi} dBm` : "–")))),
       this._card("Sensors", { info: "Every value the panel sends is a row in the recorder's database. The panel sends a sensor only when it has changed by at least this much since the value it sent last. Lower: finer history, more writes." },
@@ -3732,7 +3853,7 @@ class PanelOSPage extends HTMLElement {
     };
     return this._sheetFrame("Rename", [
       h("div", { class: "sec" }, h("h3", null, "Name"), h("input", { class: "inp", value: sh.name, maxlength: 60, "aria-label": "Name", oninput: (e) => { sh.name = e.target.value; } })),
-      h("div", { class: "sec" }, h("h3", null, "Room"), this._radioChips([["", "None"], ...areas.map((a) => [a.area_id, a.name])], sh.area, (v) => { sh.area = v; this._renderLayer(); })),
+      h("div", { class: "sec" }, h("h3", null, "Room"), this._dropdown([["", "None"], ...areas.map((a) => [a.area_id, a.name])], sh.area, (v) => { sh.area = v; this._renderLayer(); }, { label: "Room", full: true })),
     ], [this._btn("Cancel", () => this._closeSheet(), { cls: "ghost" }), this._btn("Save", save, { cls: "primary" })], { center: true });
   }
 
@@ -3998,9 +4119,9 @@ class PanelOSPage extends HTMLElement {
   }
 
   _critShownOn(c, set) {
-    return h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
+    return h("div", { class: "sec" }, h("h3", null, "Shown on"), this._multi({ label: "Shown on", key: `on:crit:${c.entity_id || c.id}` }, this._panels.map((q) => {
       const on = !(c.off || []).includes(q.entry_id);
-      return this._chipToggle(on, this._pname(q), () => set((x) => { x.off = on ? [...(x.off || []), q.entry_id] : (x.off || []).filter((e) => e !== q.entry_id); }));
+      return this._mi(on, this._pname(q), () => set((x) => { x.off = on ? [...(x.off || []), q.entry_id] : (x.off || []).filter((e) => e !== q.entry_id); }));
     })));
   }
 
@@ -4192,8 +4313,7 @@ class PanelOSPage extends HTMLElement {
     return this._sheetFrame(isNew ? "New alarm" : "Alarm", [
       h("div", { style: { display: "flex", justifyContent: "center" } },
         h("input", { class: "inp alarm-time", type: "time", value: sh.t, "aria-label": "Time", oninput: (e) => { sh.t = e.target.value; } })),
-      h("div", { class: "sec" }, h("h3", null, "Repeat"), h("div", { class: "chips days" }, DAY_NAMES.map((n, k) => h("button", { class: `chip${sh.days[k] ? " on" : ""}`, "aria-pressed": sh.days[k] ? "true" : "false",
-        onclick: () => { sh.days[k] = !sh.days[k]; this._renderLayer(); } }, n)))),
+      h("div", { class: "sec" }, h("h3", null, "Repeat"), this._weekdays(sh.days, (k) => { sh.days[k] = !sh.days[k]; this._renderLayer(); })),
       h("div", { class: "group" },
         this._row("Name", h("input", { class: "inp short", value: sh.label, maxlength: 20, placeholder: "Alarm", "aria-label": "Name", oninput: (e) => { sh.label = e.target.value; }, onkeydown: (e) => { if (e.key === "Enter") e.target.blur(); } }), { cls: "first" }),
         this._soundRow("Sound", sh.sound, { def: "birds", defNote: "The default for alarms", title: "Alarm sound", ma: true, p, parent: sh }, (v) => { sh.sound = v; })),
@@ -4245,7 +4365,7 @@ class PanelOSPage extends HTMLElement {
         r.button ? h("span", { class: "bt" }, r.button_label || "Button text from the panel") : null,
         r.countdown || t.kind === "after" ? h("small", null, `Closes after ${r.countdown || 10} min`) : null),
       h("p", { class: "note", style: { margin: 0, textAlign: "center" } }, "A sketch; the panel draws it in its own style."),
-      connectedForPv.length > 1 ? h("div", { class: "sec", style: { alignSelf: "stretch" } }, h("h3", null, "Show now on"), this._radioChips(connectedForPv.map((q) => [q.entry_id, this._pname(q)]), pv.entry_id, (v) => { sh.pv = v; this._renderLayer(); })) : null);
+      connectedForPv.length > 1 ? h("div", { class: "sec", style: { alignSelf: "stretch" } }, h("h3", null, "Show now on"), this._choice(connectedForPv.map((q) => [q.entry_id, this._pname(q)]), pv.entry_id, (v) => { sh.pv = v; this._renderLayer(); }, { label: "Show now on" })) : null);
     const form = h("div", { style: { display: "flex", flexDirection: "column", gap: "18px", minWidth: 0 } },
       h("div", { class: "sec" }, h("h3", null, "When"),
         this._seg([["entity", "A device"], ["after", "After a screen"], ["service", "Automation"]], t.kind, (v) => {
@@ -4267,7 +4387,7 @@ class PanelOSPage extends HTMLElement {
             ["above", "below", "equals"].includes(t.op) ? this._text(t.value, (v) => setT({ value: v }), { max: 60, label: "Value", cls: "short", placeholder: String(this._hass.states[t.entity]?.state ?? "") }) : null),
           { sub: `Now: ${this._liveValue(`ha:${t.entity}`)}` }) : null) : null,
         t.kind === "after" ? h("div", { class: "group" }, others.length
-          ? this._row("Screen", this._radioChips(others.map((x) => [x.id, this._statusName(x)]), t.after, (v) => setT({ after: v })), { cls: "first", stack: true })
+          ? this._row("Screen", this._dropdown(others.map((x) => [x.id, this._statusName(x)]), t.after, (v) => setT({ after: v }), { label: "Screen" }), { cls: "first" })
           : h("div", { class: "empty", style: { paddingTop: "12px" } }, "Add another status screen first.")) : null,
         t.kind === "service" ? this._statusActions(r, set) : null),
       h("div", { class: "sec" }, h("h3", null, "Kind"), h("div", { class: "catgrid" }, STATUS_CATS.map((c) => h("button", {
@@ -4288,9 +4408,9 @@ class PanelOSPage extends HTMLElement {
         r.button ? this._row("Button text", this._text(r.button_label, (v) => set({ button_label: v.trim() }), { max: 24, label: "Button text", placeholder: "From the panel" }), { stack: true }) : null,
         this._row("Closes by itself", this._select([...(t.kind === "after" ? [] : [["0", "Never"]]), ["5", "After 5 min"], ["10", "After 10 min"], ["15", "After 15 min"], ["30", "After 30 min"]], String(r.countdown || (t.kind === "after" ? 10 : 0)), (v) => set({ countdown: Number(v) }), { label: "Closes by itself" }), { info: t.kind === "after" ? "The screen shows the time left and closes when it runs out." : "Never: the screen stays while the trigger lasts, or until it is closed on the panel. With a time: the screen shows the time left and closes when it runs out." }),
         this._row("In use", this._toggle(r.on, (v) => set({ on: v }), { label: "In use" }), { sub: r.on ? null : "Switched off: never shown" })),
-      h("div", { class: "sec" }, h("h3", null, "Shown on"), h("div", { class: "chips" }, this._panels.map((q) => {
+      h("div", { class: "sec" }, h("h3", null, "Shown on"), this._multi({ label: "Shown on", key: `on:status:${r.id}` }, this._panels.map((q) => {
         const on = r.panels.includes(q.entry_id);
-        return this._chipToggle(on, this._pname(q), () => set({ panels: on ? r.panels.filter((x) => x !== q.entry_id) : [...r.panels, q.entry_id] }));
+        return this._mi(on, this._pname(q), () => set({ panels: on ? r.panels.filter((x) => x !== q.entry_id) : [...r.panels, q.entry_id] }));
       }))));
     return this._sheetFrame(sh.fresh ? "New status screen" : this._statusName(r), h("div", { class: "split" }, form, preview), [
       this._armed(`del:${r.id}`, "Delete", "Tap again to delete", () => {
@@ -4405,14 +4525,14 @@ class PanelOSPage extends HTMLElement {
     const items = [["pages", "Pages, their looks and options"], ["display", "Display and screensaver"], ["voice", "Voice look"], ["dnd", "Do not disturb"], ["popups", "New notifications"], ["dashboard", "Dashboard"]];
     const tos = sh.to.map((id) => this._panelById(id)).filter(Boolean);
     return this._sheetFrame(page ? `Copy ${(PAGE_TYPES[page.kind] || { name: page.kind }).name}` : "Copy settings", [
-      h("div", { class: "sec" }, h("h3", null, "From"), this._radioChips(this._panels.map((x) => [x.entry_id, this._pname(x)]), from.entry_id, (v) => {
+      h("div", { class: "sec" }, h("h3", null, "From"), this._choice(this._panels.map((x) => [x.entry_id, this._pname(x)]), from.entry_id, (v) => {
         sh.from = v;
         sh.to = sh.to.filter((x) => x !== v);
         if (!sh.to.length) { const other = this._panels.find((x) => x.entry_id !== v); if (other) sh.to = [other.entry_id]; }
         sh.page = null;
         this._renderLayer();
       })),
-      h("div", { class: "sec" }, h("h3", null, "To"), h("div", { class: "chips" }, targets.map((x) => this._chipToggle(sh.to.includes(x.entry_id), this._pname(x), () => {
+      h("div", { class: "sec" }, h("h3", null, "To"), this._multi({ label: "To", key: "copy:to" }, targets.map((x) => this._mi(sh.to.includes(x.entry_id), this._pname(x), () => {
         sh.to = sh.to.includes(x.entry_id) ? sh.to.filter((e) => e !== x.entry_id) : [...sh.to, x.entry_id];
         this._renderLayer();
       })))),
@@ -4490,7 +4610,7 @@ class PanelOSPage extends HTMLElement {
         h("div", { class: "sec" }, h("h3", null, "Start with"), h("div", { class: "group" },
           h("label", { class: "opt" }, h("input", { type: "radio", name: "start", checked: sh.start === "defaults", onchange: () => { sh.start = "defaults"; this._renderLayer(); } }), h("span", { class: "t" }, h("span", null, "PanelOS defaults"), h("small", null, "The usual pages, ready to change"))),
           this._panels.length ? h("label", { class: "opt" }, h("input", { type: "radio", name: "start", checked: sh.start === "copy", onchange: () => { sh.start = "copy"; this._renderLayer(); } }), h("span", { class: "t" }, h("span", null, "A copy of another panel"), h("small", null, "Pages, display, voice, do not disturb, notifications, dashboard"))) : null)),
-        sh.start === "copy" ? h("div", { class: "sec" }, h("h3", null, "Copy from"), this._radioChips(this._panels.map((x) => [x.entry_id, this._pname(x)]), sh.copyFrom, (v) => { sh.copyFrom = v; this._renderLayer(); })) : null,
+        sh.start === "copy" ? h("div", { class: "sec" }, h("h3", null, "Copy from"), this._choice(this._panels.map((x) => [x.entry_id, this._pname(x)]), sh.copyFrom, (v) => { sh.copyFrom = v; this._renderLayer(); }, { label: "Copy from" })) : null,
         sh.error ? h("p", { class: "note", role: "alert", style: { margin: 0, color: "var(--bad)" } }, sh.error) : null];
       foot = [this._btn("Back", () => { sh.step = 1; this._renderLayer(); }, { cls: "ghost" }), this._btn(sh.busy ? "Adding…" : `Add ${sh.panelId.trim()}`, () => this._finishAdd(sh), { cls: "primary", icon: "check", disabled: sh.busy })];
     }

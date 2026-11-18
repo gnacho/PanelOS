@@ -259,6 +259,29 @@ pub fn clock_data(weather: &WeatherData, next: &str, prev_digits: &[String; 4], 
 
 // ---------------------------------------------------------------- weather
 
+/// The living icon's frames for a condition (spec M12): the frame count and the motion kind (see WxIcons in home.slint).
+pub fn wx_motion(condition: &str) -> (&'static str, usize, i32) {
+    match condition {
+        "sunny" => ("sunny", 2, 1),
+        "clear-night" => ("clear-night", 2, 2),
+        "rainy" | "pouring" | "hail" => (condition_static(condition), 3, 3),
+        "snowy" | "snowy-rainy" => (condition_static(condition), 3, 4),
+        "lightning" => ("lightning", 2, 5),
+        "lightning-rainy" => ("lightning-rainy", 4, 7),
+        _ => ("", 0, 6),
+    }
+}
+
+fn condition_static(c: &str) -> &'static str {
+    match c {
+        "rainy" => "rainy",
+        "pouring" => "pouring",
+        "hail" => "hail",
+        "snowy" => "snowy",
+        _ => "snowy-rainy",
+    }
+}
+
 pub fn weather_icon(condition: &str) -> &'static str {
     match condition {
         "clear-night" => "weather-night",
@@ -580,14 +603,25 @@ fn mmss(s: u32) -> String {
     }
 }
 
-/// The status bar's timer chips (nearest first).
-pub fn timer_chips(timers: &HashMap<String, Timer>) -> Vec<TimerInfo> {
-    let mut list: Vec<&Timer> = timers.values().collect();
-    list.sort_by_key(|t| t.remaining());
+/// The timer island's list (spec 29.3): the nearest first, running before paused, then by the time left; each with
+/// its colour, the part left and its place on the timers page.
+pub fn timer_chips(timers: &HashMap<String, Timer>, accent: Color, colourful: bool) -> Vec<TimerInfo> {
+    let items = timer_items(timers, accent, colourful);
+    let mut list: Vec<(usize, &Timer)> = ordered_timers(timers).into_iter().map(|(_, t)| t).enumerate().collect();
+    list.sort_by_key(|(_, t)| (!t.active, t.remaining()));
     list.iter()
-        .map(|t| {
+        .map(|(i, t)| {
             let left = t.remaining();
-            TimerInfo { label: t.name.clone().into(), text: mmss(left).into(), urgent: left < 60, hours: t.total >= 3600 }
+            TimerInfo {
+                label: t.name.clone().into(),
+                text: mmss(left).into(),
+                urgent: left < 60 && t.active,
+                hours: t.total >= 3600,
+                tint: items.get(*i).map(|it| it.tint).unwrap_or(accent),
+                fr: if t.total > 0 { (t.remaining_exact() / t.total as f32).clamp(0.0, 1.0) } else { 0.0 },
+                paused: !t.active,
+                index: *i as i32,
+            }
         })
         .collect()
 }

@@ -4,7 +4,7 @@
 // next-event widget too), with Edit where the calendar allows it. The panel keeps the last view, across restarts too.
 // Weeks start on Monday, times are 24-hour; the app writes every label (relative times like "in 4 h 15 min" too).
 import { Theme, Act, Words } from "theme.slint";
-import { Icon, Toggle, Crawl, DragSheet } from "widgets.slint";
+import { Icon, Toggle, Crawl, DragSheet, Dropdown } from "widgets.slint";
 import { Keyboard } from "overlays.slint";
 
 export struct CalEvent {
@@ -57,16 +57,6 @@ export struct CalCell {
     labels: [string],      // up to two events as small labels (the app picks them), their colours, how many more
     tints: [color],
     more: int,
-}
-
-component ViewChip inherits Rectangle {
-    in property <string> text;
-    in property <bool> on;
-    height: 40px; width: lbl.preferred-width + 28px; border-radius: 20px;
-    background: root.on ? Theme.text : transparent;
-    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
-    lbl := Text { x: 14px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
-        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
 }
 
 // agenda: one event as a card (colour pill, start / end, title, calendar · when)
@@ -315,7 +305,7 @@ export component CalendarPage inherits Rectangle {
     if root.look == 0: Text { x: 16px; y: 46px; width: 330px; height: 34px; text: root.title; font-size: 24px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
     if root.look == 0: Text { x: 16px; y: 80px; width: 330px; height: 20px; text: root.sub; font-size: 14px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
     Rectangle {
-        x: root.width - 16px - self.width; y: 10px; height: 32px; width: 200px; border-radius: 16px;
+        x: root.width - 16px - self.width; y: 10px; height: 32px; width: 152px; border-radius: 16px;
         background: root.look == 1 ? #ffffff1f : Theme.dark ? #ffffff1f : #00000012;
         Icon { x: 12px; y: 0; width: 20px; height: parent.height; font-size: 18px; color: (root.look == 1 ? #ffffff : Theme.text).with-alpha(0.9);
             text: root.look == 1 ? "\u{F05D5}" : root.look == 2 ? "\u{F1A30}" : root.look == 3 ? "\u{F0E18}"
@@ -407,7 +397,9 @@ export component CalendarPage inherits Rectangle {
         cache-rendering-hint: true;
         x: 0; y: 172px; width: root.width; height: root.height - 172px;
         content-width: root.width; content-height: 24 * root.gh + 40px; content-y: -root.scroll;
-        if root.week-today >= 0: Rectangle { x: root.wx + root.week-today * root.gw; y: 0; width: root.gw; height: 24 * root.gh; background: Theme.surface.with-alpha(0.6); }
+        // M25: the today column slides to the new day (midnight, navigation) in 300 ms
+        if root.week-today >= 0: Rectangle { x: root.wx + root.week-today * root.gw; y: 0; width: root.gw; height: 24 * root.gh; background: Theme.surface.with-alpha(0.6);
+            animate x { duration: 300ms; easing: ease-in-out; } }
         for h in 25: Rectangle { x: 0; y: h * root.gh; width: root.width; height: 1px;
             Rectangle { x: root.wx; y: 0; width: root.gn * root.gw; height: 1px; background: Theme.outline; }
             if h < 24 && Math.mod(h, root.view == 4 ? 1 : 2) == 0: Text { x: 8px; y: -8px; width: 40px; height: 16px; text: (h < 10 ? "0" : "") + h; font-size: 11px;
@@ -433,7 +425,8 @@ export component CalendarPage inherits Rectangle {
         }
         if root.week-today >= 0: Rectangle { x: root.wx + root.week-today * root.gw - 3px; y: root.now-min / 60 * root.gh - 3px; width: root.gw + 3px; height: 6px;
             Rectangle { x: 0; y: 0; width: 6px; height: 6px; border-radius: 3px; background: Theme.accent; }
-            Rectangle { x: 4px; y: 2px; width: parent.width - 4px; height: 2px; background: Theme.accent; } }
+            Rectangle { x: 4px; y: 2px; width: parent.width - 4px; height: 2px; background: Theme.accent; }
+            animate x { duration: 300ms; easing: ease-in-out; } }
     }
 
     // ---------------------------------------------------------------- month: the grid with up to two event labels a day (a tap opens that day)
@@ -456,7 +449,7 @@ export component CalendarPage inherits Rectangle {
 
     // ---------------------------------------------------------------- the page's sheet: the view
     // the settings: a sheet that follows the finger (DragSheet)
-    property <length> settings-need: 72px + (root.look == 0 ? 3 : 2) * 52px - 12px + 26px;
+    property <length> settings-need: 68px + (root.look == 0 ? 2 : 1) * 56px + 12px;
     DragSheet {
         width: parent.width; height: parent.height;
         open: root.settings; need: root.settings-need;
@@ -465,18 +458,14 @@ export component CalendarPage inherits Rectangle {
         Icon { x: 110px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center;
             TouchArea { x: -12px; y: -10px; width: parent.width + 24px; height: parent.height + 20px; clicked => { Act.act("cal.settings-close", ""); } } }
-        HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
-            ViewChip { text: Words.line("ui.looks.calendar.0"); on: root.look == 0; TouchArea { clicked => { Act.act("cal.look", "0"); } } }
-            ViewChip { text: Words.line("ui.looks.calendar.1"); on: root.look == 1; TouchArea { clicked => { Act.act("cal.look", "1"); } } } }
-        HorizontalLayout { x: 24px; y: 124px; height: 40px; spacing: 8px; alignment: start;
-            ViewChip { text: Words.line("ui.looks.calendar.2"); on: root.look == 2; TouchArea { clicked => { Act.act("cal.look", "2"); } } }
-            ViewChip { text: Words.line("ui.looks.calendar.3"); on: root.look == 3; TouchArea { clicked => { Act.act("cal.look", "3"); } } } }
-        if root.look == 0: HorizontalLayout { x: 24px; y: 176px; height: 40px; spacing: 8px; alignment: start;
-            ViewChip { text: "Agenda"; on: root.view == 0; TouchArea { clicked => { Act.act("cal.view", "0"); } } }
-            ViewChip { text: "Day"; on: root.view == 1; TouchArea { clicked => { Act.act("cal.view", "1"); } } }
-            ViewChip { text: "3 days"; on: root.view == 4; TouchArea { clicked => { Act.act("cal.view", "4"); } } }
-            ViewChip { text: "Week"; on: root.view == 2; TouchArea { clicked => { Act.act("cal.view", "2"); } } }
-            ViewChip { text: "Month"; on: root.view == 3; TouchArea { clicked => { Act.act("cal.view", "3"); } } } }
+        Dropdown { x: 24px; y: 68px; width: parent.width - 48px;
+            options: [Words.line("ui.looks.calendar.0"), Words.line("ui.looks.calendar.1"), Words.line("ui.looks.calendar.2"), Words.line("ui.looks.calendar.3")];
+            selected: root.look; picked(i) => { Act.act("cal.look", i); } }
+        // the start view of the plain look (its index order: agenda 0, day 1, week 2, month 3, 3 days 4)
+        if root.look == 0: Dropdown { x: 24px; y: 68px + 56px; width: parent.width - 48px;
+            options: ["Agenda", "Day", "3 days", "Week", "Month"];
+            selected: root.view == 0 ? 0 : root.view == 1 ? 1 : root.view == 4 ? 2 : root.view == 2 ? 3 : 4;
+            picked(i) => { Act.act("cal.view", i == 0 ? "0" : i == 1 ? "1" : i == 2 ? "4" : i == 3 ? "2" : "3"); } }
     }
 
     // ---------------------------------------------------------------- a day's events (a tap on a day in the month grid, the wall calendar

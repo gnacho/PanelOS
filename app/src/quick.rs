@@ -140,6 +140,11 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         ui.set_quick_deck_panel(picture("quick/deck-panel2.png"));
         ui.set_quick_toggle_up(picture("quick/toggle3d-up.png"));
         ui.set_quick_toggle_down(picture("quick/toggle3d-down.png"));
+        // the lever's throw: 9 frames, down … up
+        let frames: Vec<slint::Image> = (0..9).map(|k| picture(&format!("quick/toggle3d-{k}.png"))).collect();
+        if frames.iter().all(|f| f.size().width > 0) {
+            ui.set_quick_lever_frames(slint::ModelRc::new(slint::VecModel::from(frames)));
+        }
         ui.set_quick_lamp_off(picture("quick/lamp-off.png"));
         ui.set_quick_lamp_glow(picture("quick/lamp-glow.png"));
         ui.set_quick_lamp_spec(picture("quick/lamp-spec.png"));

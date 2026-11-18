@@ -51,18 +51,84 @@ component Ring inherits Rectangle {
     in property <color> track: TFg.c.with-alpha(0.12);
     property <float> r: (self.width - self.stroke) / 2 / 1px;
     property <float> c: self.width / 2 / 1px;
-    // the app counts whole seconds: the arc glides from one to the next (linear, 1 s) instead of stepping
+    in property <float> left: -1;       // seconds left (the last ten pulse); -1: not a running timer
+    // the app counts whole seconds: the arc glides from one to the next (linear, 1 s) instead of stepping; more time
+    // (+1 min) refills it in 300 ms (M17)
+    property <bool> refill;
+    changed fr => { if root.fr > root.fr-s + 0.02 { root.refill = true; } }
+    Timer { interval: 320ms; running: root.refill; triggered => { root.refill = false; } }
     property <float> fr-s: root.fr;
-    animate fr-s { duration: 1000ms; easing: linear; }
-    property <angle> a: min(0.9999, max(0, root.fr-s)) * 360deg;
+    animate fr-s { duration: root.refill ? 300ms : 1000ms; easing: linear; }
+    // a new ring draws from nothing to full in 400 ms before it runs (M16)
+    property <float> intro: 0;
+    init => { root.intro = 1; }
+    animate intro { duration: 400ms; easing: ease-out; }
+    property <float> shown: min(root.intro, root.fr-s);
+    property <angle> a: min(0.9999, max(0, root.shown)) * 360deg;
+    // the last ten seconds: the ring brightens with each second, a soft 300 ms pulse (M18)
+    property <duration> pulse-t0;
+    changed left => { if root.left > 0 && root.left <= 10 { root.pulse-t0 = animation-tick(); } }
+    property <float> pulse: root.left > 0 && root.left <= 10.5 ? Math.pow(2.71828, -(animation-tick() - root.pulse-t0) / 300ms) : 0;
     Rectangle { border-radius: self.width / 2; border-width: root.stroke; border-color: root.track; }
-    if root.fr-s > 0.001: Path {
+    if root.shown > 0.001: Path {
         x: -root.stroke / 2; y: -root.stroke / 2; width: root.width + root.stroke; height: root.height + root.stroke;
         viewbox-width: root.width / 1px; viewbox-height: root.height / 1px;
-        stroke: root.arc; stroke-width: root.stroke;
+        stroke: root.arc.brighter(0.45 * root.pulse); stroke-width: root.stroke;
         commands: "M " + root.c + " " + (root.c - root.r) + " A " + root.r + " " + root.r + " 0 " + (root.a > 180deg ? "1" : "0") + " 1 "
             + (root.c + root.r * Math.sin(root.a)) + " " + (root.c - root.r * Math.cos(root.a));
     }
+}
+
+// A timer's time: more time (+1 min) bumps it to 1.06 and back in 200 ms (M17), with the ring's refill.
+component TimeText inherits Text {
+    in property <float> rem;
+    in property <length> size;
+    property <float> last;
+    property <duration> b0;
+    property <bool> bumping;
+    init => { root.last = root.rem; }
+    changed rem => { if root.rem > root.last + 5 { root.b0 = animation-tick(); root.bumping = true; } root.last = root.rem; }
+    Timer { interval: 220ms; running: root.bumping; triggered => { root.bumping = false; } }
+    property <float> bp: root.bumping ? clamp((animation-tick() - root.b0) / 200ms, 0, 1) : 1;
+    font-size: root.size * (1 + 0.06 * Math.sin(180deg * root.bp));
+}
+
+// A seven-segment digit in the 480 × 480 frame (spec 24.3, the board's geometry): slanted by 0.09, every unlit segment a
+// faint ghost (7 %). d: 0–9, 10 = "L", -1 = blank.
+component Seg7 inherits Rectangle {
+    in property <int> d: -1;
+    in property <float> x0;
+    in property <float> y0;
+    in property <float> w;
+    in property <float> h;
+    in property <float> t;
+    in property <color> ink;
+    width: 480px; height: 480px;
+    property <[int]> masks: [63, 6, 91, 79, 102, 109, 125, 7, 127, 111, 56];
+    property <int> mask: root.d >= 0 && root.d <= 10 ? root.masks[root.d] : 0;
+    property <float> g: root.t * 0.18;
+    property <float> m: root.y0 + root.h / 2;
+    pure function px(x: float, y: float) -> float { x + (root.y0 + root.h - y) * 0.09 }
+    pure function pt(x: float, y: float) -> string { root.px(x, y) + " " + y }
+    pure function hor(y: float) -> string {
+        "M " + root.pt(root.x0 + root.g + root.t / 2, y + root.t / 2) + " L " + root.pt(root.x0 + root.g + root.t, y) + " L " + root.pt(root.x0 + root.w - root.g - root.t, y)
+            + " L " + root.pt(root.x0 + root.w - root.g - root.t / 2, y + root.t / 2) + " L " + root.pt(root.x0 + root.w - root.g - root.t, y + root.t)
+            + " L " + root.pt(root.x0 + root.g + root.t, y + root.t) + " Z"
+    }
+    pure function ver(x: float, ya: float, yb: float) -> string {
+        "M " + root.pt(x + root.t / 2, ya) + " L " + root.pt(x + root.t, ya + root.t / 2) + " L " + root.pt(x + root.t, yb - root.t / 2)
+            + " L " + root.pt(x + root.t / 2, yb) + " L " + root.pt(x, yb - root.t / 2) + " L " + root.pt(x, ya + root.t / 2) + " Z"
+    }
+    pure function on(bit: int) -> bool { Math.mod(Math.floor(root.mask / bit), 2) == 1 }
+    for sg[i] in [
+        { b: 1, c: root.hor(root.y0) },
+        { b: 2, c: root.ver(root.x0 + root.w - root.t, root.y0 + root.g + root.t / 2, root.m - root.g) },
+        { b: 4, c: root.ver(root.x0 + root.w - root.t, root.m + root.g, root.y0 + root.h - root.g - root.t / 2) },
+        { b: 8, c: root.hor(root.y0 + root.h - root.t) },
+        { b: 16, c: root.ver(root.x0, root.m + root.g, root.y0 + root.h - root.g - root.t / 2) },
+        { b: 32, c: root.ver(root.x0, root.y0 + root.g + root.t / 2, root.m - root.g) },
+        { b: 64, c: root.hor(root.m - root.t / 2) },
+    ]: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: root.ink; opacity: root.on(sg.b) ? 1 : 0.07; commands: sg.c; }
 }
 
 // A straight stroke in the 480 × 480 screen frame (box grown by the stroke width, see above).
@@ -122,10 +188,15 @@ component RoundButton inherits Rectangle {
     in property <color> line: TFg.c.with-alpha(0.30);
     in property <string> act;          // what a tap does (Act), with `act-value`
     in property <string> act-value;
-    width: self.size; height: self.size; border-radius: self.size / 2;
-    background: root.outline ? transparent : root.fill;
-    border-width: root.outline ? 1.5px : 0px; border-color: root.line;
-    opacity: rb-touch.pressed ? 0.6 : 1;
+    width: self.size; height: self.size;
+    // a press squishes it to 0.95 (60 ms) and springs it back with a small overshoot (M1)
+    property <float> sq: rb-touch.pressed ? 0.95 : 1;
+    animate sq { duration: rb-touch.pressed ? 60ms : 180ms; easing: cubic-bezier(0.34, 1.6, 0.64, 1); }
+    Rectangle {
+        x: root.size * (1 - root.sq) / 2; y: self.x; width: root.size * root.sq; height: self.width; border-radius: self.width / 2;
+        background: root.outline ? transparent : root.fill;
+        border-width: root.outline ? 1.5px : 0px; border-color: root.line;
+    }
     // play / pause morph into each other (M13); every other icon as it is
     property <bool> pp: root.icon == "\u{F040A}" || root.icon == "\u{F03E4}";
     if root.pp: PlayGlyph { x: (parent.width - root.icon-size * 96 / 62) / 2; y: (parent.height - root.icon-size * 96 / 62) / 2;
@@ -303,6 +374,11 @@ export component TimersPage inherits Rectangle {
     in property <float> watch: 0;         // stopwatch, seconds
     in property <bool> watch-running;
     in property <[float]> laps;           // lap times, newest first
+    in property <float> lap-at;           // the stopwatch's time at the last lap
+    in property <float> lap-best: -1;     // the best lap (-1: none yet)
+    in property <[float]> lap-marks;      // the laps' times on the stopwatch, oldest first (up to 8)
+    in property <int> sw-look;            // stopwatch look: 0 plain, 1 chronograph, 2 timing tower, 3 LCD watch, 4 nixie
+    in property <int> alarm-look;         // alarm look: 0 plain, 1 twin-bell, 2 sunrise, 3 clock radio, 4 24-hour dial
     in property <color> watch-tint: #3d9bff;
     in property <bool> ringing;           // a timer or an alarm rings (full screen)
     in property <bool> ring-alarm;        // … it is an alarm
@@ -376,10 +452,10 @@ export component TimersPage inherits Rectangle {
     if !root.ringing && root.mode == 1 && root.theme == 0 && root.n == 1: one := Rectangle {
         property <TimerItem> t: root.timers[0];
         Ring { x: (root.width - 240px) / 2; y: root.top + 4px; width: 240px; height: 240px; stroke: 12px;
-            fr: one.t.total > 0 ? one.t.remaining / one.t.total : 0; arc: one.t.tint; opacity: one.t.running ? 1 : 0.55; }
+            fr: one.t.total > 0 ? one.t.remaining / one.t.total : 0; arc: one.t.tint; opacity: one.t.running ? 1 : 0.55;  left: root.cur.running ? Math.ceil(root.cur.remaining) : -1; }
         Text { x: (root.width - 180px) / 2; y: root.top + 66px; width: 180px; height: 24px; text: root.name(one.t.label); font-size: 18px; font-weight: 600;
             color: one.t.tint.mix(TFg.c, 0.55); horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-        Text { x: 0; y: root.top + 92px; width: root.width; height: 62px; text: root.clock(one.t.remaining); font-size: one.t.remaining >= 3600 ? 46px : 58px; font-weight: 600;
+        TimeText { x: 0; y: root.top + 92px; width: root.width; height: 62px; text: root.clock(one.t.remaining); rem: one.t.remaining; size: one.t.remaining >= 3600 ? 46px : 58px; font-weight: 600;
             color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
         Text { x: 0; y: root.top + 156px; width: root.width; height: 20px; text: one.t.running ? "of " + root.clock(one.t.total) : "Paused";
             font-size: 14px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
@@ -388,11 +464,11 @@ export component TimersPage inherits Rectangle {
     if !root.ringing && root.mode == 1 && root.theme == 0 && root.n == 2: Rectangle {
         for t[i] in root.timers: Rectangle {
             x: 24px + i * 224px; y: root.top + 6px; width: 208px; height: 300px;
-            Ring { x: 4px; y: 0; width: 200px; height: 200px; stroke: 10px; fr: t.total > 0 ? t.remaining / t.total : 0; arc: t.tint; opacity: t.running ? 1 : 0.55; }
+            Ring { x: 4px; y: 0; width: 200px; height: 200px; stroke: 10px; fr: t.total > 0 ? t.remaining / t.total : 0; arc: t.tint; opacity: t.running ? 1 : 0.55; left: t.running ? Math.ceil(t.remaining) : -1; }
             TouchArea { x: 4px; y: 0; width: 200px; height: 200px; clicked => { Act.act("timers.sheet", i); } }
             Text { x: 29px; y: 56px; width: 150px; height: 22px; text: root.name(t.label); font-size: 16px; font-weight: 600; color: t.tint.mix(TFg.c, 0.55);
                 horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-            Text { x: 0; y: 78px; width: 208px; height: 46px; text: root.clock(t.remaining); font-size: t.remaining >= 3600 ? 32px : 40px; font-weight: 600; color: TFg.c;
+            TimeText { x: 0; y: 78px; width: 208px; height: 46px; text: root.clock(t.remaining); rem: t.remaining; size: t.remaining >= 3600 ? 32px : 40px; font-weight: 600; color: TFg.c;
                 horizontal-alignment: center; vertical-alignment: center; }
             Text { x: 0; y: 124px; width: 208px; height: 18px; text: t.running ? "of " + root.clock(t.total) : "Paused"; font-size: 13px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
             HorizontalLayout {
@@ -410,8 +486,8 @@ export component TimersPage inherits Rectangle {
             property <TimerItem> t: self.has ? root.timers[c] : { label: "", remaining: 0, total: 0, running: false, tint: #ffffff };
             TouchArea { clicked => { Act.act(cell.has ? "timers.sheet" : "timers.quick", c); } }
             if cell.has: Ring { x: (cell.width - 116px) / 2; y: 12px; width: 116px; height: 116px; stroke: 8px;
-                fr: cell.t.total > 0 ? cell.t.remaining / cell.t.total : 0; arc: cell.t.tint; opacity: cell.t.running ? 1 : 0.55; }
-            if cell.has: Text { x: 0; y: 12px + 36px; width: cell.width; height: 44px; text: root.clock(cell.t.remaining); font-size: cell.t.remaining >= 3600 ? 22px : 28px; font-weight: 600;
+                fr: cell.t.total > 0 ? cell.t.remaining / cell.t.total : 0; arc: cell.t.tint; opacity: cell.t.running ? 1 : 0.55; left: cell.t.running ? Math.ceil(cell.t.remaining) : -1; }
+            if cell.has: TimeText { x: 0; y: 12px + 36px; width: cell.width; height: 44px; text: root.clock(cell.t.remaining); rem: cell.t.remaining; size: cell.t.remaining >= 3600 ? 22px : 28px; font-weight: 600;
                 color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
             if cell.has && !cell.t.running: Text { x: 0; y: 12px + 76px; width: cell.width; height: 14px; text: "Paused"; font-size: 11px; color: TFg.c.with-alpha(0.50); horizontal-alignment: center; vertical-alignment: center; }
             if cell.has: Text { x: 12px; y: 136px; width: cell.width - 24px; height: 22px; text: root.name(cell.t.label); font-size: 15px; font-weight: 600; color: cell.t.tint.mix(TFg.c, 0.55);
@@ -469,7 +545,7 @@ export component TimersPage inherits Rectangle {
         Image { x: (kit.cx - 62) * 1px; y: (kit.cy - 32) * 1px; width: 124px; height: 64px; source: @image-url("timers/kit/knob-shadow.png"); }
         Image { x: (kit.cx - 62) * 1px; y: (kit.cy - 32) * 1px; width: 124px; height: 64px; source: @image-url("timers/kit/knob-mask.png"); colorize: root.cur.tint.mix(#000000, 0.22); }
         Image { x: (kit.cx - 62) * 1px; y: (kit.cy - 32) * 1px; width: 124px; height: 64px; source: @image-url("timers/kit/knob-shade.png"); }
-        Text { x: (kit.cx - 52) * 1px; y: (kit.cy - 22) * 1px; width: 104px; height: 44px; text: root.clock(root.cur.remaining); font-size: root.cur.remaining >= 3600 ? 18px : 22px; font-weight: 700;
+        TimeText { x: (kit.cx - 52) * 1px; y: (kit.cy - 22) * 1px; width: 104px; height: 44px; text: root.clock(root.cur.remaining); rem: root.cur.remaining; size: root.cur.remaining >= 3600 ? 18px : 22px; font-weight: 700;
             color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
     }
 
@@ -554,7 +630,7 @@ export component TimersPage inherits Rectangle {
         // name, time, total on the right
         Text { x: 252px; y: hg.y0 + 118px - 64px; width: 210px; height: 24px; text: root.name(root.cur.label); font-size: 18px; font-weight: 600;
             color: root.cur.tint.mix(TFg.c, 0.55); overflow: elide; vertical-alignment: center; }
-        Text { x: 250px; y: hg.y0 + 118px - 40px; width: 214px; height: 62px; text: root.clock(root.cur.remaining); font-size: root.cur.remaining >= 3600 ? 42px : 56px; font-weight: 600;
+        TimeText { x: 250px; y: hg.y0 + 118px - 40px; width: 214px; height: 62px; text: root.clock(root.cur.remaining); rem: root.cur.remaining; size: root.cur.remaining >= 3600 ? 42px : 56px; font-weight: 600;
             color: TFg.c; vertical-alignment: center; }
         Text { x: 252px; y: hg.y0 + 118px + 24px; width: 210px; height: 20px; text: root.cur.running ? "of " + root.clock(root.cur.total) : "Paused"; font-size: 14px; color: TFg.c.with-alpha(0.50); vertical-alignment: center; }
     }
@@ -670,7 +746,18 @@ export component TimersPage inherits Rectangle {
             TouchArea { clicked => { Act.act("timers.new", ""); } } }
     }
 
+    property <int> lap-n: root.laps.length;
+    property <int> lap-last;
+    property <bool> lap-sliding;
+    property <duration> lap-t0;
+    init => { root.lap-last = root.laps.length; }
+    changed lap-n => { if root.lap-n > root.lap-last { root.lap-t0 = animation-tick(); root.lap-sliding = true; } root.lap-last = root.lap-n; }
+    Timer { interval: 200ms; running: root.lap-sliding; triggered => { root.lap-sliding = false; } }
+    property <length> lap-off: root.lap-sliding ? -34px * Math.pow(1 - clamp((animation-tick() - root.lap-t0) / 180ms, 0, 1), 3) : 0px;
     // ---------------------------------------------------------------- alarms
+    property <bool> bell-shake;
+    property <duration> bell-t0;
+    Timer { interval: 300ms; running: root.bell-shake; triggered => { root.bell-shake = false; } }
     if !root.ringing && root.mode == 0: Rectangle {
         Rectangle { x: root.width - 20px - 44px; y: root.top; width: 44px; height: 44px; border-radius: 22px; border-width: 1.5px; border-color: TFg.c.with-alpha(0.30);
             TouchArea { clicked => { Act.act("alarms.new", ""); } }
@@ -678,7 +765,10 @@ export component TimersPage inherits Rectangle {
         Rectangle {
             x: 20px; y: root.top; width: root.width - 40px - 52px; height: 44px; border-radius: 22px; background: TFg.c.with-alpha(0.05);
             HorizontalLayout { alignment: center; spacing: 8px; padding-left: 12px; padding-right: 12px;
-                Icon { text: "\u{F0020}"; font-size: 20px; color: root.next-tint; }
+                // M20: switching an alarm on shakes the bell ±2 px, 3 cycles in 300 ms
+                Rectangle { width: 22px;
+                    Icon { x: root.bell-shake ? 2px * Math.sin(1080deg * clamp((animation-tick() - root.bell-t0) / 300ms, 0, 1)) : 0px;
+                        width: parent.width; height: parent.height; text: "\u{F0020}"; font-size: 20px; color: root.next-tint; } }
                 Text { text: root.next-alarm != "" ? root.next-alarm : "No alarm on"; font-size: 15px; font-weight: 600; color: TFg.c.with-alpha(0.85); vertical-alignment: center; overflow: elide; }
             }
         }
@@ -694,7 +784,7 @@ export component TimersPage inherits Rectangle {
             Text { x: 138px; y: 35px; width: parent.width - 138px - 80px; height: 20px; text: a.days; font-size: 13px; color: a.on ? TFg.c.with-alpha(0.60) : TFg.c.with-alpha(0.25); overflow: elide; vertical-alignment: center; }
             Rectangle {
                 x: parent.width - 72px; y: (parent.height - 30px) / 2; width: 54px; height: 30px; border-radius: 15px; background: a.on ? a.tint : TFg.c.with-alpha(0.15);
-                TouchArea { x: -12px; y: -16px; width: parent.width + 24px; height: parent.height + 32px; clicked => { Act.act("alarms.toggle", i); } }
+                TouchArea { x: -12px; y: -16px; width: parent.width + 24px; height: parent.height + 32px; clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; } Act.act("alarms.toggle", i); } }
                 Rectangle { x: a.on ? parent.width - 27px : 3px; y: 3px; width: 24px; height: 24px; border-radius: 12px; background: #ffffff; }
             }
         }
@@ -704,28 +794,158 @@ export component TimersPage inherits Rectangle {
             background: @linear-gradient(180deg, Theme.background.with-alpha(0) 0%, Theme.background 100%); }
     }
 
+    // ---------------------------------------------------------------- stopwatch looks (spec 24): 1 chronograph, 2 timing tower
+    // (the tabs, the page dots and the bottom controls stay where the plain look has them)
+    // a difference with two decimals ("1.40")
+    pure function d2(x: float) -> string { Math.floor(Math.round(Math.abs(x) * 100) / 100) + "." + root.two(Math.mod(Math.round(Math.abs(x) * 100), 100)) }
+    pure function lapfmt(t: float) -> string { Math.floor(t / 60) + ":" + root.two(Math.mod(Math.floor(t), 60)) + "." + root.two(Math.mod(Math.floor(t * 100), 100)) }
+    property <color> sw-faint: TFg.c.with-alpha(0.55);
+    // 1 chronograph: the dial (a picture), the 30-minute counter's hand, the digital window, the sweep hand (Signal, with a tail
+    // and a counterweight, every frame), the laps as small triangles outside the dial (the newest Signal)
+    if !root.ringing && root.mode == 2 && root.sw-look == 1: Rectangle {
+        Image { x: 109px; y: 95px; width: 262px; height: 262px; source: Theme.dark ? @image-url("timers/sw/chrono-dark.png") : @image-url("timers/sw/chrono-light.png"); }
+        property <angle> sa: Math.mod(root.watch, 60) / 60 * 360deg;
+        property <angle> ma: Math.mod(root.watch / 60, 30) / 30 * 360deg;
+        // the minute counter's hand
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: TFg.c; stroke-width: 2px; stroke-line-cap: round;
+            commands: "M 240 180 L " + (240 + 19 * Math.sin(parent.ma)) + " " + (180 - 19 * Math.cos(parent.ma)); }
+        Rectangle { x: 237px; y: 177px; width: 6px; height: 6px; border-radius: 3px; background: TFg.c; }
+        Text { x: 190px; y: 256px; width: 100px; height: 28px; text: root.lapfmt(root.watch); font-family: "Space Grotesk"; font-size: 17px; font-weight: 500;
+            color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
+        // the laps outside the dial
+        for m[i] in root.lap-marks: Path {
+            property <angle> a: Math.mod(m, 60) / 60 * 360deg;
+            x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480;
+            fill: i == root.lap-marks.length - 1 ? #FF4A1C : root.sw-faint;
+            commands: "M " + (240 + 123 * Math.sin(self.a)) + " " + (226 - 123 * Math.cos(self.a))
+                + " L " + (240 + 130 * Math.sin(self.a - 2.0deg)) + " " + (226 - 130 * Math.cos(self.a - 2.0deg))
+                + " L " + (240 + 130 * Math.sin(self.a + 2.0deg)) + " " + (226 - 130 * Math.cos(self.a + 2.0deg)) + " Z";
+        }
+        // the sweep hand: tip at r 113, tail 24 px back, a counterweight at 18 px
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: #FF4A1C; stroke-width: 2.2px; stroke-line-cap: round;
+            commands: "M " + (240 - 24 * Math.sin(parent.sa)) + " " + (226 + 24 * Math.cos(parent.sa)) + " L " + (240 + 113 * Math.sin(parent.sa)) + " " + (226 - 113 * Math.cos(parent.sa)); }
+        Rectangle { x: 240px - 18px * Math.sin(parent.sa) - 5px; y: 226px + 18px * Math.cos(parent.sa) - 5px; width: 10px; height: 10px; border-radius: 5px; background: #FF4A1C; }
+        Rectangle { x: 233px; y: 219px; width: 14px; height: 14px; border-radius: 7px; background: TFg.c; }
+        Rectangle { x: 237.4px; y: 223.4px; width: 5.2px; height: 5.2px; border-radius: 2.6px; background: #FF4A1C; }
+    }
+    // 2 timing tower: the lap and its running time, the total and a delta chip against the best lap (green while faster,
+    // Signal once slower), the last five laps (the best in purple)
+    property <float> lap-now: max(0, root.watch - root.lap-at);
+    if !root.ringing && root.mode == 2 && root.sw-look == 2: tower := Rectangle {
+        property <color> green: Theme.dark ? #3ddc84 : #13804a;
+        property <color> red: Theme.dark ? #ff7a55 : #c8320c;
+        Text { x: 24px; y: 100px; width: 260px; height: 16px; text: "LAP " + (root.laps.length + 1); font-size: 12px; font-weight: 700; letter-spacing: 1.6px; color: root.sw-faint; }
+        Text { x: 24px; y: 116px; width: 280px; height: 64px; text: root.lapfmt(root.lap-now); font-family: "Space Grotesk"; font-size: 58px; font-weight: 500;
+            letter-spacing: -1px; color: TFg.c; vertical-alignment: center; }
+        Text { x: 296px; y: 100px; width: 160px; height: 16px; text: "TOTAL"; font-size: 12px; font-weight: 700; letter-spacing: 1.6px; color: root.sw-faint; horizontal-alignment: right; }
+        Text { x: 296px; y: 116px; width: 160px; height: 30px; text: root.lapfmt(root.watch); font-family: "Space Grotesk"; font-size: 22px; font-weight: 500; color: TFg.c;
+            horizontal-alignment: right; vertical-alignment: center; }
+        if root.lap-best >= 0: Rectangle {
+            property <float> d: root.lap-now - root.lap-best;
+            property <string> t: (self.d < 0 ? "−" : "+") + root.d2(self.d);
+            x: 456px - dt.preferred-width - 20px; y: 152px; width: dt.preferred-width + 20px; height: 28px; border-radius: 6px;
+            background: self.d < 0 ? tower.green.with-alpha(Theme.dark ? 0.16 : 0.14) : #FF4A1C.with-alpha(Theme.dark ? 0.18 : 0.14);
+            dt := Text { x: 10px; text: parent.t; font-family: "Space Grotesk"; font-size: 18px; font-weight: 500; color: parent.d < 0 ? tower.green : tower.red;
+                vertical-alignment: center; height: parent.height; }
+        }
+        // the header and the rows
+        Text { x: 24px; y: 190px; width: 44px; height: 18px; text: "LAP"; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: root.sw-faint; vertical-alignment: center; }
+        Text { x: 68px; y: 190px; width: 200px; height: 18px; text: "TIME"; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: root.sw-faint; vertical-alignment: center; }
+        Text { x: 360px; y: 190px; width: 96px; height: 18px; text: "GAP"; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: root.sw-faint; vertical-alignment: center;
+            horizontal-alignment: right; }
+        for l[i] in root.laps: row := Rectangle {
+            property <bool> best: root.lap-best >= 0 && Math.abs(l - root.lap-best) < 0.0005;
+            visible: i < 5;
+            x: 24px; y: 210px + i * 30px; width: 432px; height: 27px; border-radius: 6px; background: TFg.c.with-alpha(0.05);
+            Rectangle { x: 4px; y: 3px; width: 30px; height: 21px; border-radius: 4px; background: row.best ? #9b4dff : TFg.c.with-alpha(Theme.dark ? 0.14 : 0.12);
+                Text { text: root.laps.length - i; font-size: 12px; font-weight: 700; color: row.best ? #ffffff : TFg.c; horizontal-alignment: center; vertical-alignment: center; } }
+            Text { x: 44px; width: 220px; height: parent.height; text: root.lapfmt(l); font-family: "Space Grotesk"; font-size: 17px; font-weight: 500; color: TFg.c; vertical-alignment: center; }
+            Text { x: parent.width - 104px; width: 96px; height: parent.height; text: row.best ? "BEST" : "+" + root.d2(l - root.lap-best);
+                font-family: "Space Grotesk"; font-size: 15px; font-weight: 500; color: row.best ? #9b4dff : root.sw-faint; horizontal-alignment: right; vertical-alignment: center; }
+        }
+    }
+
+    // 3 LCD sports watch: a resin body with its printed pusher labels and a grey-green LCD with segment digits (ghosts at
+    // 7 %), the last lap below, CHR / LAP / ▶ RUN; a tap on the LCD lights it teal for 3 s
+    property <bool> lcd-glow;
+    Timer { interval: 3s; running: root.lcd-glow; triggered => { root.lcd-glow = false; } }
+    if !root.ringing && root.mode == 2 && root.sw-look == 3: lcdw := Rectangle {
+        property <color> body: Theme.dark ? #1b1c20 : #ece9e2;
+        property <color> bevel: Theme.dark ? #2b2c31 : #d6d2c8;
+        property <color> pusher: Theme.dark ? #3a3b40 : #c9c5bb;
+        property <color> print: Theme.dark ? #a7a39b : #55524c;
+        property <color> ink: root.lcd-glow ? #0b2723 : #1d2620;
+        for pp in [{ x: 36, y: 134 }, { x: 36, y: 290 }, { x: 432, y: 134 }, { x: 432, y: 290 }]: Rectangle {
+            x: pp.x * 1px; y: pp.y * 1px; width: 12px; height: 22px; border-radius: 3px; background: lcdw.pusher; }
+        Rectangle { x: 44px; y: 102px; width: 392px; height: 242px; border-radius: 46px; background: lcdw.body; }
+        Rectangle { x: 56px; y: 114px; width: 368px; height: 218px; border-radius: 36px; border-width: 3px; border-color: lcdw.bevel; }
+        for pr in [{ x: 72, y: 122, t: "LIGHT", a: 0, c: false }, { x: 408, y: 122, t: "START / STOP", a: 2, c: false }, { x: 72, y: 316, t: "MODE", a: 0, c: false },
+                   { x: 408, y: 316, t: "LAP / RESET", a: 2, c: false }, { x: 240, y: 122, t: "1/100 SEC", a: 1, c: true }, { x: 240, y: 316, t: "LAP MEMORY 8", a: 1, c: false }]: Text {
+            x: (pr.a == 0 ? pr.x : pr.a == 1 ? pr.x - 100 : pr.x - 200) * 1px; y: pr.y * 1px; width: 200px; height: 11px; text: pr.t; font-size: 9px; font-weight: 700;
+            letter-spacing: pr.c ? 2px : 1.2px; color: pr.c ? #FF4A1C : lcdw.print;
+            horizontal-alignment: pr.a == 0 ? TextHorizontalAlignment.left : pr.a == 1 ? TextHorizontalAlignment.center : TextHorizontalAlignment.right; }
+        Rectangle { x: 80px; y: 140px; width: 320px; height: 166px; border-radius: 14px;
+            background: root.lcd-glow ? @linear-gradient(180deg, #7fe7d6 0%, #45c2b0 100%) : @linear-gradient(180deg, #b6c2ac 0%, #9cab95 100%);
+            border-width: 2px; border-color: root.lcd-glow ? #2e8f82 : #7d8a76;
+            TouchArea { clicked => { root.lcd-glow = true; } } }
+        Text { x: 98px; y: 153px; text: "CHR"; font-size: 12px; font-weight: 700; letter-spacing: 1px; color: lcdw.ink; }
+        Text { x: 140px; y: 154px; text: "LAP"; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: lcdw.ink; opacity: root.laps.length > 0 ? 1 : 0.08; }
+        Text { x: 172px; y: 154px; text: "SPLIT"; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: lcdw.ink; opacity: 0.08; }
+        Text { x: 282px; y: 154px; width: 100px; text: "▶ RUN"; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: lcdw.ink; horizontal-alignment: right;
+            opacity: root.watch-running && Math.mod(Math.floor(animation-tick() / 500ms), 2) == 0 ? 1 : 0.08; }
+        property <int> mins: Math.mod(Math.floor(root.watch / 60), 100);
+        property <int> secs: Math.mod(Math.floor(root.watch), 60);
+        property <int> cs: Math.mod(Math.floor(root.watch * 100), 100);
+        Seg7 { d: lcdw.mins >= 10 ? Math.floor(lcdw.mins / 10) : -1; x0: 102; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
+        Seg7 { d: Math.mod(lcdw.mins, 10); x0: 150; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
+        Seg7 { d: Math.floor(lcdw.secs / 10); x0: 214; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
+        Seg7 { d: Math.mod(lcdw.secs, 10); x0: 262; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
+        Seg7 { d: Math.floor(lcdw.cs / 10); x0: 322; y0: 210; w: 26; h: 40; t: 6; ink: lcdw.ink; }
+        Seg7 { d: Math.mod(lcdw.cs, 10); x0: 352; y0: 210; w: 26; h: 40; t: 6; ink: lcdw.ink; }
+        Rectangle { x: 201.4px; y: 201.4px; width: 7.2px; height: 7.2px; border-radius: 3.6px; background: lcdw.ink; }
+        Rectangle { x: 198.4px; y: 227.4px; width: 7.2px; height: 7.2px; border-radius: 3.6px; background: lcdw.ink; }
+        Rectangle { x: 312px; y: 246px; width: 5px; height: 5px; background: lcdw.ink; }
+        // the last lap: L n m ss cc
+        property <float> last: root.laps.length > 0 ? root.laps[0] : 0;
+        if root.laps.length > 0: Rectangle {
+            Seg7 { d: 10; x0: 104; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: Math.mod(root.laps.length, 10); x0: 124; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: Math.mod(Math.floor(lcdw.last / 60), 10); x0: 168; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: Math.floor(Math.mod(Math.floor(lcdw.last), 60) / 10); x0: 194; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: Math.mod(Math.floor(lcdw.last), 10); x0: 214; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: Math.floor(Math.mod(Math.floor(lcdw.last * 100), 100) / 10); x0: 244; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: Math.mod(Math.floor(lcdw.last * 100), 10); x0: 264; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+        }
+    }
+
     // ---------------------------------------------------------------- stopwatch
     if !root.ringing && root.mode == 2: sw := Rectangle {
+        property <bool> plain: root.sw-look == 0;
         property <int> cs: Math.mod(Math.floor(root.watch * 100), 100);
         property <string> main: root.watch >= 3600 ? Math.floor(root.watch / 3600) + ":" + root.two(Math.mod(Math.floor(root.watch / 60), 60)) + ":" + root.two(Math.mod(Math.floor(root.watch), 60))
             : Math.floor(root.watch / 60) + ":" + root.two(Math.mod(Math.floor(root.watch), 60));
         property <length> big: root.watch >= 3600 ? 60px : 76px;
         // the hundredths share the big digits' baseline (Noto Sans descent = 0.293 em)
         HorizontalLayout {
+            visible: sw.plain;
             x: 0; y: root.top + 30px; width: root.width; height: 92px; alignment: center; spacing: 2px;
             Text { text: sw.main; font-size: sw.big; font-weight: 600; color: TFg.c; vertical-alignment: bottom; }
             VerticalLayout { padding-bottom: (sw.big - 36px) * 0.293;
                 Text { text: "." + root.two(sw.cs); font-size: 36px; font-weight: 600; color: TFg.c.with-alpha(0.50); vertical-alignment: bottom; } }
         }
-        Text { x: 0; y: root.top + 124px; width: root.width; height: 20px; text: root.watch-running ? "Running" : root.watch > 0 ? "Stopped" : ""; font-size: 14px; color: TFg.c.with-alpha(0.50);
+        Text { visible: sw.plain; x: 0; y: root.top + 124px; width: root.width; height: 20px; text: root.watch-running ? "Running" : root.watch > 0 ? "Stopped" : ""; font-size: 14px; color: TFg.c.with-alpha(0.50);
             horizontal-alignment: center; vertical-alignment: center; }
+        // M19: a new lap slides in from the top and pushes the others down (180 ms); the fourth slides out under the edge
+        Rectangle { visible: sw.plain; x: 40px; y: root.top + 156px; width: root.width - 80px; height: 3 * 34px; clip: true;
         for l[i] in root.laps: Rectangle {
-            visible: i < 3;
-            x: 40px; y: root.top + 156px + i * 34px; width: root.width - 80px; height: 30px;
+            visible: i < 4;
+            x: 0; y: i * 34px + root.lap-off; width: parent.width; height: 30px;
+            opacity: i == 0 ? 1 + root.lap-off / 34px : 1;
             Text { x: 0; width: 100px; height: parent.height; text: "Lap " + (root.laps.length - i); font-size: 15px; color: TFg.c.with-alpha(0.60); vertical-alignment: center; }
             Text { x: parent.width - 140px; width: 140px; height: parent.height; text: (l >= 3600 ? Math.floor(l / 3600) + ":" + root.two(Math.mod(Math.floor(l / 60), 60)) : Math.floor(l / 60) + "") + ":" + root.two(Math.mod(Math.floor(l), 60)) + "." + root.two(Math.mod(Math.floor(l * 100), 100));
                 font-size: 15px; font-weight: 600; color: TFg.c.with-alpha(0.85); horizontal-alignment: right; vertical-alignment: center; }
             Rectangle { y: parent.height - 1px; height: 1px; background: TFg.c.with-alpha(0.08); }
+        }
         }
         HorizontalLayout {
             x: 0; y: 362px; width: root.width; height: 72px; alignment: center; spacing: 22px;
@@ -797,7 +1017,7 @@ export component TimersPage inherits Rectangle {
             color: root.st-tint.mix(TFg.c, 0.55); horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
         Ring { x: (parent.width - 170px) / 2; y: 58px; width: 170px; height: 170px; stroke: 10px; track: TFg.c.with-alpha(0.12);
             fr: root.st.total > 0 ? root.st.remaining / root.st.total : 0; arc: root.st-tint; opacity: root.st.running ? 1 : 0.55; }
-        Text { x: 0; y: 58px + 52px; width: parent.width; height: 48px; text: root.clock(root.st.remaining); font-size: root.st.remaining >= 3600 ? 34px : 42px;
+        TimeText { x: 0; y: 58px + 52px; width: parent.width; height: 48px; text: root.clock(root.st.remaining); rem: root.st.remaining; size: root.st.remaining >= 3600 ? 34px : 42px;
             font-weight: 600; color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
         Text { x: 0; y: 58px + 100px; width: parent.width; height: 18px; text: root.st.running ? "of " + root.clock(root.st.total) : "Paused";
             font-size: 13px; color: TFg.c.with-alpha(0.55); horizontal-alignment: center; vertical-alignment: center; }

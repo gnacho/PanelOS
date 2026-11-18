@@ -309,6 +309,7 @@ def popups_config(stored: Any) -> dict[str, Any]:
         "kind": s["kind"] if s.get("kind") in POPUP_KINDS else DEFAULT_POPUPS["kind"],
         "sound": bool(s.get("sound")),
         "seconds": int(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) else DEFAULT_POPUPS["seconds"],
+        "until": bool(s.get("until")),
     }
 
 

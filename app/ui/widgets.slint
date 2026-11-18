@@ -289,6 +289,65 @@ export component GlowText {
     }
 }
 
+// M8 digit roll: a digit rolls up like an odometer (180 ms, ease-out) when it changes; clipped only while it rolls,
+// so the rim is whole at rest. k = 0: a plain text.
+export component RollDigit {
+    in property <int> d;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <float> k;
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    in property <bool> paper;
+    // the shown digit is a plain value (a binding to d would already hold the new digit when `changed` runs)
+    property <int> now-d;
+    property <int> old-d;
+    init => { root.now-d = root.d; }
+    property <bool> rolling;
+    property <duration> t0;
+    changed d => { root.old-d = root.now-d; root.now-d = root.d; root.t0 = animation-tick(); root.rolling = true; }
+    Timer { interval: 200ms; running: root.rolling; triggered => { root.rolling = false; } }
+    property <float> p: root.rolling ? clamp((animation-tick() - root.t0) / 180ms, 0, 1) : 1;
+    property <float> e: 1 - Math.pow(1 - root.p, 3);
+    property <length> m: 4px;
+    preferred-width: g.preferred-width; preferred-height: g.preferred-height;
+    min-width: g.preferred-width; min-height: g.preferred-height;
+    // the roll runs in a window around the digits (Noto Sans: the digits fill 0.36–1.07 em of the 1.36 em line;
+    // the window is 0.30–1.12 em, room for the rim), whatever height a layout gives the digit
+    property <length> lh: g.preferred-height;
+    property <length> ct: 0.30 * root.font-size;
+    property <length> ch: 0.82 * root.font-size;
+    Rectangle {
+        x: -root.m; y: (root.height - root.lh) / 2 + root.ct; width: root.width + 2 * root.m; height: root.ch; clip: root.rolling;
+        g := GlowText { x: root.m; y: -root.ct + (1 - root.e) * root.ch; width: root.width; height: root.lh; text: root.now-d; font-size: root.font-size;
+            font-weight: root.font-weight; color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
+        if root.rolling: GlowText { x: root.m; y: -root.ct - root.e * root.ch; width: root.width; height: root.lh; text: root.old-d; font-size: root.font-size;
+            font-weight: root.font-weight; color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
+    }
+}
+
+// Two clock digits ("07", "23", or "7") whose changed digit rolls (M8); any other text is shown as it is.
+export component RollPair inherits HorizontalLayout {
+    in property <string> text;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <float> k;
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    in property <bool> paper;
+    property <bool> num: root.text.is-float() && root.text.character-count <= 2;
+    property <int> n: root.num ? root.text.to-float() : 0;
+    spacing: 0;
+    if root.num && root.text.character-count == 2: RollDigit { d: Math.floor(root.n / 10); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
+    if root.num: RollDigit { d: Math.mod(root.n, 10); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
+    if !root.num: GlowText { text: root.text; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
+}
+
 // A text line for titles: when it does not fit, it is either cut off with … or, with `scroll`, it
 // runs to the left in a loop (holds 1.5 s at the start of each round). speed 1..5 = slow..fast.
 // Short texts never move. k = GlowText rim (0 = plain).
@@ -383,36 +442,6 @@ export component LogoMark inherits Rectangle {
     }
 }
 
-// Three-way theme switch: 0 light, 1 dark, 2 auto (light sensor).
-component ThemeSegment inherits Rectangle {
-    in property <string> icon;
-    in property <string> label;
-    in property <bool> selected;
-    callback clicked;
-    height: 36px;
-    border-radius: 18px;
-    // Brand: Signal is never a ground for text. The chosen one is set off in
-    // the text colour (Ink on light, Paper on dark); its icon is lit in Signal.
-    background: root.selected ? Theme.text : (t.pressed ? Theme.surface-pressed : transparent);
-    t := TouchArea {
-        clicked => { root.clicked(); }
-    }
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 14px;
-        spacing: 6px;
-        Icon { text: root.icon; font-size: 18px; color: root.selected ? Theme.accent : Theme.muted; }
-        Text {
-            text: root.label;
-            font-size: Theme.font-label;
-            font-weight: root.selected ? Theme.weight-strong : Theme.weight-regular;
-            color: root.selected ? Theme.background : Theme.muted;
-            vertical-alignment: center;
-        }
-    }
-}
-
-
 // the app icon's shape: a superellipse (n = 4, continuous curvature, every side gently curved)
 export component Squircle inherits Path {
     in property <color> tone;
@@ -427,7 +456,9 @@ export component MarkButton inherits Rectangle {
     callback clicked;
     width: self.size;
     height: self.size;
-    Squircle { width: root.size; height: root.size; tone: touch.pressed ? Theme.button-pressed : Theme.button; }
+    property <float> sq: touch.pressed ? 0.95 : 1;
+    animate sq { duration: touch.pressed ? 60ms : 180ms; easing: cubic-bezier(0.34, 1.6, 0.64, 1); }
+    Squircle { x: root.size * (1 - root.sq) / 2; y: self.x; width: root.size * root.sq; height: self.width; tone: touch.pressed ? Theme.button-pressed : Theme.button; }
     touch := TouchArea { clicked => { root.clicked(); } }
     LogoMark { x: (root.size - self.width) / 2; y: (root.size - self.height) / 2; size: root.size * 0.58; }
 }
@@ -465,18 +496,144 @@ export component MorseMark inherits Rectangle {
     }
 }
 
+// Jelly motion (spec 28.15), closed-form in the time t (ms) since a change:
+// edge: 1 − e^(−t/τ)·(cos ωt + sin ωt / (ωτ)), ω = 2π/T — starts at rest, overshoots, rings out;
+// wobble: 1 + A·e^(−t/150)·cos(2πt/170) (the width; the height is 1/that, so the area stays);
+// cap: a soft limit c·tanh(x/c) for an overshoot x.
+export global Jelly {
+    pure public function edge(t: float, tau: float, per: float) -> float {
+        return t <= 0 ? 0 : 1 - Math.pow(2.71828, -t / tau) * (Math.cos(360deg * t / per) + Math.sin(360deg * t / per) / (6.28318 / per * tau));
+    }
+    pure public function wobble(t: float, a: float) -> float {
+        return t <= 0 ? 1 : 1 + a * Math.pow(2.71828, -t / 150) * Math.cos(360deg * t / 170);
+    }
+    pure public function cap(x: float, c: float) -> float {
+        // tanh(y) = (e^2y − 1) / (e^2y + 1)
+        return x <= 0 ? x : c * (Math.pow(2.71828, 2 * x / c) - 1) / (Math.pow(2.71828, 2 * x / c) + 1);
+    }
+}
+
+// A segmented control (spec 28.4, touch density): 40 px, 2 px padding, a 36 px pill; the chosen pill is the text
+// colour and its label the ground colour (an icon in it Signal); the pill moves with jelly edges (28.15): the leading
+// edge overshoots (soft-capped at 0.28 × its height), the trailing one follows 30 ms later; it thins while stretched and
+// bulges when squashed. Options are equally wide.
+export component Segmented inherits Rectangle {
+    in property <[string]> options;
+    in property <[string]> icons;
+    in property <int> selected;
+    callback picked(int);
+    height: 40px;
+    border-radius: 20px;
+    background: Theme.surface-raised;
+    property <int> n: Math.max(1, root.options.length);
+    property <length> pad: 2px;
+    property <length> seg: (root.width - 2 * root.pad) / root.n;
+    property <length> ph: root.height - 2 * root.pad;
+    // the motion: from where the pill was to the chosen one
+    property <int> from: root.selected;
+    property <duration> t0;
+    property <bool> moving;
+    changed selected => {
+        root.t0 = animation-tick();
+        root.moving = true;
+    }
+    Timer { interval: 760ms; running: root.moving; triggered => { root.moving = false; root.from = root.selected; } }
+    property <float> t: root.moving ? (animation-tick() - root.t0) / 1ms : 2000;
+    property <length> l0: root.pad + root.from * root.seg;
+    property <length> l1: root.pad + root.selected * root.seg;
+    property <bool> right: root.l1 > root.l0;
+    property <length> d: root.l1 - root.l0;
+    property <float> lead: Jelly.edge(root.t, 90, 240);
+    property <float> trail: Jelly.edge(root.t - 30, 130, 340);
+    // the edges: the leading one in the direction of travel, its overshoot soft-capped; both inside the control
+    property <length> lead-raw: (root.right ? root.l0 + root.seg : root.l0) + root.d * root.lead;
+    property <length> lead-target: root.right ? root.l1 + root.seg : root.l1;
+    property <length> lead-over: root.right ? root.lead-raw - root.lead-target : root.lead-target - root.lead-raw;
+    property <length> lead-e: root.lead-target + (root.right ? 1 : -1) * Jelly.cap(root.lead-over / 1px, 0.28 * root.ph / 1px) * 1px;
+    property <length> trail-raw: (root.right ? root.l0 : root.l0 + root.seg) + root.d * root.trail;
+    property <length> trail-target: root.right ? root.l1 : root.l1 + root.seg;
+    property <length> trail-over: root.right ? root.trail-raw - root.trail-target : root.trail-target - root.trail-raw;
+    property <length> trail-e: root.trail-target + (root.right ? 1 : -1) * Jelly.cap(root.trail-over / 1px, 0.21 * root.ph / 1px) * 1px;
+    property <length> pl: Math.max(root.pad, root.right ? root.trail-e : root.lead-e);
+    property <length> pr: Math.min(root.width - root.pad, root.right ? root.lead-e : root.trail-e);
+    property <length> pw: root.moving ? Math.max(0.6 * root.seg, root.pr - root.pl) : root.seg;
+    property <length> px: root.moving ? (root.pl + root.pr) / 2 - root.pw / 2 : root.l1;
+    property <length> phh: root.moving ? Math.max(0.8 * root.ph, Math.min(root.height - 2px, root.ph * Math.sqrt(root.seg / Math.max(1px, root.pw)))) : root.ph;
+    if root.selected >= 0: Rectangle { x: root.px; y: (root.height - root.phh) / 2; width: root.pw; height: root.phh; border-radius: self.height / 2; background: Theme.text; }
+    for o[i] in root.options: seg-item := Rectangle {
+        x: root.pad + i * root.seg; y: 0; width: root.seg; height: root.height;
+        // the labels change colour 70 ms after the tap, over 160 ms
+        property <bool> chosen: i == root.selected && root.t >= 70;
+        property <float> ck: self.chosen || (i == root.selected && !root.moving) ? 1 : 0;
+        animate ck { duration: 160ms; easing: ease-out; }
+        HorizontalLayout {
+            alignment: center; spacing: 6px;
+            if i < root.icons.length && root.icons[i] != "": Icon { text: root.icons[i]; font-size: 18px; color: Theme.text.mix(Theme.accent, 1 - seg-item.ck); vertical-alignment: center; }
+            Text { text: o; font-size: 15px; font-weight: 500; color: Theme.text.mix(Theme.background, 1 - seg-item.ck); vertical-alignment: center; overflow: elide; }
+        }
+        TouchArea { clicked => { root.picked(i); } }
+    }
+}
+
+// A dropdown (spec 28.5, touch density): a 48 px raised field with the chosen name and a chevron; the menu (48 px rows,
+// the chosen one with a Signal check and weight 600) opens over the page with a short fade and scale.
+export component Dropdown inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected;
+    in property <string> placeholder: "None";
+    callback picked(int);
+    height: 48px;
+    border-radius: 14px;
+    background: Theme.surface-raised;
+    border-width: pop-open ? 1px : 0px;
+    border-color: Theme.accent.with-alpha(0.45);
+    property <bool> pop-open;
+    Text { x: 16px; y: 0; width: parent.width - 52px; height: parent.height; text: root.selected >= 0 && root.selected < root.options.length ? root.options[root.selected] : root.placeholder;
+        font-size: 15px; font-weight: 500; color: root.selected >= 0 ? Theme.text : Theme.muted; vertical-alignment: center; overflow: elide; }
+    Icon { x: parent.width - 36px; y: 0; width: 24px; height: parent.height; text: root.pop-open ? "\u{F0143}" : "\u{F0140}"; font-size: 22px; color: Theme.muted; }
+    TouchArea { clicked => { root.pop-open = true; menu.show(); } }
+    menu := PopupWindow {
+        x: 0;
+        y: root.height + 6px;
+        width: root.width;
+        close-policy: close-on-click-outside;
+        Rectangle {
+            property <float> k: 0;
+            init => { self.k = 1; }
+            animate k { duration: 140ms; easing: ease-out; }
+            opacity: self.k;
+            width: root.width;
+            height: Math.min(8, root.options.length) * 48px + 12px;
+            border-radius: 14px; background: Theme.surface-raised; border-width: 1px; border-color: Theme.outline;
+            drop-shadow-blur: 16px; drop-shadow-color: #00000070;
+            Flickable {
+                x: 6px; y: 6px; width: parent.width - 12px; height: parent.height - 12px;
+                content-height: root.options.length * 48px;
+                for o[i] in root.options: Rectangle {
+                    y: i * 48px; width: parent.width; height: 48px; border-radius: 10px;
+                    background: row-ta.pressed ? Theme.surface-pressed : transparent;
+                    if i == root.selected: Icon { x: 10px; y: 0; width: 22px; height: parent.height; text: "\u{F012C}"; font-size: 18px; color: Theme.accent; }
+                    Text { x: 40px; y: 0; width: parent.width - 50px; height: parent.height; text: o; font-size: 15px; font-weight: i == root.selected ? 600 : 400;
+                        color: Theme.text; vertical-alignment: center; overflow: elide; }
+                    row-ta := TouchArea { clicked => { root.pop-open = false; menu.close(); root.picked(i); } }
+                }
+            }
+        }
+    }
+}
+
+// Three-way theme switch: 0 light, 1 dark, 2 auto (light sensor).
 export component ThemeSwitch inherits Rectangle {
     in property <int> selected: 2;
     callback changed(int);
     height: 40px;
-    border-radius: 20px;
-    background: Theme.surface;
-    HorizontalLayout {
-        padding: 2px;
-        spacing: 2px;
-        ThemeSegment { icon: "\u{F05A8}"; label: "Light"; selected: root.selected == 0; clicked => { root.changed(0); } }
-        ThemeSegment { icon: "\u{F0594}"; label: "Dark"; selected: root.selected == 1; clicked => { root.changed(1); } }
-        ThemeSegment { icon: "\u{F050E}"; label: "Auto"; selected: root.selected == 2; clicked => { root.changed(2); } }
+    min-width: 300px;
+    Segmented {
+        width: parent.width; height: parent.height;
+        options: ["Light", "Dark", "Auto"];
+        icons: ["\u{F05A8}", "\u{F0594}", "\u{F050E}"];
+        selected: root.selected;
+        picked(i) => { root.changed(i); }
     }
 }
 
@@ -487,8 +644,10 @@ export component RoundButton inherits Rectangle {
     callback clicked;
     width: self.size;
     height: self.size;
-    border-radius: self.size / 2;
-    background: touch.pressed ? Theme.button-pressed : Theme.button;
+    property <float> sq: touch.pressed ? 0.95 : 1;
+    animate sq { duration: touch.pressed ? 60ms : 180ms; easing: cubic-bezier(0.34, 1.6, 0.64, 1); }
+    Rectangle { x: root.size * (1 - root.sq) / 2; y: self.x; width: root.size * root.sq; height: self.width; border-radius: self.width / 2;
+        background: touch.pressed ? Theme.button-pressed : Theme.button; }
     touch := TouchArea {
         clicked => { root.clicked(); }
     }
@@ -504,19 +663,26 @@ export component TextButton inherits Rectangle {
     in property <string> text;
     in property <color> tint: Theme.text;
     in property <bool> danger: false;
+    in property <bool> primary: false;
     callback clicked;
     height: 48px;
-    border-radius: 14px;
-    background: touch.pressed ? Theme.button-pressed : Theme.button;
+    property <float> sq: touch.pressed ? 0.96 : 1;
+    animate sq { duration: touch.pressed ? 60ms : 180ms; easing: cubic-bezier(0.34, 1.6, 0.64, 1); }
+    Rectangle {
+        x: root.width * (1 - root.sq) / 2; y: root.height * (1 - root.sq) / 2; width: root.width * root.sq; height: root.height * root.sq;
+        border-radius: self.height / 2;
+        background: root.primary ? (touch.pressed ? Theme.text.with-alpha(0.8) : Theme.text) : (touch.pressed ? Theme.surface-pressed : Theme.surface-raised);
+        Text {
+            text: root.text;
+            font-size: 16px;
+            font-weight: 600;
+            color: root.primary ? Theme.background : root.danger ? (Theme.dark ? #FF6A4D : #C7361B) : root.tint;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
     touch := TouchArea {
         clicked => { root.clicked(); }
-    }
-    Text {
-        text: root.text;
-        font-size: 16px;
-        color: root.danger ? #ef4444 : root.tint;
-        horizontal-alignment: center;
-        vertical-alignment: center;
     }
 }
 
@@ -542,51 +708,185 @@ export component Chip inherits Rectangle {
     }
 }
 
-// A horizontally scrolling row of chips; `selected` is an index (-1 = none).
-export component ChipRow inherits Flickable {
+// One choice of several (spec 28.12/28.13: no choice chips): a segmented control for up to three short options, a
+// dropdown otherwise; `selected` is an index (-1 = none).
+export component ChipRow inherits Rectangle {
     in property <[string]> items;
     in property <int> selected: -1;
     callback picked(int);
-    height: 44px;
-    content-width: row.preferred-width;
-    row := HorizontalLayout {
-        spacing: 8px;
-        padding-top: 2px;
-        padding-bottom: 2px;
-        for item[i] in root.items: Chip {
-            text: item;
-            selected: i == root.selected;
-            clicked => { root.picked(i); }
-        }
-    }
+    height: 48px;
+    property <bool> seg: root.items.length <= 3 && root.items.length > 0;
+    if root.seg: Segmented { y: 4px; width: parent.width; options: root.items; selected: root.selected; picked(i) => { root.picked(i); } }
+    if !root.seg: Dropdown { width: parent.width; options: root.items; selected: root.selected; picked(i) => { root.picked(i); } }
 }
 
+// The switch (spec 28.3, 28.15): 56 × 32, a 24 px knob 4 px from the edge at rest; off: a raised track with a 1 px line
+// drawn inside and a faint knob; on: Signal with a #F5F3EE knob. Pressing flattens the knob 7 px toward its travel; a
+// flip moves its leading edge with the lead jelly edge (it stops at the inner wall, 3 px in, so it squashes there) and
+// its trailing edge 30 ms later; the height keeps the area.
 export component Toggle inherits Rectangle {
     in property <bool> on;
     callback toggled;
     width: 56px;
     height: 32px;
     border-radius: 16px;
-    background: root.on ? Theme.accent : Theme.button-pressed;
-    animate background { duration: 150ms; }
-    Rectangle {
-        x: root.on ? parent.width - self.width - 4px : 4px;
-        y: 4px;
-        width: 24px;
-        height: 24px;
-        border-radius: 12px;
-        background: #ffffff;
-        animate x { duration: 150ms; }
-    }
-    TouchArea {
+    property <float> ck: root.on ? 1 : 0;
+    animate ck { duration: 160ms; easing: ease-out; }
+    background: Theme.surface-raised.mix(Theme.accent, 1 - root.ck);
+    // the outline, inside
+    Rectangle { border-radius: parent.border-radius; border-width: 1px; border-color: Theme.outline.mix(Theme.accent, 1 - root.ck); }
+    property <length> kn: 24px;
+    property <length> rest-l: root.on ? root.width - 4px - root.kn : 4px;
+    property <length> from-l: root.on ? 4px : root.width - 4px - root.kn;
+    property <duration> t0;
+    property <bool> moving;
+    changed on => { root.t0 = animation-tick(); root.moving = true; }
+    Timer { interval: 720ms; running: root.moving; triggered => { root.moving = false; } }
+    property <float> t: root.moving ? (animation-tick() - root.t0) / 1ms : 2000;
+    property <length> d: root.rest-l - root.from-l;
+    property <length> lead-e: (root.on ? root.from-l + root.kn : root.from-l) + root.d * Jelly.edge(root.t, 90, 240);
+    property <length> trail-e: (root.on ? root.from-l : root.from-l + root.kn) + root.d * Jelly.edge(root.t - 30, 130, 340);
+    property <length> wall-e: root.on ? Math.min(root.lead-e, root.width - 3px) : Math.max(root.lead-e, 3px);
+    property <length> kl: root.on ? root.trail-e : root.wall-e;
+    property <length> kr: root.on ? root.wall-e : root.trail-e;
+    // pressing: 7 px toward the other side (90 ms)
+    property <float> pk: ta.pressed ? 1 : 0;
+    animate pk { duration: 90ms; easing: ease-out; }
+    property <length> kw: root.moving ? Math.max(0.72 * root.kn, root.kr - root.kl) : root.kn + 7px * root.pk;
+    property <length> kx: root.moving ? (root.kl + root.kr) / 2 - root.kw / 2 : (root.on ? root.rest-l - 7px * root.pk : root.rest-l);
+    property <length> kh: Math.max(0.7 * root.kn, Math.min(root.height - 8px, root.kn * root.kn / root.kw));
+    Rectangle { x: root.kx; y: (root.height - root.kh) / 2; width: root.kw; height: root.kh; border-radius: Math.min(self.width, self.height) / 2;
+        background: Theme.faint.mix(#F5F3EE, 1 - root.ck); }
+    ta := TouchArea {
         clicked => { root.toggled(); }
     }
 }
 
-// Large touch slider. `value` (0..1) comes from Home Assistant; while the
-// finger is down the slider follows it and `changed` fires on release.
-// unit: 0 = percent, 1 = kelvin (min-value..max-value), 2 = no number.
-export component BigSlider inherits Rectangle {
+// A checkbox (spec 28.8, 28.15): 22 px, radius 6; off a 1.5 px faint border, on a Signal fill with a #F5F3EE tick; it
+// pops and wobbles when ticked, dips when unticked
+export component CheckBox inherits Rectangle {
+    in property <bool> checked;
+    callback toggled;
+    width: 22px; height: 22px;
+    property <duration> t0;
+    property <bool> moving;
+    changed checked => { root.t0 = animation-tick(); root.moving = true; }
+    Timer { interval: 720ms; running: root.moving; triggered => { root.moving = false; } }
+    property <float> t: root.moving ? (animation-tick() - root.t0) / 1ms : 2000;
+    property <float> pop: !root.moving ? 1 : root.checked ? 0.6 + 0.4 * Jelly.edge(root.t, 90, 230) : 1 - 0.12 * Math.sin(180deg * Math.min(1, root.t / 120));
+    property <float> wob: !root.moving ? 1 : Jelly.wobble(root.t, root.checked ? 0.22 : 0.12);
+    property <float> tick: root.checked ? Math.max(0, Math.min(1, (root.t - 60) / 150)) : Math.max(0, 1 - root.t / 100);
+    Rectangle {
+        width: root.width * root.pop * root.wob; height: root.height * root.pop / root.wob;
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        border-radius: 6px;
+        background: root.checked ? Theme.accent : transparent;
+        border-width: root.checked ? 0px : 1.5px; border-color: Theme.faint;
+        if root.tick > 0.01: Path { width: parent.width; height: parent.height; viewbox-width: 22; viewbox-height: 22;
+            stroke: #F5F3EE; stroke-width: 2.6px; stroke-line-cap: round; stroke-line-join: round;
+            MoveTo { x: 5.5; y: 11.5; }
+            LineTo { x: 5.5 + 4 * Math.min(1, root.tick * 2.2); y: 11.5 + 4 * Math.min(1, root.tick * 2.2); }
+            LineTo { x: 9.5 + 7 * Math.max(0, root.tick * 1.8 - 0.8); y: 15.5 - 8 * Math.max(0, root.tick * 1.8 - 0.8); } }
+    }
+    TouchArea { clicked => { root.toggled(); } }
+}
+
+export global Brand {
+    out property <bool> dark: Theme.dark;
+    out property <color> signal: #FF4A1C;
+    out property <color> night: #000000;
+    out property <color> graphite: #121314;
+    out property <color> ink: #101114;
+    out property <color> paper: #F5F3EE;
+    out property <color> bg: dark ? #000000 : #F5F3EE;
+    out property <color> surface: dark ? #121314 : #FFFFFF;
+    out property <color> raised: dark ? #1d1f21 : #EBE8E1;
+    out property <color> text: dark ? #F5F3EE : #101114;
+    out property <color> muted: dark ? #A3A19C : #5F5E5A;
+    out property <color> line: dark ? #24262a : #DAD6CD;
+    out property <color> pressed: dark ? #2a2c2f : #DEDAD1;
+    out property <color> bad: dark ? #FF6A4D : #C7361B;
+}
+
+// the slider of the shared control set (spec 28.2, touch density): a 44 px row, a 6 px track (10 px while held) with a
+// Signal fill and round caps, the thumb grows from nothing to 22 px while held, a bubble with the value above it (it
+// stays 400 ms after the release, then fades); the ends stretch a little (6 px · (1 − e^(−d/40))) and bump
+export component TouchSlider inherits Rectangle {
+    // a gradient track (colour temperature, colour): 10 px, the thumb visible at rest
+    in property <brush> gradient;
+    in property <bool> has-gradient;
+    in property <string> bubble-text;
+    in property <float> value;
+    callback changed(float, bool);
+    property <float> drag-v;
+    property <bool> held: touch.pressed;
+    property <float> hk: root.held ? 1 : 0;
+    animate hk { duration: root.held ? 120ms : 160ms; easing: ease-out; }
+    // the value shown: the finger's while held (a first tap glides there in 180 ms), the app's otherwise
+    property <float> shown-raw: root.held ? root.drag-v : root.value;
+    property <bool> moving;
+    property <float> shown: root.shown-raw;
+    animate shown { duration: root.moving ? 0ms : 180ms; easing: cubic-bezier(0.33, 1, 0.68, 1); }
+    // past the ends: the finger's overshoot in px, stretched
+    property <length> over;
+    property <length> band: (root.over >= 0px ? 1 : -1) * 6px * (1 - Math.pow(2.71828, -Math.abs(root.over / 40px)));
+    animate band { duration: root.held ? 0ms : 220ms; easing: ease-out; }
+    // the bubble: shown while held and 400 ms after
+    property <bool> bubble;
+    Timer { interval: 400ms; running: !root.held && root.bubble; triggered => { root.bubble = false; } }
+    property <float> bk: root.held || root.bubble ? 1 : 0;
+    animate bk { duration: root.held ? 80ms : 200ms; easing: ease-out; }
+    height: 44px;
+    property <length> th: root.has-gradient ? 10px : 6px + 4px * root.hk;
+    property <length> tx: Math.min(0px, root.band);
+    property <length> tw: root.width + Math.abs(root.band);
+    // track and fill
+    Rectangle {
+        x: root.tx; y: (root.height - root.th) / 2; width: root.tw; height: root.th; border-radius: root.th / 2;
+        background: root.has-gradient ? root.gradient : Brand.text.with-alpha(Brand.dark ? 0.14 : 0.12);
+        if !root.has-gradient: Rectangle { x: 0; y: 0; width: Math.max(root.th, parent.width * root.shown); height: parent.height; border-radius: parent.border-radius;
+            background: Brand.signal; }
+    }
+    // the thumb
+    property <length> kd: root.has-gradient ? 18px + 4px * root.hk : 22px * root.hk;
+    if root.kd > 0.5px: Rectangle {
+        x: root.tx + root.tw * root.shown - root.kd / 2; y: (root.height - root.kd) / 2; width: root.kd; height: root.kd; border-radius: root.kd / 2;
+        background: Brand.dark ? #F5F3EE : #FFFFFF;
+        drop-shadow-blur: 3px; drop-shadow-offset-y: 1px; drop-shadow-color: #00000059;
+        border-width: 1px; border-color: #0000000f;
+    }
+    // the value bubble above the thumb
+    if root.bk > 0.01: Rectangle {
+        property <length> bw: bt.preferred-width + 16px;
+        x: Math.max(-8px, Math.min(root.width - self.bw + 8px, root.tx + root.tw * root.shown - self.bw / 2)); y: -22px;
+        width: self.bw; height: 24px; border-radius: 8px; background: Brand.text; opacity: root.bk;
+        bt := Text { text: root.bubble-text != "" ? root.bubble-text : Math.round(root.shown * 100) + "%"; font-size: 12px; font-weight: 600; color: Brand.bg; horizontal-alignment: center; vertical-alignment: center; }
+    }
+    touch := TouchArea {
+        pointer-event(ev) => {
+            if ev.kind == PointerEventKind.down {
+                root.moving = false;
+                root.bubble = true;
+                root.over = 0px;
+                root.drag-v = Math.max(0.0, Math.min(1, self.mouse-x / self.width));
+                root.changed(root.drag-v, false);
+            } else if ev.kind == PointerEventKind.up {
+                root.over = 0px;
+                root.changed(root.drag-v, true);
+            }
+        }
+        moved => {
+            root.moving = true;
+            root.over = self.mouse-x < 0px ? self.mouse-x : self.mouse-x > self.width ? self.mouse-x - self.width : 0px;
+            root.drag-v = Math.max(0.0, Math.min(1, self.mouse-x / self.width));
+            root.changed(root.drag-v, false);
+        }
+    }
+}
+
+// The details sheet's slider (spec 28.2): the label and the value in the row above the shared touch slider (6 px
+// track, the thumb and a value bubble while held; gradient tracks 10 px with the thumb at rest).
+export component BigSlider inherits VerticalLayout {
     in property <float> value;
     in property <string> title;
     in property <brush> track: Theme.button;
@@ -596,51 +896,15 @@ export component BigSlider inherits Rectangle {
     in property <int> min-value: 0;
     in property <int> max-value: 100;
     callback changed(float);
-    // let go: the slider keeps the dropped value until the device's value follows (or 3 s), then glides
-    // into it (no snap back and forth)
-    property <bool> holding;
-    property <float> held;
-    changed value => { root.holding = false; }
-    Timer { interval: 3s; running: root.holding; triggered => { root.holding = false; } }
-    property <float> live: touch.pressed ? max(0, min(1, touch.mouse-x / self.width)) : root.holding ? root.held : root.value;
-    animate live { duration: touch.pressed ? 0ms : 200ms; easing: ease-out; }
-    height: 56px;
-    border-radius: 16px;
-    background: root.track;
-    clip: true;
-    if root.show-fill: Rectangle {
-        x: 0;
-        width: parent.width * root.live;
-        height: parent.height;
-        background: root.fill;
+    property <float> live: root.value;
+    property <string> vtext: root.unit == 0 ? round(root.live * 100) + " %"
+        : root.unit == 1 ? round(root.min-value + root.live * (root.max-value - root.min-value)) + " K" : "";
+    spacing: 0;
+    HorizontalLayout { height: 22px;
+        Text { text: root.title; font-size: 15px; font-weight: 500; color: Theme.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text { text: root.vtext; font-size: 14px; color: Theme.muted; vertical-alignment: center; horizontal-alignment: right; }
     }
-    if !root.show-fill: Rectangle {
-        x: max(4px, min(parent.width - 10px, parent.width * root.live - 3px));
-        y: 6px;
-        width: 6px;
-        height: parent.height - 12px;
-        border-radius: 3px;
-        background: #ffffff;
-        border-width: 1px;
-        border-color: #00000055;
-    }
-    Text {
-        x: 16px;
-        text: root.unit == 0 ? root.title + "   " + round(root.live * 100) + " %"
-            : root.unit == 1 ? root.title + "   " + round(root.min-value + root.live * (root.max-value - root.min-value)) + " K"
-            : root.title;
-        font-size: 16px;
-        // Gradient tracks (colour temperature, colour) are light at the left: dark text.
-        color: !root.show-fill ? #111827 : (root.live > 0.25 ? #ffffff : Theme.text);
-        vertical-alignment: center;
-    }
-    touch := TouchArea {
-        pointer-event(ev) => {
-            if (ev.kind == PointerEventKind.up) {
-                root.held = max(0, min(1, self.mouse-x / root.width));
-                root.holding = true;
-                root.changed(root.held);
-            }
-        }
-    }
+    TouchSlider { value: root.value; has-gradient: !root.show-fill; gradient: root.track;
+        bubble-text: root.unit == 1 ? root.vtext : root.unit == 2 ? " " : "";
+        changed(v, final) => { root.live = v; if final { root.changed(v); } } }
 }

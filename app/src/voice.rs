@@ -55,10 +55,25 @@ pub enum FromApi {
 /// The microphone level while a run streams (0 … 1 for -60 … -20 dBFS, f32
 /// bits): the voice view's halo and trace read it.
 pub static MIC_LEVEL: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The last 100 ms of the microphone and of the panel's own sound (16 kHz): the oscilloscope look draws the sound itself.
+pub static MIC_TRACE: std::sync::Mutex<std::collections::VecDeque<i16>> = std::sync::Mutex::new(std::collections::VecDeque::new());
+pub static OUT_TRACE: std::sync::Mutex<std::collections::VecDeque<i16>> = std::sync::Mutex::new(std::collections::VecDeque::new());
+const TRACE_KEEP: usize = 1600;
+
+fn keep_trace(q: &std::sync::Mutex<std::collections::VecDeque<i16>>, samples: impl Iterator<Item = i16>) {
+    let mut q = q.lock().unwrap();
+    q.extend(samples);
+    let extra = q.len().saturating_sub(TRACE_KEEP);
+    q.drain(..extra);
+}
 
 #[derive(Debug, Clone)]
 pub enum VoiceUi {
     Listening,
+    /// Listening for more without a wake word (Home Assistant asked back): ends after FOLLOW_UP_SILENCE.
+    FollowUp,
+    /// Nothing was understood (no text from the speech).
+    NotUnderstood,
     Heard(String),
     Thinking,
     Answer(String),
@@ -825,9 +840,11 @@ impl Player {
                         Ok(frames) => {
                             let first = offset / 2;
                             let mut q = echo2.lock().unwrap();
+                            let start = q.len();
                             for tri in mono[first..first + frames].chunks(3) {
                                 q.push_back((tri.iter().map(|v| *v as i32).sum::<i32>() / tri.len() as i32) as i16);
                             }
+                            keep_trace(&OUT_TRACE, q.iter().skip(start).copied());
                             while q.len() > 16000 {
                                 q.pop_front();
                             }
@@ -1042,7 +1059,6 @@ pub fn spawn(
         // the next follow-up run (to reproduce conversations without a person).
         let mut test_follow_up: Option<Vec<i16>> = None;
         // The current run was started by a ringing timer (no wake word).
-        let mut ring_run = false;
         // The current run is a follow-up (no wake word): it ends early when
         // nobody starts to speak (FOLLOW_UP_SILENCE).
         let mut follow_up_run = false;
@@ -1246,7 +1262,6 @@ pub fn spawn(
                             2 if state != State::Idle => {
                                 state = State::Idle;
                                 test_audio = None;
-                                ring_run = false;
                                 follow_up_run = false;
                                 follow_up_pending = continue_conversation;
                                 continue_conversation = false;
@@ -1270,12 +1285,14 @@ pub fn spawn(
                                 state = State::Idle;
                                 follow_up_pending = false;
                                 idle_after_speech = false;
-                                ring_run = false;
                                 follow_up_run = false;
                                 let message = get("message").or_else(|| get("code")).unwrap_or_default();
                                 if quiet_until.is_some_and(|t| Instant::now() < t) {
                                     eprintln!("nspanel-app: Assist error after the silent follow-up (not shown): {message}");
                                     ui(VoiceUi::Idle);
+                                } else if get("code").as_deref() == Some("stt-no-text-recognized") {
+                                    eprintln!("nspanel-app: Assist: nothing understood");
+                                    ui(VoiceUi::NotUnderstood);
                                 } else {
                                     eprintln!("nspanel-app: Assist error: {message}");
                                     ui(VoiceUi::Error(message));
@@ -1386,7 +1403,6 @@ pub fn spawn(
                         let _ = to_api.send(ToApi::Stop);
                         state = State::Idle;
                     }
-                    ring_run = false;
                     follow_up_pending = false;
                     player.stop();
                     engine.reset();
@@ -1481,7 +1497,7 @@ pub fn spawn(
                         });
                         state = State::Starting;
                         since = Instant::now();
-                        ui(VoiceUi::Listening);
+                        ui(VoiceUi::FollowUp);
                     } else if !muted && (!speaking || !aec.ptr.is_null()) {
                         // With echo cancellation the wake word also works while
                         // the panel speaks: it cuts the answer off.
@@ -1532,7 +1548,6 @@ pub fn spawn(
                 State::Starting => {
                     if since.elapsed() > Duration::from_secs(5) {
                         state = State::Idle;
-                        ring_run = false;
                         test_audio = None;
                         ui(VoiceUi::Error("No answer from Home Assistant".into()));
                     }
@@ -1566,6 +1581,7 @@ pub fn spawn(
                         let rms = (chunk.iter().map(|&v| (v as f64) * (v as f64)).sum::<f64>() / chunk.len().max(1) as f64).sqrt();
                         let db = 20.0 * (rms / 32768.0).max(1e-9).log10();
                         MIC_LEVEL.store((((db + 60.0) / 40.0).clamp(0.0, 1.0) as f32).to_bits(), std::sync::atomic::Ordering::Relaxed);
+                        keep_trace(&MIC_TRACE, chunk.iter().copied());
                     }
                     if let Some((samples, pos)) = test_audio.as_mut() {
                         // Test audio, then silence.

@@ -83,6 +83,12 @@
         "media": "Media player",
         "camera": "Camera"
       }
+    },
+    "level": {
+      "options": {
+        "info": "Info",
+        "warning": "Warning"
+      }
     }
   },
   "services": {
@@ -105,36 +111,6 @@
         "seconds": {
           "name": "Seconds",
           "description": "How long to show it; 0 = until someone touches the screen."
-        }
-      }
-    },
-    "show_message": {
-      "name": "Show message",
-      "description": "Shows a message on a PanelOS panel.",
-      "fields": {
-        "panel_id": {
-          "name": "Panel",
-          "description": "The panel's ID, as in its PanelOS entry; empty = every panel."
-        },
-        "title": {
-          "name": "Title",
-          "description": "Heading of the message."
-        },
-        "message": {
-          "name": "Message",
-          "description": "Text of the message."
-        },
-        "icon": {
-          "name": "Icon",
-          "description": "Material Design icon (mdi:...)."
-        },
-        "seconds": {
-          "name": "Seconds",
-          "description": "How long to show it; 0 = until someone touches the screen."
-        },
-        "chime": {
-          "name": "Chime",
-          "description": "Play a short chime on the panel."
         }
       }
     },
@@ -175,6 +151,44 @@
         "alert": {
           "name": "Critical alert",
           "description": "The critical alert's ID, as shown on the PanelOS page."
+        }
+      }
+    },
+    "notify": {
+      "name": "Notify",
+      "description": "Puts a notification on PanelOS panels: in their notifications list and in the new-notification window. It is kept until it is answered on the panel.",
+      "fields": {
+        "panel_id": {
+          "name": "Panels",
+          "description": "The panels' ids; none: every panel."
+        },
+        "title": {
+          "name": "Title",
+          "description": "The notification's title."
+        },
+        "message": {
+          "name": "Message",
+          "description": "The text of the notification."
+        },
+        "icon": {
+          "name": "Icon",
+          "description": "An icon (mdi:…)."
+        },
+        "level": {
+          "name": "Level",
+          "description": "Info, or a warning."
+        },
+        "picture": {
+          "name": "Picture",
+          "description": "A camera entity or a picture's address, shown with the notification."
+        },
+        "buttons": {
+          "name": "Buttons",
+          "description": "Up to three buttons; a press fires the panelos_notification_action event."
+        },
+        "until_answered": {
+          "name": "Until answered",
+          "description": "It stays in front until it is confirmed or dismissed on the panel."
         }
       }
     }
@@ -241,6 +255,11 @@
       },
       "proximity_wake": {
         "name": "Wake on approach"
+      }
+    },
+    "notify": {
+      "notifications": {
+        "name": "Notifications"
       }
     }
   }

@@ -9,7 +9,7 @@
 // waiting, none when off; so from across the room it is clear whether something is merely set or busy.
 // The device chip (top right) opens the rooms; the extra options (fan, swing, preset) open a sheet.
 // The app gives every text and decides what the device can do.
-import { Icon, GlowText, DragSheet } from "widgets.slint";
+import { Icon, GlowText, DragSheet, Dropdown, Toggle, RollDigit } from "widgets.slint";
 import { Theme, Act, Words } from "theme.slint";
 
 export struct ClimateDev {
@@ -64,6 +64,32 @@ global TK {
     public pure function num(v: float, step: float) -> string {
         step < 1 ? (Math.round(v * 10) / 10 == Math.round(v) ? Math.round(v) + ".0" : "" + Math.round(v * 10) / 10) : "" + Math.round(v)
     }
+}
+
+// M21 setpoint roll: the temperature's changed digits roll as the clock's (M8); "21.5" with tenths, "22" without.
+component RollTemp inherits HorizontalLayout {
+    in property <float> v;
+    in property <bool> tenths;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    in property <TextVerticalAlignment> vertical-alignment: center;
+    property <int> t10: root.tenths ? Math.round(root.v * 10) : Math.round(root.v) * 10;
+    property <int> whole: Math.floor(root.t10 / 10);
+    property <int> dec: Math.mod(root.t10, 10);
+    spacing: 0;
+    if root.v < 0 || root.whole >= 100: GlowText { text: TK.num(root.v, root.tenths ? 0.5 : 1); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: 0; neon: root.neon; glow: root.glow; }
+    if root.v >= 0 && root.whole < 100 && root.whole >= 10: RollDigit { d: Math.floor(root.whole / 10); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; neon: root.neon; glow: root.glow; }
+    if root.v >= 0 && root.whole < 100: RollDigit { d: Math.mod(root.whole, 10); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; neon: root.neon; glow: root.glow; }
+    if root.v >= 0 && root.whole < 100 && root.tenths: GlowText { text: "."; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: 0; neon: root.neon; glow: root.glow; }
+    if root.v >= 0 && root.whole < 100 && root.tenths: RollDigit { d: root.dec; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; neon: root.neon; glow: root.glow; }
 }
 
 component ArcPath inherits Path {
@@ -229,8 +255,8 @@ component ThermoClassic inherits ThermoBase {
         color: root.active ? root.tint.mix(root.ink, 0.6) : root.ink.with-alpha(0.65); horizontal-alignment: center; vertical-alignment: center; }
     HorizontalLayout {
         x: 0; y: 144px; width: root.width; height: 72px; alignment: center; spacing: 0px;
-        Text { text: root.show-t ? TK.num(root.d.target, root.d.step) : TK.num(root.d.current, 0.5);
-            font-size: 67px; font-weight: 300; color: root.ink; vertical-alignment: center; }
+        RollTemp { v: root.show-t ? root.d.target : root.d.current; tenths: root.show-t ? root.d.step < 1 : true;
+            font-size: 67px; font-weight: 300; color: root.ink; }
         Text { text: "°"; font-size: 34px; font-weight: 300; color: root.ink.with-alpha(0.8); vertical-alignment: top; }
     }
     HorizontalLayout {
@@ -255,15 +281,27 @@ component ThermoClassic inherits ThermoBase {
     // modes (only those the device has); the chosen one glows while the device works
     HorizontalLayout {
         x: 0; y: 348px; width: root.width; height: 48px; alignment: center; spacing: 12px;
-        for k[i] in root.d.modes: Rectangle {
+        for k[i] in root.d.modes: mb := Rectangle {
             width: 48px; height: 48px;
             TouchArea { clicked => { Act.act("thermo.mode", i); } }
+            // while heating the flame flickers through its three frames (a new one every 120–200 ms); while cooling the
+            // snowflake's tips dim now and then (every 0.4–1.2 s) (M22)
+            property <bool> flame: k == 1 && i == root.d.mode && root.busy && root.d.action == 1;
+            property <bool> snow: k == 2 && i == root.d.mode && root.busy && root.d.action == 2;
+            property <int> fk;
+            Timer { interval: mb.flame ? (120 + Math.mod(mb.fk * 73, 81)) * 1ms : (Math.mod(mb.fk, 2) == 0 ? (400 + Math.mod(mb.fk * 211, 801)) * 1ms : 150ms);
+                running: mb.flame || mb.snow; triggered => { mb.fk += 1; } }
+            property <[int]> seq: [0, 2, 1, 2, 0, 1];
             if i == root.d.mode && root.busy: Disc { cx: 24; cy: 24; r: 33; background: TK.tints[k].with-alpha(0.12 + 0.1 * root.pulse); }
             Rectangle {
                 border-radius: 24px;
                 background: i == root.d.mode ? TK.tints[k] : root.ink.with-alpha(0.07);
                 border-width: i == root.d.mode ? 0px : 1px; border-color: root.ink.with-alpha(0.14);
-                Icon { width: parent.width; height: parent.height; text: TK.glyphs[k]; font-size: 23px; color: i == root.d.mode ? #ffffff : root.ink.with-alpha(0.7); }
+                if !mb.flame && !mb.snow: Icon { width: parent.width; height: parent.height; text: TK.glyphs[k]; font-size: 23px; color: i == root.d.mode ? #ffffff : root.ink.with-alpha(0.7); }
+                if mb.flame: Image { x: (parent.width - 23px) / 2; y: (parent.height - 23px) / 2; width: 23px; height: 23px;
+                    source: mb.seq[Math.mod(mb.fk, 6)] == 0 ? @image-url("thermo/flame-0-23.png") : mb.seq[Math.mod(mb.fk, 6)] == 1 ? @image-url("thermo/flame-1-23.png") : @image-url("thermo/flame-2-23.png"); }
+                if mb.snow: Image { x: (parent.width - 23px) / 2; y: (parent.height - 23px) / 2; width: 23px; height: 23px;
+                    source: Math.mod(mb.fk, 2) == 0 ? @image-url("thermo/snowflake-0-23.png") : @image-url("thermo/snowflake-1-23.png"); }
             }
         }
     }
@@ -663,7 +701,7 @@ component ThermoNeon inherits ThermoBase {
         color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; }
     HorizontalLayout {
         x: 0; y: 144px; width: root.width; height: 72px; alignment: center; spacing: 0px;
-        GlowText { text: root.show-t ? TK.num(root.d.target, root.d.step) : TK.num(root.d.current, 0.5); font-size: 67px; font-weight: 300;
+        RollTemp { v: root.show-t ? root.d.target : root.d.current; tenths: root.show-t ? root.d.step < 1 : true; font-size: 67px; font-weight: 300;
             color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; }
         VerticalLayout { alignment: start;
             GlowText { text: "°"; font-size: 34px; font-weight: 300; color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; } }
@@ -740,7 +778,7 @@ export component ThermostatPage inherits Rectangle {
     Rectangle {
         property <color> ink: root.light-face ? (root.look == 2 ? #4a3f34 : #2a2a2e) : #ffffff;
         x: root.width - 16px - self.width; y: 10px; height: 32px;
-        width: 200px;
+        width: 152px;
         border-radius: 16px;
         background: root.look == 3 ? #00000066 : root.light-face ? #00000012 : #ffffff1f;
         border-width: root.look == 3 ? 1px : 0px; border-color: root.grid.mix(#ffffff, 0.3).with-alpha(0.7);
@@ -760,11 +798,11 @@ export component ThermostatPage inherits Rectangle {
         width: parent.width; height: parent.height;
         open: root.sheet; need: root.sheet-need;
         close => { Act.act("thermo.sheet-close", ""); }
-        sheet-color: #1a1a1df7; ink: #ffffff;
-        Text { x: 20px; y: 22px; height: 30px; text: root.d.name; font-size: 20px; font-weight: 600; color: #ffffff; vertical-alignment: center; }
+        sheet-color: Theme.surface; ink: Theme.text;
+        Text { x: 20px; y: 22px; height: 30px; text: root.d.name; font-size: 20px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Rectangle {
             x: parent.width - 16px - 88px; y: 20px; width: 88px; height: 34px; border-radius: 17px; background: root.tint;
-            Text { text: "Done"; font-size: 15px; font-weight: 600; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; }
+            Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.text; horizontal-alignment: center; vertical-alignment: center; }
             TouchArea { clicked => { Act.act("thermo.sheet-close", ""); } }
         }
         // one row per option, an icon in front instead of a written label
@@ -776,7 +814,7 @@ export component ThermostatPage inherits Rectangle {
             property <int> before: (ri > 0 && root.d.fans.length > 0 ? 1 : 0) + (ri > 1 && root.d.swings.length > 0 ? 1 : 0);
             visible: row.items.length > 0;
             x: 16px; y: root.sh-r0 + self.before * 54px; width: parent.width - 32px; height: 32px;
-            Icon { x: 0; y: 0; width: 28px; height: parent.height; text: row.icon; font-size: 20px; color: #ffffffb3; }
+            Icon { x: 0; y: 0; width: 28px; height: parent.height; text: row.icon; font-size: 20px; color: Theme.muted; }
             HorizontalLayout {
                 x: 38px; y: 0; height: 32px; alignment: start; spacing: 6px;
                 for it[ii] in row.items: SheetChip { text: it; on: it == row.cur; accent: root.tint;
@@ -789,32 +827,28 @@ export component ThermostatPage inherits Rectangle {
     // the settings: a sheet that follows the finger (DragSheet)
     property <bool> st-neon: root.look == 3;
     property <length> st-r0: 72px;
-    property <length> settings-need: root.st-neon ? root.st-r0 + 40px + 54px + 40px + 54px + 32px : root.st-r0 + 40px + 32px;
+    property <length> settings-need: root.st-neon ? root.st-r0 + 3 * 54px + 8px : root.st-r0 + 54px + 8px;
     DragSheet {
         width: parent.width; height: parent.height;
         open: root.settings; need: root.settings-need;
         close => { Act.act("thermo.settings-close", ""); }
-        sheet-color: #1d1d21f7; ink: #ffffff;
-        Text { x: 20px; y: 22px; text: "Thermostat"; font-size: 20px; font-weight: 600; color: #ffffff; }
-        Rectangle { x: parent.width - 16px - 88px - 46px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff1f;
-            Icon { text: "\u{F02FD}"; font-size: 21px; color: #ffffffe6; } }
+        sheet-color: Theme.surface; ink: Theme.text;
+        Text { x: 20px; y: 22px; text: "Thermostat"; font-size: 20px; font-weight: 600; color: Theme.text; }
+        Rectangle { x: parent.width - 16px - 88px - 46px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: Theme.surface-raised;
+            Icon { text: "\u{F02FD}"; font-size: 21px; color: Theme.text; } }
         Rectangle { x: parent.width - 16px - 88px; y: 19px; width: 88px; height: 34px; border-radius: 17px; background: Theme.text;
             Text { text: "Done"; font-size: 15px; font-weight: 600; color: Theme.background; horizontal-alignment: center; vertical-alignment: center; }
             TouchArea { clicked => { Act.act("thermo.settings-close", ""); } } }
-        HorizontalLayout { x: 16px; y: root.st-r0; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.0"); on: root.look == 0; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "0"); } } }
-            SheetChip { text: Words.line("ui.looks.thermostat.1"); on: root.look == 1; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "1"); } } } }
-        HorizontalLayout { x: 16px; y: root.st-r0 + 40px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.2"); on: root.look == 2; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "2"); } } }
-            SheetChip { text: Words.line("ui.looks.thermostat.3"); on: root.look == 3; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.look", "3"); } } } }
-        if root.st-neon: HorizontalLayout { x: 16px; y: root.st-r0 + 94px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.4"); on: root.fl-scene == 0; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "0"); } } }
-            SheetChip { text: Words.line("ui.looks.thermostat.5"); on: root.fl-scene == 1; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "1"); } } } }
-        if root.st-neon: HorizontalLayout { x: 16px; y: root.st-r0 + 134px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.6"); on: root.fl-scene == 2; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "2"); } } }
-            SheetChip { text: Words.line("ui.looks.thermostat.7"); on: root.fl-scene == 3; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.scene", "3"); } } } }
-        if root.st-neon: HorizontalLayout { x: 16px; y: root.st-r0 + 188px; height: 32px; alignment: start; spacing: 6px;
-            SheetChip { text: Words.line("ui.looks.thermostat.8"); on: root.fl-cars; check: true; accent: Theme.accent;  TouchArea { clicked => { Act.act("thermo.cars", ""); } } } }
+        Dropdown { x: 16px; y: root.st-r0 - 6px; width: parent.width - 32px;
+            options: [Words.line("ui.looks.thermostat.0"), Words.line("ui.looks.thermostat.1"), Words.line("ui.looks.thermostat.2"), Words.line("ui.looks.thermostat.3")];
+            selected: root.look; picked(i) => { Act.act("thermo.look", i); } }
+        if root.st-neon: Dropdown { x: 16px; y: root.st-r0 + 54px - 6px; width: parent.width - 32px;
+            options: [Words.line("ui.looks.thermostat.4"), Words.line("ui.looks.thermostat.5"), Words.line("ui.looks.thermostat.6"), Words.line("ui.looks.thermostat.7")];
+            selected: root.fl-scene; picked(i) => { Act.act("thermo.scene", i); } }
+        if root.st-neon: Rectangle { x: 16px; y: root.st-r0 + 108px - 6px; width: parent.width - 32px; height: 48px;
+            Text { x: 4px; width: parent.width - 80px; height: parent.height; text: Words.line("ui.looks.thermostat.8"); font-size: 15px; font-weight: 500; color: Theme.text;
+                vertical-alignment: center; overflow: elide; }
+            Toggle { x: parent.width - 56px; y: 8px; on: root.fl-cars; toggled => { Act.act("thermo.cars", ""); } } }
     }
 
     // ---------------------------------------------------------------- rooms (the device picker)
@@ -824,18 +858,18 @@ export component ThermostatPage inherits Rectangle {
         width: parent.width; height: parent.height;
         open: root.picker; need: root.picker-need;
         close => { Act.act("thermo.picker-close", ""); }
-        sheet-color: #1a1a1df7; ink: #ffffff;
+        sheet-color: Theme.surface; ink: Theme.text;
         clip: true;
-        Text { x: 20px; y: 20px; height: 32px; text: "Rooms"; font-size: 20px; font-weight: 600; color: #ffffff; vertical-alignment: center; }
+        Text { x: 20px; y: 20px; height: 32px; text: "Rooms"; font-size: 20px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         // the page's look and options
         Rectangle {
-            x: parent.width - 96px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff14;
-            Icon { text: "\u{F0493}"; font-size: 20px; color: #ffffffcc; }
+            x: parent.width - 96px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: Theme.surface-raised;
+            Icon { text: "\u{F0493}"; font-size: 20px; color: Theme.text; }
             TouchArea { clicked => { Act.act("thermo.settings", ""); } }
         }
         Rectangle {
-            x: parent.width - 52px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: #ffffff14;
-            Icon { text: "\u{F0156}"; font-size: 20px; color: #ffffffcc; }
+            x: parent.width - 52px; y: 18px; width: 36px; height: 36px; border-radius: 18px; background: Theme.surface-raised;
+            Icon { text: "\u{F0156}"; font-size: 20px; color: Theme.text; }
             TouchArea { clicked => { Act.act("thermo.picker-close", ""); } }
         }
         for rm[i] in root.rooms: Rectangle {
@@ -844,15 +878,15 @@ export component ThermostatPage inherits Rectangle {
             x: 16px + self.cc * 228px; y: 64px + self.rr * 94px; width: 220px; height: 86px;
             border-radius: 18px; background: rm.outside ? #ffffff0a : #ffffff12;
             TouchArea { clicked => { Act.act("thermo.room", i); } }
-            border-width: rm.sel >= 0 ? 2px : 0px; border-color: #ffffffcc;
-            Text { x: 14px; y: 8px; width: parent.width - 28px; height: 18px; text: rm.name; font-size: 13px; font-weight: 600; color: #ffffffa6; overflow: elide; vertical-alignment: center; }
-            if rm.outside: Icon { x: parent.width - 34px; y: 6px; width: 22px; height: 22px; text: "\u{F0595}"; font-size: 17px; color: #ffffff80; }
+            border-width: rm.sel >= 0 ? 2px : 0px; border-color: Theme.text;
+            Text { x: 14px; y: 8px; width: parent.width - 28px; height: 18px; text: rm.name; font-size: 13px; font-weight: 600; color: Theme.muted; overflow: elide; vertical-alignment: center; }
+            if rm.outside: Icon { x: parent.width - 34px; y: 6px; width: 22px; height: 22px; text: "\u{F0595}"; font-size: 17px; color: Theme.muted; }
             HorizontalLayout {
                 x: 14px; y: 26px; height: 32px; alignment: start; spacing: 10px;
-                Text { text: rm.temp; font-size: 26px; font-weight: 400; color: #ffffff; vertical-alignment: center; }
+                Text { text: rm.temp; font-size: 26px; font-weight: 400; color: Theme.text; vertical-alignment: center; }
                 if rm.hum != "": HorizontalLayout { spacing: 2px; alignment: start;
                     Icon { width: 16px; text: "\u{F058E}"; font-size: 14px; color: #8fc9ff; }
-                    Text { text: rm.hum; font-size: 13px; color: #ffffffa6; vertical-alignment: center; } }
+                    Text { text: rm.hum; font-size: 13px; color: Theme.muted; vertical-alignment: center; } }
             }
             // its climate devices (one line each, two at most)
             for dl[j] in rm.dev: HorizontalLayout {

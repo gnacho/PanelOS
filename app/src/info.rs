@@ -1,7 +1,10 @@
 //! Notifications page: Home Assistant's persistent notifications (followed
-//! live), unread and newest first; a tap opens one (and marks it read), its
-//! card dismisses it, "Clear all" dismisses them all. The fridge look's notes
-//! are drawn by the app; the pager's buttons scroll and open.
+//! live) and PanelOS's own (from the integration's notify entity and action,
+//! with an icon, a level, a picture and buttons), unread and newest first; a
+//! tap opens one (and marks it read), its card dismisses it, "Clear all"
+//! dismisses them all. The fridge look's notes are drawn by the app; the
+//! pager's buttons scroll and open. New ones pop up in the window (spec 30),
+//! several in one window ("i of n").
 
 use std::collections::HashMap;
 
@@ -11,12 +14,19 @@ use crate::draw::{self, Job};
 use crate::pages::{now, parse_iso};
 use crate::{icons, texts, with_state, AppWindow, InfoNote};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct Note {
     title: String,
     message: String,
     created: i64,
     unread: bool,
+    /// PanelOS's own (the integration keeps it until it is answered): its id there, after "po:"
+    own: bool,
+    icon: String,
+    level: i32,
+    buttons: Vec<String>,
+    picture: String,
+    until: bool,
 }
 
 thread_local! {
@@ -24,12 +34,12 @@ thread_local! {
     /// The note open (its id), the pager's first list row.
     static OPEN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
     static FIRST: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// The new notification shown as a card above any page (its id).
-    static POP: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    /// The new-notification window: the notifications it holds (ids, in order) and the one shown.
+    static WIN: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static WIN_AT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The pictures of PanelOS notifications (a camera's snapshot, a picture's address), by note id.
+    static PICTURES: std::cell::RefCell<HashMap<String, slint::Image>> = std::cell::RefCell::new(HashMap::new());
 }
-
-/// The buttons of an open note: dismiss it in Home Assistant, or just close it.
-const ACTIONS: [&str; 2] = ["Dismiss", "OK"];
 
 /// A notification's content key (title and text): the same notification made again keeps its first time.
 fn seen_key(title: &str, message: &str) -> String {
@@ -78,7 +88,7 @@ pub fn update(kind: &str, notes: &Value) {
     NOTES.with(|n| {
         let mut n = n.borrow_mut();
         if kind == "current" {
-            n.clear();
+            n.retain(|_, v| v.own);
         }
         for (id, v) in map {
             if kind == "removed" {
@@ -89,15 +99,126 @@ pub fn update(kind: &str, notes: &Value) {
             let unread = n.get(id).map(|old| old.unread).unwrap_or(true);
             n.insert(
                 id.clone(),
-                Note { title: text("title"), message: text("message"), created: parse_iso(&text("created_at")).unwrap_or(now()), unread },
+                Note {
+                    title: text("title"),
+                    message: text("message"),
+                    created: parse_iso(&text("created_at")).unwrap_or(now()),
+                    unread,
+                    ..Default::default()
+                },
             );
         }
         // the time each one first came (not Home Assistant's new time after its restart)
         let first = first_seen(&n);
-        for (id, note) in n.iter_mut() {
+        for (id, note) in n.iter_mut().filter(|(_, v)| !v.own) {
             if let Some(t) = first.get(id) {
                 note.created = *t;
             }
+        }
+    });
+}
+
+/// PanelOS's own notifications for this panel (the integration's list, newest first); returns the new ones to pop up.
+pub fn update_own(ui: &AppWindow, v: &Value) -> Vec<String> {
+    let list = v["notes"].as_array().cloned().unwrap_or_default();
+    let mut wanted: Vec<String> = Vec::new();
+    NOTES.with(|n| {
+        let mut n = n.borrow_mut();
+        n.retain(|_, note| !note.own);
+        for item in &list {
+            let Some(id) = item["id"].as_str() else { continue };
+            let text = |k: &str| item[k].as_str().unwrap_or("").to_string();
+            let picture = text("picture");
+            let key = format!("po:{id}");
+            if !picture.is_empty() {
+                wanted.push(format!("{key}\n{picture}"));
+            }
+            n.insert(
+                key,
+                Note {
+                    title: text("title"),
+                    message: text("message"),
+                    created: item["created"].as_i64().unwrap_or_else(now),
+                    unread: !item["read"].as_bool().unwrap_or(false),
+                    own: true,
+                    icon: text("icon"),
+                    level: i32::from(item["level"].as_str() == Some("warning")),
+                    buttons: item["buttons"].as_array().map(|b| b.iter().filter_map(|x| x.as_str().map(str::to_string)).take(3).collect()).unwrap_or_default(),
+                    picture,
+                    until: item["until_answered"].as_bool().unwrap_or(false),
+                },
+            );
+        }
+    });
+    // their pictures (fetched once)
+    for w in wanted {
+        let (key, picture) = w.split_once('\n').unwrap_or_default();
+        if !PICTURES.with(|p| p.borrow().contains_key(key)) {
+            fetch_picture(ui, key.to_string(), picture.to_string());
+        }
+    }
+    v["new"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(|id| format!("po:{id}"))).collect()).unwrap_or_default()
+}
+
+/// A notification's title and text (the strip of the "strip" setting shows them).
+pub fn note_text(id: &str) -> (String, String) {
+    NOTES.with(|n| n.borrow().get(id).map(|n| (n.title.clone(), n.message.clone())).unwrap_or_default())
+}
+
+/// A notification's picture: a camera's snapshot (through Home Assistant) or a picture's address (JPEG).
+fn fetch_picture(ui: &AppWindow, key: String, picture: String) {
+    let Some((ha_url, auth)) = with_state(|s| s.config.as_ref().map(|c| c.ha_url.clone()).zip(s.auth.clone())) else { return };
+    let weak = slint::ComponentHandle::as_weak(ui);
+    std::thread::spawn(move || {
+        let ha = picture.starts_with("camera.") || picture.starts_with('/');
+        let url = if picture.starts_with("camera.") {
+            format!("{ha_url}/api/camera_proxy/{picture}?width=416&height=234")
+        } else if picture.starts_with('/') {
+            format!("{ha_url}{picture}")
+        } else {
+            picture.clone()
+        };
+        let mut req = ureq::get(&url).timeout(std::time::Duration::from_secs(10));
+        if ha {
+            match auth.access_token() {
+                Ok(t) => req = req.set("Authorization", &format!("Bearer {t}")),
+                Err(_) => return,
+            }
+        }
+        let bytes = match req.call() {
+            Ok(resp) => {
+                let mut b = Vec::new();
+                use std::io::Read;
+                if resp.into_reader().take(8 * 1024 * 1024).read_to_end(&mut b).is_err() {
+                    return;
+                }
+                b
+            }
+            Err(e) => {
+                eprintln!("nspanel-app: notification picture {picture}: {e}");
+                return;
+            }
+        };
+        let Ok(frame) = crate::camera::decode(&bytes) else {
+            eprintln!("nspanel-app: notification picture {picture}: not a JPEG");
+            return;
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            PICTURES.with(|p| p.borrow_mut().insert(key, slint::Image::from_rgb8(frame)));
+            if let Some(ui) = weak.upgrade() {
+                with_state(|s| refresh(&ui, s));
+                show_window(&ui);
+            }
+        });
+    });
+}
+
+/// An answer to one of PanelOS's notifications, for the integration (OK, a button, Dismiss).
+fn answer(id: &str, what: &str, button: Option<usize>) {
+    let Some(own) = id.strip_prefix("po:") else { return };
+    with_state(|s| {
+        if let Some(tx) = s.commands.as_ref() {
+            let _ = tx.send(crate::ha::Command::Notification { id: own.to_string(), answer: what.to_string(), button: button.map(|b| b as i32) });
         }
     });
 }
@@ -119,16 +240,25 @@ fn ordered() -> Vec<(String, Note)> {
 }
 
 fn note_row(n: &Note, look: i32, big: bool) -> InfoNote {
-    let bell = icons::glyph("bell-outline").map(String::from).unwrap_or_default();
+    note_row_with(n, look, big, None)
+}
+
+fn note_row_with(n: &Note, look: i32, big: bool, id: Option<&str>) -> InfoNote {
+    let own_icon = n.icon.trim_start_matches("mdi:");
+    let bell = icons::glyph(if own_icon.is_empty() { "bell-outline" } else { own_icon })
+        .or_else(|| icons::glyph("bell-outline"))
+        .map(String::from)
+        .unwrap_or_default();
     let title = if n.title.is_empty() { "Home Assistant".to_string() } else { n.title.clone() };
     let when = ago(n.created);
+    let picture = id.and_then(|id| PICTURES.with(|p| p.borrow().get(id).cloned()));
     // the fridge look: the note drawn by the app (seeded by its text, so it keeps its colour and tilt)
     let paper = if look == 1 {
         draw::get(Job::Fridge {
             title: title.clone(),
             message: n.message.clone(),
             foot: format!("Home Assistant · {when}"),
-            level: 0,
+            level: n.level,
             seed: draw::seed(&format!("{title}\n{}", n.message)),
             big,
         })
@@ -139,55 +269,188 @@ fn note_row(n: &Note, look: i32, big: bool) -> InfoNote {
         title: title.into(),
         message: n.message.clone().into(),
         icon: bell.as_str().into(),
-        level: 0,
+        level: n.level,
         source: "Home Assistant".into(),
         when: when.into(),
-        image: Default::default(),
-        has_image: false,
-        actions: slint::ModelRc::new(slint::VecModel::from(ACTIONS.iter().map(|a| slint::SharedString::from(*a)).collect::<Vec<_>>())),
+        image: picture.clone().unwrap_or_default(),
+        has_image: picture.is_some(),
+        actions: slint::ModelRc::new(slint::VecModel::from(actions(n).into_iter().map(slint::SharedString::from).collect::<Vec<_>>())),
         unread: n.unread,
         paper,
     }
 }
 
-/// A new notification as a card above any page (the panel's "card" setting), or none.
+fn actions(n: &Note) -> Vec<String> {
+    let mut a = vec!["Dismiss".to_string()];
+    if n.buttons.is_empty() {
+        a.push("OK".into());
+    } else {
+        a.extend(n.buttons.iter().cloned());
+    }
+    a
+}
+
+/// A new notification in the window (the panel's "window" setting): it joins the window if it is up (with
+/// "until answered" the newest comes to the front); None closes the window.
 pub fn pop(ui: &AppWindow, id: Option<&str>) {
-    let list = ordered();
-    match id.and_then(|id| list.iter().find(|(k, _)| k == id)) {
-        Some((k, n)) => {
-            POP.with(|p| *p.borrow_mut() = Some(k.clone()));
-            ui.set_pop_note(note_row(n, 0, true));
-            ui.set_pop_on(true);
+    match id {
+        Some(id) => {
+            let until = ui.get_pop_until();
+            let open = ui.get_pop_on();
+            WIN.with(|w| {
+                let mut w = w.borrow_mut();
+                if !open {
+                    w.clear();
+                    WIN_AT.with(|a| a.set(0));
+                }
+                if w.iter().any(|k| k == id) {
+                    return;
+                }
+                if until && !w.is_empty() {
+                    w.insert(0, id.to_string());
+                    WIN_AT.with(|a| a.set(0));
+                } else {
+                    w.push(id.to_string());
+                }
+            });
+            show_window(ui);
         }
         None => {
-            POP.with(|p| *p.borrow_mut() = None);
+            WIN.with(|w| w.borrow_mut().clear());
+            WIN_AT.with(|a| a.set(0));
             ui.set_pop_on(false);
         }
     }
 }
 
-/// The card's taps (`pop.*`): Dismiss dismisses the notification in Home Assistant, OK or a tap beside it closes the card.
-pub fn pop_act(ui: &AppWindow, what: &str, value: &str) {
-    if what == "pop.action" && value == "0" {
-        if let Some(id) = POP.with(|p| p.borrow().clone()) {
-            crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id }));
+/// The window's notifications (the ones gone elsewhere leave it) in the notifications page's look.
+fn show_window(ui: &AppWindow) {
+    let ids: Vec<String> = WIN.with(|w| {
+        let mut w = w.borrow_mut();
+        NOTES.with(|n| w.retain(|id| n.borrow().contains_key(id)));
+        w.clone()
+    });
+    if ids.is_empty() {
+        if ui.get_pop_on() {
+            ui.set_pop_on(false);
         }
+        return;
     }
+    let at = WIN_AT.with(|a| a.get()).min(ids.len() - 1);
+    WIN_AT.with(|a| a.set(at));
+    let pages = ui.get_pages();
+    let variant = (0..slint::Model::row_count(&pages)).filter_map(|i| slint::Model::row_data(&pages, i)).find(|p| p.kind == "info").map_or(0, |p| p.variant);
+    let look = if !draw::AVAILABLE && variant == 1 { 0 } else { variant.clamp(0, 3) };
+    let rows: Vec<InfoNote> = NOTES.with(|n| {
+        let n = n.borrow();
+        ids.iter().filter_map(|id| n.get(id).map(|note| note_row_with(note, look, true, Some(id)))).collect()
+    });
+    if look == 2 && ui.get_pop_pager().size().width == 0 {
+        ui.set_pop_pager(crate::quick::picture("info/pager-window.png"));
+        ui.set_info_pager_led(crate::quick::picture("info/pager-led.png"));
+    }
+    ui.set_info_clock(crate::pages::local_format(now(), "%H:%M").into());
+    ui.set_pop_look(look);
+    ui.set_pop_count(rows.len() as i32);
+    ui.set_pop_index(at as i32);
+    ui.set_pop_note(rows[at].clone());
+    if let Some(m) = crate::pages::update_rows(&ui.get_pop_notes(), rows) {
+        ui.set_pop_notes(m);
+    }
+    if !ui.get_pop_on() {
+        ui.set_pop_on(true);
+    }
+}
+
+/// The window's taps (`pop.*`): OK (marks it read, steps to the next or closes), Dismiss (gone, in Home Assistant
+/// too), a PanelOS notification's own button, a step sideways, a tap beside it (as OK), the time over (closes,
+/// leaves it unread).
+pub fn pop_act(ui: &AppWindow, what: &str, value: &str) {
+    let ids = WIN.with(|w| w.borrow().clone());
+    let at = WIN_AT.with(|a| a.get());
+    let Some(id) = ids.get(at).cloned() else {
+        pop(ui, None);
+        return;
+    };
+    let note = NOTES.with(|n| n.borrow().get(&id).cloned()).unwrap_or_default();
+    let n: usize = value.parse().unwrap_or(0);
+    eprintln!("nspanel-app: window {what} {value} ({} of {})", at + 1, ids.len());
+    // the card's buttons: Dismiss, then OK or the notification's own
+    let what = match what {
+        "pop.action" if n == 0 => "pop.dismiss",
+        "pop.action" if note.buttons.is_empty() => "pop.ok",
+        "pop.action" => "pop.btn",
+        "pop.close" => "pop.ok",
+        w => w,
+    };
+    let read = |id: &str| NOTES.with(|m| {
+        if let Some(note) = m.borrow_mut().get_mut(id) {
+            note.unread = false;
+        }
+    });
+    match what {
+        "pop.ok" | "pop.btn" => {
+            read(&id);
+            if what == "pop.btn" {
+                answer(&id, "button", Some(n.saturating_sub(1)));
+            } else {
+                answer(&id, "ok", None);
+            }
+            if at + 1 < ids.len() {
+                WIN_AT.with(|a| a.set(at + 1));
+            } else {
+                close_window(ui);
+                return;
+            }
+        }
+        "pop.dismiss" => {
+            if note.own {
+                answer(&id, "dismiss", None);
+                NOTES.with(|m| m.borrow_mut().remove(&id));
+            } else {
+                crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id }));
+            }
+            WIN.with(|w| w.borrow_mut().retain(|k| *k != id));
+            if ids.len() <= 1 {
+                close_window(ui);
+                return;
+            }
+            WIN_AT.with(|a| a.set(at.min(ids.len() - 2)));
+        }
+        "pop.step" => {
+            let next = if value.starts_with('-') { at.checked_sub(1) } else { Some(at + 1).filter(|&k| k < ids.len()) };
+            if let Some(k) = next {
+                WIN_AT.with(|a| a.set(k));
+            }
+        }
+        "pop.timeout" => {
+            close_window(ui);
+            return;
+        }
+        _ => {}
+    }
+    with_state(|s| refresh(ui, s));
+    show_window(ui);
+}
+
+fn close_window(ui: &AppWindow) {
     pop(ui, None);
-    // its time on screen is over (unless a strip from Home Assistant still counts it)
     with_state(|s| {
+        // its time on screen is over (unless a strip from Home Assistant still counts it)
         if !ui.get_strip_on() {
             s.show_until = None;
         }
+        refresh(ui, s);
     });
 }
 
 /// The notifications page (only when the panel has one).
 pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
-    // the card goes when its notification is gone (dismissed elsewhere)
-    if let Some(id) = POP.with(|p| p.borrow().clone()) {
-        if !NOTES.with(|n| n.borrow().contains_key(&id)) {
-            pop(ui, None);
+    // the window follows the list (a notification dismissed elsewhere leaves it)
+    if ui.get_pop_on() {
+        let gone = WIN.with(|w| NOTES.with(|n| w.borrow().iter().any(|id| !n.borrow().contains_key(id))));
+        if gone {
+            show_window(ui);
         }
     }
     let pages = ui.get_pages();
@@ -265,6 +528,9 @@ pub fn refresh(ui: &AppWindow, _s: &mut crate::UiState) {
 
 fn open_note(id: Option<String>) {
     if let Some(id) = &id {
+        if NOTES.with(|m| m.borrow().get(id).is_some_and(|n| n.own && n.unread)) {
+            answer(id, "read", None);
+        }
         NOTES.with(|m| {
             if let Some(note) = m.borrow_mut().get_mut(id) {
                 note.unread = false;
@@ -283,8 +549,17 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
         "info.read" => open_note(list.get(n).map(|(id, _)| id.clone())),
         "info.close" => open_note(None),
         "info.action" => {
-            if let (Some(i), 0) = (open, n) {
-                crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": list[i].0 }));
+            if let Some(i) = open {
+                let (id, note) = &list[i];
+                match n {
+                    0 if note.own => {
+                        answer(id, "dismiss", None);
+                        NOTES.with(|m| m.borrow_mut().remove(id));
+                    }
+                    0 => crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id })),
+                    k if !note.buttons.is_empty() => answer(id, "button", Some(k - 1)),
+                    _ => answer(id, "ok", None),
+                }
             }
             open_note(None);
         }
@@ -300,9 +575,29 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
             Some(_) => open_note(None),
             None => open_note(list.get(FIRST.with(|f| f.get())).map(|(id, _)| id.clone())),
         },
+        // the shade's rows (29.5): a swipe dismisses one, a tap opens it in its window
+        "info.dismiss" => {
+            if let Some((id, note)) = list.get(n) {
+                if note.own {
+                    answer(id, "dismiss", None);
+                    NOTES.with(|m| m.borrow_mut().remove(id));
+                } else {
+                    crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id }));
+                }
+            }
+        }
+        "info.show" => {
+            let id = list.get(n).map(|(id, _)| id.clone());
+            pop(ui, id.as_deref());
+        }
         "info.clear" => {
-            for (id, _) in list {
-                crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id }));
+            for (id, note) in list {
+                if note.own {
+                    answer(&id, "dismiss", None);
+                    NOTES.with(|m| m.borrow_mut().remove(&id));
+                } else {
+                    crate::call("persistent_notification", "dismiss", "", json!({ "notification_id": id }));
+                }
             }
         }
         _ => eprintln!("nspanel-app: act {what} {value} (not handled)"),

@@ -26,6 +26,24 @@ export struct QuickTile {
     has-tape: bool,
 }
 
+// The throw of a real toggle switch (spec 23.2), θ from −1 (off) to +1 (on), t in ms since the tap: stiff at first
+// (it stands short of the dead point at 150 ms), the catch over the top, the snap (half the travel in 25 ms), the click
+// at 205 ms (the state changes there), then one clear bounce and a tiny one; done at 325 ms.
+export global Throw {
+    pure public function theta(t: float) -> float {
+        return t <= 0 ? -1
+            : t < 150 ? -1 + 0.85 * Math.pow(t / 150, 3)
+            : t < 180 ? -0.15 + 0.15 * Math.pow((t - 150) / 30, 2)
+            : t < 205 ? Math.pow((t - 180) / 25, 1.5)
+            : t < 325 ? 1 - 0.16 * Math.pow(2.71828, -(t - 205) / 45) * Math.abs(Math.sin(180deg * (t - 205) / 50))
+            : 1;
+    }
+    // the knock at the click: 2 px in the throw direction and back within 50 ms
+    pure public function knock(t: float) -> float {
+        return t < 205 || t > 255 ? 0 : (t < 230 ? (t - 205) / 25 : (255 - t) / 25);
+    }
+}
+
 export struct QuickGroup { row: int, start: int, count: int, name: string }   // flight deck: a painted bracket over cells
 
 component LevelBar inherits Rectangle {
@@ -54,6 +72,7 @@ export component QuickPage inherits Rectangle {
     in property <[string]> sheet-effects;
     in property <image> mixer-panel;
     in property <image> fader;
+    in property <[image]> lever-frames;      // the flight deck lever, down … up in 9 frames (frame 4 is the dead point)
     in property <image> deck-panel;
     in property <image> toggle-up;
     in property <image> toggle-down;
@@ -84,6 +103,13 @@ export component QuickPage inherits Rectangle {
                 clicked => { if !tile.held { Act.act("quick.toggle", i); } }
             }
             Timer { interval: 500ms; running: tile-touch.pressed && !tile.held; triggered => { tile.held = true; Act.act("quick.details", i); } }
+            // M27: switching on, the icon's glow grows and settles (200 ms)
+            property <float> bloom: t.on && !t.gone ? 1 : 0;
+            animate bloom { duration: 200ms; easing: cubic-bezier(0.34, 1.8, 0.64, 1); }
+            if tile.bloom > 0.01: Rectangle {
+                property <length> d: (tile.wide ? 44px : 36px) + 14px * tile.bloom;
+                x: (tile.wide ? 12px + 22px : parent.width / 2) - self.d / 2; y: (tile.wide ? parent.height / 2 : 7px + 18px) - self.d / 2;
+                width: self.d; height: self.d; border-radius: self.d / 2; background: t.tint.with-alpha(0.22 * min(1, tile.bloom)); }
             Rectangle { x: tile.wide ? 12px : (parent.width - self.width) / 2; y: tile.wide ? (parent.height - 44px) / 2 : 7px;
                 width: tile.wide ? 44px : 36px; height: self.width; border-radius: self.width / 2;
                 background: t.gone ? Theme.text.with-alpha(0.08) : t.on ? t.tint : Theme.text.with-alpha(0.10);
@@ -196,10 +222,24 @@ export component QuickPage inherits Rectangle {
             Rectangle { x: 6px; y: 4px; width: 40px; height: 26px; border-radius: 4px; background: t.on ? ch.lit : #2b2f33; border-width: 1px; border-color: #0b0c0d;
                 drop-shadow-blur: t.on ? 10px : 0px; drop-shadow-color: ch.lit.with-alpha(0.8);
                 animate background, drop-shadow-blur { duration: 100ms; easing: ease-out; }
-                TouchArea { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px; clicked => { Act.act("quick.toggle", i); } }
+                TouchArea { x: -4px; y: -4px; width: parent.width + 8px; height: parent.height + 8px;
+                    clicked => {
+                        if ch.two && !ch.throwing {
+                            ch.to-up = !t.on; ch.t0 = animation-tick(); ch.sent = false; ch.throwing = true;
+                        } else if !ch.two {
+                            Act.act("quick.toggle", i);
+                        }
+                    } }
                 Text { text: t.gone ? "--" : t.on ? "ON" : "OFF"; font-size: 11px; font-weight: 800; color: t.on ? #111111 : #868e96; } }
+            // M28: switching on, the meter lights from the bottom up (100 ms)
+            property <bool> on-now: t.on;
+            property <duration> cas-t0;
+            property <bool> cascading;
+            changed on-now => { if ch.on-now { ch.cas-t0 = animation-tick(); ch.cascading = true; } }
+            Timer { interval: 120ms; running: ch.cascading; triggered => { ch.cascading = false; } }
             for k in 10: Rectangle { x: 20px; y: 40px + (9 - k) * 9px; width: 12px; height: 6px; border-radius: 1px;
-                background: (t.on && (t.dim ? t.value * 10 > k : true)) ? (k >= 8 ? #ff6b6b : k >= 6 ? #ffd43b : #69db7c) : #23272b; }
+                background: (t.on && (t.dim ? t.value * 10 > k : true) && (!ch.cascading || (animation-tick() - ch.cas-t0) >= k * 10ms))
+                    ? (k >= 8 ? #ff6b6b : k >= 6 ? #ffd43b : #69db7c) : #23272b; }
             Rectangle { x: 24px; y: 140px; width: 4px; height: 170px; border-radius: 2px; background: #050607; }
             for k in 11: Rectangle { visible: !ch.two || k == 0 || k == 10;
                 x: k == 0 || k == 10 || k == 5 ? 12px : 16px; y: 140px + k * 17px; width: k == 0 || k == 10 || k == 5 ? 6px : 4px; height: 1px; background: #6c757d; }
@@ -208,8 +248,18 @@ export component QuickPage inherits Rectangle {
             property <bool> hold;
             changed ha-v => { ch.hold = false; }
             Timer { interval: 3s; running: ch.hold; triggered => { ch.hold = false; } }
-            property <float> level: fd.pressed || ch.hold ? self.drag-f : self.ha-v;
-            animate level { duration: fd.pressed ? 0ms : 150ms; easing: ease-out; }
+            // a plain switch's button throws the cap like a real switch (23.2): the toggle is sent at the click
+            property <bool> throwing;
+            property <bool> to-up;
+            property <duration> t0;
+            property <bool> sent;
+            Timer { interval: 335ms; running: ch.throwing; triggered => { ch.throwing = false; } }
+            Timer { interval: 205ms; running: ch.throwing && !ch.sent; triggered => { ch.sent = true; ch.hold = true; ch.drag-f = ch.to-up ? 1 : 0; Act.act("quick.toggle", i); } }
+            property <float> tt: ch.throwing ? (animation-tick() - ch.t0) / 1ms : 1000;
+            property <float> throw-level: ((ch.to-up ? Throw.theta(ch.tt) : -Throw.theta(ch.tt)) + 1) / 2;
+            property <float> level-raw: ch.throwing ? ch.throw-level : fd.pressed || ch.hold ? self.drag-f : self.ha-v;
+            property <float> level: self.level-raw;
+            animate level { duration: fd.pressed || ch.throwing ? 0ms : 150ms; easing: ease-out; }
             fd := TouchArea { x: 0; y: 126px; width: parent.width; height: 198px; enabled: !t.gone;
                 pointer-event(ev) => {
                     if ev.kind == PointerEventKind.down { ch.drag-f = max(0, min(1, 1 - (self.mouse-y - 14px) / 170px)); }
@@ -250,19 +300,40 @@ export component QuickPage inherits Rectangle {
         }
         for t[i] in root.tiles: dk := Rectangle {
             x: 20px + mod(i, 4) * 112px; y: 104px + floor(i / 4) * 168px; width: 104px; height: 156px;
-            property <float> lit: t.on && !t.gone ? 1 : 0;
+            property <float> lit: (dk.pending ? dk.to-up : t.on) && !t.gone ? 1 : 0;
             animate lit { duration: 100ms; easing: ease-out; }
             property <float> up: t.on ? 1 : 0;
-            animate up { duration: 80ms; easing: ease-in-out; }
+            // the throw: started by a tap (or a drag past the middle); the toggle is sent at the click (205 ms); until
+            // Home Assistant confirms, the lever keeps the new side (at most 3 s)
+            property <bool> throwing;
+            property <bool> to-up;
+            property <duration> t0;
+            property <bool> sent;
+            property <bool> pending;
+            Timer { interval: 335ms; running: dk.throwing; triggered => { dk.throwing = false; } }
+            Timer { interval: 205ms; running: dk.throwing && !dk.sent; triggered => { dk.sent = true; dk.pending = true; Act.act("quick.toggle", i); } }
+            Timer { interval: 3s; running: dk.pending; triggered => { dk.pending = false; } }
+            changed up => { dk.pending = false; }
+            property <float> tt: dk.throwing ? (animation-tick() - dk.t0) / 1ms : 1000;
+            property <bool> side-up: dk.pending ? dk.to-up : t.on;
+            property <float> theta: dk.throwing ? (dk.to-up ? Throw.theta(dk.tt) : -Throw.theta(dk.tt)) : (dk.side-up ? 1 : -1);
+            property <int> frame: Math.max(0, Math.min(8, Math.round((dk.theta + 1) / 2 * 8)));
+            property <length> knock: Throw.knock(dk.tt) * 2px * (dk.to-up ? -1 : 1);
+
             // the lamp: lens + a glow in the light's own colour (green for everything else), amber when unavailable
             Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: t.gone ? root.lamp-amber : root.lamp-off; }
             if dk.lit > 0.001: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-glow; colorize: t.led; opacity: dk.lit; }
             if dk.lit > 0.001: Image { x: (parent.width - 36px) / 2; y: 0; width: 36px; height: 36px; source: root.lamp-spec; opacity: dk.lit; }
             // painted legends at both ends of the lever's travel
             Text { x: 0; y: 36px; width: parent.width; text: "ON"; font-size: 9px; font-weight: 800; color: #eceff1d0; horizontal-alignment: center; letter-spacing: 1px; }
-            if dk.up < 0.999: Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: root.toggle-down; opacity: (t.gone ? 0.45 : 1) * (1 - dk.up); }
-            Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: root.toggle-up; opacity: (t.gone ? 0.45 : 1) * dk.up;
-                TouchArea { x: -16px; y: -8px; width: parent.width + 32px; height: parent.height + 16px; enabled: !t.gone; clicked => { Act.act("quick.toggle", i); } } }
+            if root.lever-frames.length < 9: Image { x: (parent.width - 56px) / 2; y: 44px; width: 56px; height: 84px; source: dk.side-up ? root.toggle-up : root.toggle-down;
+                opacity: t.gone ? 0.45 : 1; }
+            if root.lever-frames.length >= 9: Image { x: (parent.width - 56px) / 2; y: 44px + dk.knock; width: 56px; height: 84px;
+                source: root.lever-frames[dk.frame]; opacity: t.gone ? 0.45 : 1; }
+            TouchArea { x: (parent.width - 56px) / 2 - 16px; y: 36px; width: 88px; height: 100px; enabled: !t.gone;
+                clicked => { if !dk.throwing { dk.to-up = !t.on; dk.t0 = animation-tick(); dk.sent = false; dk.throwing = true; } }
+                // a drag in the throw direction past the middle throws it too
+                moved => { if (!t.on && self.pressed-y - self.mouse-y > 30px) || (t.on && self.mouse-y - self.pressed-y > 30px) { if !dk.throwing { dk.to-up = !t.on; dk.t0 = animation-tick(); dk.sent = false; dk.throwing = true; } } } }
             Text { x: 0; y: 121px; width: parent.width; text: "OFF"; font-size: 9px; font-weight: 800; color: #eceff1d0; horizontal-alignment: center; letter-spacing: 1px; }
             Rectangle { x: 8px; y: 134px; width: parent.width - 16px; height: 20px; background: #16181a; border-radius: 2px; border-width: 1px; border-color: #00000080;
                 Text { x: 4px; width: parent.width - 8px; text: (t.label != "" ? t.label : t.name).to-uppercase(); font-size: 10px; font-weight: 800; color: #f8f9fa;

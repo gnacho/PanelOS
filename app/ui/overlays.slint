@@ -560,12 +560,19 @@ export component PairingScreen inherits Rectangle {
                     image-rendering: pixelated;
                     opacity: root.state == 1 ? 0.15 : 1;
                 }
+                // M31: paired: a check mark that draws itself (250 ms)
                 if root.state == 1: Rectangle {
                     width: 72px;
                     height: 72px;
                     border-radius: 36px;
                     background: Theme.success;
-                    Icon { text: "\u{F012C}"; font-size: 44px; color: #ffffff; }
+                    property <float> draw: 0;
+                    init => { self.draw = 1; }
+                    animate draw { duration: 250ms; easing: ease-out; }
+                    Rectangle { x: 0; y: 0; width: 72px * parent.draw; height: 72px; clip: true;
+                        Path { x: 0; y: 0; width: 72px; height: 72px; viewbox-width: 72; viewbox-height: 72; stroke: #ffffff; stroke-width: 6px;
+                            stroke-line-cap: round; stroke-line-join: round;
+                            MoveTo { x: 21; y: 37; } LineTo { x: 31; y: 47; } LineTo { x: 51; y: 26; } } }
                 }
             }
         }
@@ -1206,8 +1213,9 @@ export component WifiScreen inherits Rectangle {
             }
             VerticalLayout {
                 alignment: center;
+                // M30: while it scans, the signal bars light up one after another (250 ms each)
                 RoundButton {
-                    icon: "\u{F0450}";
+                    icon: root.scanning ? ["\u{F091F}", "\u{F0922}", "\u{F0925}", "\u{F0928}"][Math.mod(Math.floor(animation-tick() / 250ms), 4)] : "\u{F0450}";
                     size: 40px;
                     tint: Theme.muted;
                     clicked => { root.rescan(); }

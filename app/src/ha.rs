@@ -35,6 +35,8 @@ pub enum Command {
     /// A timer started or changed on the panel: Home Assistant's own timer of the panel's voice device
     /// (start / pause / resume / add / cancel); a start Home Assistant refuses runs on the panel instead.
     Timer { action: String, timer_id: String, seconds: u32, name: String },
+    /// An answer to one of PanelOS's notifications (ok, read, dismiss, button with its index).
+    Notification { id: String, answer: String, button: Option<i32> },
 }
 
 pub enum Event {
@@ -347,6 +349,16 @@ fn session(
                         // no integration link: the panel runs it
                         timer_starts.remove(&next_id);
                         emit(Event::TimerRefused { seconds, name: msg["name"].as_str().unwrap_or("").to_string() });
+                    }
+                }
+                Command::Notification { id, answer, button } => {
+                    next_id += 1;
+                    let mut msg = json!({"id": next_id, "type": "panelos/notification", "panel_id": PANEL_ID, "notification_id": id, "answer": answer});
+                    if let Some(b) = button {
+                        msg["button"] = json!(b);
+                    }
+                    if report.linked {
+                        send_json(&mut ws, &msg)?;
                     }
                 }
                 Command::PageSet { index, variant, options } => {

@@ -17,7 +17,7 @@ integration gives each panel:
 * how much the recorded sensors (illuminance, SoC temperature, Wi-Fi signal)
   must change before the panel sends a new value, also in the options;
 * actions that put something on a panel's screen: ``panelos.show_view``
-  (home, dashboard, weather, media, a camera) and ``panelos.show_message``;
+  (home, dashboard, weather, media, a camera) and ``panelos.notify``;
 * critical alerts and status screens shared by every panel (``house.py``),
   with ``panelos.show_status`` / ``panelos.clear_status`` for the status
   screens an automation starts;
@@ -56,7 +56,7 @@ from .const import (
     SERVICE_CLEAR_CRITICAL_ALERT,
     SERVICE_CLEAR_STATUS,
     SERVICE_CRITICAL_ALERT,
-    SERVICE_SHOW_MESSAGE,
+    SERVICE_NOTIFY,
     SERVICE_SHOW_STATUS,
     SERVICE_SHOW_VIEW,
     SIGNAL_CONFIG_UPDATED,
@@ -65,6 +65,7 @@ from .const import (
     VIEWS,
 )
 from .house import House
+from .notes import Notes
 from .players import async_register_players_view
 from .sounds import async_register_views
 from .page import async_hide_page, async_setup_page, async_show_page
@@ -85,14 +86,16 @@ SHOW_VIEW_SCHEMA = vol.Schema(
     }
 )
 
-SHOW_MESSAGE_SCHEMA = vol.Schema(
+NOTIFY_SCHEMA = vol.Schema(
     {
-        vol.Optional(CONF_PANEL_ID, default=""): cv.string,
+        vol.Optional(CONF_PANEL_ID, default=[]): vol.Any(cv.string, [cv.string]),
         vol.Optional("title", default=""): vol.All(cv.string, vol.Length(max=100)),
         vol.Required("message"): vol.All(cv.string, vol.Length(max=1000)),
         vol.Optional("icon", default=""): vol.All(cv.string, vol.Length(max=64)),
-        vol.Optional("seconds", default=30): _SECONDS,
-        vol.Optional("chime", default=False): cv.boolean,
+        vol.Optional("level", default="info"): vol.In(("info", "warning")),
+        vol.Optional("picture", default=""): vol.All(cv.string, vol.Length(max=500)),
+        vol.Optional("buttons", default=[]): vol.All([vol.All(cv.string, vol.Length(max=24))], vol.Length(max=3)),
+        vol.Optional("until_answered", default=False): cv.boolean,
     }
 )
 
@@ -161,7 +164,29 @@ def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConnection
     if (entry := find_entry(hass, panel_id)) is not None:
         for request in hass.data[DOMAIN]["house"].requests_for(panel_config(entry)["panel_id"]):
             connection.send_message(websocket_api.event_message(msg["id"], {"show": request}))
+        # PanelOS's own notifications, kept until answered (the unread ones pop up again)
+        if "notes" in hass.data[DOMAIN]:
+            request = hass.data[DOMAIN]["notes"].request_for(panel_config(entry)["panel_id"])
+            connection.send_message(websocket_api.event_message(msg["id"], {"show": request}))
     async_dispatcher_send(hass, SIGNAL_LINKS)
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "panelos/notification",
+        vol.Optional("panel_id", default=""): str,
+        vol.Required("notification_id"): str,
+        vol.Required("answer"): vol.In(("ok", "read", "dismiss", "button")),
+        vol.Optional("button"): int,
+    }
+)
+@callback
+def ws_notification(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    """A panel answered one of PanelOS's notifications (OK, a button, Dismiss)."""
+    entry = find_entry(hass, msg["panel_id"])
+    panel_id = panel_config(entry)["panel_id"] if entry else msg["panel_id"]
+    hass.data[DOMAIN]["notes"].answer(panel_id, msg["notification_id"], msg["answer"], msg.get("button"))
+    connection.send_result(msg["id"])
 
 
 @websocket_api.websocket_command({vol.Required("type"): "panelos/alive", vol.Optional("panel_id", default=""): str})
@@ -336,6 +361,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     websocket_api.async_register_command(hass, ws_log)
     websocket_api.async_register_command(hass, ws_page_set)
     websocket_api.async_register_command(hass, ws_timer)
+    websocket_api.async_register_command(hass, ws_notification)
 
     # A panel that stopped saying it is there is offline at once (checked every second).
     gone_before: set[int] = set()
@@ -352,6 +378,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     house = House(hass)
     hass.data.setdefault(DOMAIN, {})["house"] = house
     await house.async_load()
+    notes = Notes(hass)
+    hass.data[DOMAIN]["notes"] = notes
+    await notes.async_load()
     await async_setup_page(hass)
 
     async def handle_show(call: ServiceCall) -> None:
@@ -362,13 +391,25 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
             raise HomeAssistantError(
                 f"No PanelOS panel is connected{f' as {target}' if target else ''} (connected: {sorted(panels) or 'none'})"
             )
-        request["type"] = "view" if call.service == SERVICE_SHOW_VIEW else "message"
+        request["type"] = "view"
         async_dispatcher_send(hass, SIGNAL_SHOW, target, request)
+
+    async def handle_notify(call: ServiceCall) -> None:
+        data = dict(call.data)
+        wanted = data.pop(CONF_PANEL_ID, [])
+        wanted = [wanted] if isinstance(wanted, str) and wanted else list(wanted or [])
+        known = [panel_config(e)["panel_id"] for e in hass.config_entries.async_entries(DOMAIN)]
+        if not known:
+            raise HomeAssistantError("No PanelOS panel is set up")
+        unknown = [w for w in wanted if w not in known]
+        if unknown:
+            raise ServiceValidationError(f"No PanelOS panel {', '.join(unknown)} (panels: {', '.join(sorted(known))})")
+        notes.add(wanted or known, data)
 
     # Admin users and automations only: the actions put a camera or a message
     # on the panel.
     async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_VIEW, handle_show, schema=SHOW_VIEW_SCHEMA)
-    async_register_admin_service(hass, DOMAIN, SERVICE_SHOW_MESSAGE, handle_show, schema=SHOW_MESSAGE_SCHEMA)
+    async_register_admin_service(hass, DOMAIN, SERVICE_NOTIFY, handle_notify, schema=NOTIFY_SCHEMA)
 
     async def handle_status(call: ServiceCall) -> None:
         try:

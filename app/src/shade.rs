@@ -38,6 +38,7 @@ pub fn fill(ui: &AppWindow) {
             s.settings.brightness as f32 / 100.0
         };
         ui.set_set_brightness(level);
+        ui.set_set_auto(s.settings.auto_brightness);
         ui.set_set_volume(s.settings.volume as f32 / 100.0);
         let mic_on = !s.settings.mic_muted;
         ui.set_set_mic_on(mic_on);
@@ -156,10 +157,27 @@ pub fn act(ui: &AppWindow, what: &str, value: &str) {
                 }
             });
             ui.set_set_brightness(percent as f32 / 100.0);
+            ui.set_set_auto(false);
+        }
+        // the shade's Auto box (29.5): the light sensor sets the level; moving the slider unticks it
+        "set.auto" => {
+            with_state(|s| {
+                s.settings.auto_brightness = !s.settings.auto_brightness;
+                if !s.settings.auto_brightness {
+                    s.brightness_target = hw::manual_brightness_permille(s.settings.brightness) as f64;
+                }
+                s.settings.save();
+                let _ = s.device_notify.send(());
+            });
+            fill(ui);
         }
         "set.volume" => {
             let percent = (v.clamp(0.0, 1.0) * 100.0).round() as u8;
             with_state(|s| {
+                // muted by the slider: the level the finger started from is where the speaker mark goes back to
+                if percent == 0 && s.settings.volume > 0 {
+                    s.vol_before_mute = s.settings.volume;
+                }
                 s.settings.volume = percent;
                 hw::set_volume(percent);
                 s.player.play(crate::voice::Sound::Chime);

@@ -2,7 +2,7 @@
 // (also the camera picker), and the visitor overlay (doorbell / someone at the door) above any panel.
 // The app scales every frame to the size it is shown at (the software renderer scales images without filtering).
 import { Theme, Act } from "theme.slint";
-import { Icon, GlowText, DragSheet } from "widgets.slint";
+import { Icon, GlowText, DragSheet, Segmented } from "widgets.slint";
 
 export struct CamItem {
     name: string,
@@ -48,16 +48,6 @@ component Corners inherits Rectangle {
         commands: i == 0 ? "M 0 0 L 10 0 A 10 10 0 0 0 0 10 Z" : i == 1 ? "M 10 0 L 10 10 A 10 10 0 0 0 0 0 Z"
                 : i == 2 ? "M 0 10 L 0 0 A 10 10 0 0 0 10 10 Z" : "M 10 10 L 0 10 A 10 10 0 0 0 10 0 Z";
     }
-}
-
-component SheetChip inherits Rectangle {
-    in property <string> text;
-    in property <bool> on;
-    height: 40px; width: lbl.preferred-width + 28px; border-radius: 20px;
-    background: root.on ? Theme.text : transparent;
-    border-width: root.on ? 0px : 1px; border-color: Theme.outline;
-    lbl := Text { x: 14px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
-        color: root.on ? Theme.background : Theme.text; vertical-alignment: center; }
 }
 
 // a camera that shows no picture: offline or privacy mode
@@ -122,6 +112,18 @@ export component CameraPage inherits Rectangle {
     if root.view == 0 && root.c.state == 0 && root.fit == 0: Image { x: 16px; y: 114px; width: 448px; height: 252px; source: root.c.frame; }
     if root.view == 0 && root.c.state == 0 && root.fit == 0: Corners { x: 16px; y: 114px; width: 448px; height: 252px; fills: root.bg-corners; }
     if root.view == 0 && root.c.state == 0 && root.fit == 1: Image { x: 0; y: 0; width: 480px; height: 480px; source: root.c.frame; }
+    // a change of camera: 120 ms of static (three frames, 40 ms each, scaled without filtering), then the new picture (25.X1)
+    property <int> sel-seen: root.sel;
+    property <duration> st-t0;
+    property <bool> static-on;
+    changed sel-seen => { root.st-t0 = animation-tick(); root.static-on = true; }
+    Timer { interval: 120ms; running: root.static-on; triggered => { root.static-on = false; } }
+    property <int> st-k: root.static-on ? Math.min(2, Math.floor((animation-tick() - root.st-t0) / 40ms)) : 0;
+    if root.static-on && root.view == 0: Image {
+        x: root.fit == 0 ? 16px : 0; y: root.fit == 0 ? 114px : 0; width: root.fit == 0 ? 448px : 480px; height: root.fit == 0 ? 252px : 480px;
+        image-rendering: pixelated; image-fit: fill;
+        source: root.st-k == 0 ? @image-url("cam/static-0.png") : root.st-k == 1 ? @image-url("cam/static-1.png") : @image-url("cam/static-2.png");
+    }
     if root.view == 0 && root.c.state != 0: NoPicture { x: 0; y: 0; width: 480px; height: 480px; state: root.c.state; big: true; icon-size: 56px;
         background: Theme.background; }
     for i in (root.veiled ? root.veil-tn : 0): Rectangle {
@@ -173,7 +175,7 @@ export component CameraPage inherits Rectangle {
         property <bool> on-pic: root.view == 0 && root.c.state == 0 && !root.light-veil;
         property <color> ink: self.on-pic || Theme.dark ? #ffffff : #2a2a2e;
         x: root.width - 16px - self.width; y: 10px; height: 32px;
-        width: 200px;
+        width: 152px;
         border-radius: 16px;
         background: self.on-pic ? #ffffff2b : Theme.dark ? #ffffff1f : #00000012;
         border-width: self.on-pic ? 1px : 0px; border-color: #ffffff3d;
@@ -194,12 +196,10 @@ export component CameraPage inherits Rectangle {
         Text { x: 24px; y: 24px; height: 28px; text: "Cameras"; font-size: 18px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
         Icon { x: 132px; y: 24px; width: 28px; height: 28px; text: "\u{F02FD}"; font-size: 20px; color: Theme.muted; }
         Text { x: parent.width - 24px - self.preferred-width; y: 24px; height: 28px; text: "Done"; font-size: 16px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
-        HorizontalLayout { x: 24px; y: 72px; height: 40px; spacing: 8px; alignment: start;
-            SheetChip { text: "Whole picture"; on: root.fit == 0; }
-            SheetChip { text: "Fill the screen"; on: root.fit == 1; } }
-        HorizontalLayout { x: 24px; y: 134px; height: 40px; spacing: 8px; alignment: start;
-            SheetChip { text: "One camera"; on: root.view == 0; }
-            SheetChip { text: "All cameras"; on: root.view == 1; } }
+        Segmented { x: 24px; y: 72px; width: parent.width - 48px; options: ["Whole picture", "Fill the screen"];
+            selected: root.fit == 1 ? 0 : 1; picked(i) => { Act.act("cam.fit", i == 0 ? "whole" : "fill"); } }
+        Segmented { x: 24px; y: 134px; width: parent.width - 48px; options: ["One camera", "All cameras"];
+            selected: root.view; picked(i) => { Act.act("cam.view", i); } }
     }
 
     // ---------------------------------------------------------------- visitor overlay
@@ -209,8 +209,27 @@ export component CameraPage inherits Rectangle {
     animate opened { duration: root.opening ? 1500ms : 200ms; easing: linear; }
     if root.ring: TouchArea { }
     if root.ring: Image { x: 0; y: 0; width: 480px; height: 480px; source: root.ring-bg; }
-    if root.ring: GlowText { x: 16px; y: 50px; width: 448px; height: 30px; text: root.ring-title; font-size: 22px; font-weight: 600; color: #ffffff;
-        horizontal-alignment: center; overflow: elide; }
+    // the title with the bell; M23: two rings expand from the bell (700 ms, the second 250 ms later), twice, then a
+    // pause, and again while it rings
+    property <duration> ring-t0;
+    changed ring => { if root.ring { root.ring-t0 = animation-tick(); } }
+    property <float> rp: root.ring ? Math.mod((animation-tick() - root.ring-t0) / 1ms, 4650) : 99999;
+    if root.ring: HorizontalLayout {
+        x: 16px; y: 50px; width: 448px; height: 30px; alignment: center; spacing: 10px;
+        VerticalLayout { alignment: center;
+            Rectangle { width: 30px; height: 30px; border-radius: 15px; background: Theme.accent;
+                for k in 4: Rectangle {
+                    property <float> q: (root.rp - Math.floor(k / 2) * 1550 - Math.mod(k, 2) * 250) / 700;
+                    property <float> sc: 1 + 1.5 * (1 - Math.pow(1 - clamp(self.q, 0, 1), 3));
+                    visible: self.q >= 0 && self.q < 1;
+                    x: (parent.width - parent.width * self.sc) / 2; y: (parent.height - parent.height * self.sc) / 2;
+                    width: parent.width * self.sc; height: parent.height * self.sc; border-radius: self.width / 2;
+                    border-width: 2px; border-color: Theme.accent.with-alpha(0.6 * (1 - clamp(self.q, 0, 1)));
+                }
+                Icon { width: parent.width; height: parent.height; text: "\u{F009A}"; font-size: 18px; color: #ffffff; }
+            } }
+        GlowText { min-width: 0; height: 30px; text: root.ring-title; font-size: 22px; font-weight: 600; color: #ffffff; overflow: elide; }
+    }
     if root.ring: GlowText { x: 16px; y: 80px; width: 448px; height: 20px; text: root.ring-sub; font-size: 14px; font-weight: 500; color: #ffffffcc;
         horizontal-alignment: center; overflow: elide; }
     // the picture with a breathing accent ring (a soft outer band and a firm edge; the edge also rounds the picture's corners)
