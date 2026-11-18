@@ -14,7 +14,7 @@ from .panel import Panel
 
 
 class PanelOSEntity(Entity):
-    """An entity of a panel; available while the panel is connected."""
+    """An entity of a panel; available while the panel is connected (and 30 s after it went away)."""
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -35,7 +35,8 @@ class PanelOSEntity(Entity):
 
     @property
     def available(self) -> bool:
-        return self._panel.connected and self._key in self._panel.states
+        # through a short reconnect (30 s) the last state stays
+        return self._panel.reachable and self._key in self._panel.states
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(async_dispatcher_connect(self.hass, self._panel.signal, self._panel_updated))

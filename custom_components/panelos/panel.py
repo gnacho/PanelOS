@@ -19,6 +19,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.components.intent.const import TIMER_DATA
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.entity import Entity, entity_sources
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.start import async_at_started
@@ -79,6 +80,11 @@ _MISSING = object()
 
 type Send = Callable[[dict[str, Any]], None]
 type Factory = Callable[["Panel", str], Entity]
+
+
+# A panel that went away keeps its entities' last state this long before they turn unavailable (most drops are a few
+# seconds: a Wi-Fi hiccup, the app restarting; every unavailable span was a row in the recorder and the logbook).
+RECONNECT_GRACE = 30.0
 
 
 def links(hass: HomeAssistant) -> dict[int, tuple[str, int, Send]]:
@@ -380,6 +386,10 @@ class Panel:
     """Live data and device of one panel (the entry's runtime data)."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+        # the reconnect grace (see `reachable`)
+        self._gone_since: float | None = None
+        self._grace_cancel: Any = None
+        self._ever_connected = False
         self.hass = hass
         self.entry = entry
         self.panel_id: str = {**entry.data, **entry.options}.get(CONF_PANEL_ID, "")
@@ -478,8 +488,33 @@ class Panel:
         for send in sends:
             send({"key": key, "value": value})
 
+    @property
+    def reachable(self) -> bool:
+        """Connected, or away for less than RECONNECT_GRACE: the entities keep their last state through a short
+        reconnect (a Wi-Fi hiccup, the panel's app restarting) instead of turning unavailable and back."""
+        if self.connected:
+            self._gone_since = None
+            return True
+        return self._gone_since is not None and time.monotonic() - self._gone_since < RECONNECT_GRACE
+
     @callback
     def _links_changed(self) -> None:
+        if self.connected:
+            self._gone_since = None
+            if self._grace_cancel is not None:
+                self._grace_cancel()
+                self._grace_cancel = None
+        elif self._gone_since is None and self._ever_connected:
+            self._gone_since = time.monotonic()
+            # when the grace is over, the entities look again (unavailable now, unless the panel is back)
+            self._grace_cancel = async_call_later(self.hass, RECONNECT_GRACE + 0.5, self._grace_over)
+        if self.connected:
+            self._ever_connected = True
+        async_dispatcher_send(self.hass, self.signal, None)
+
+    @callback
+    def _grace_over(self, _now: Any) -> None:
+        self._grace_cancel = None
         async_dispatcher_send(self.hass, self.signal, None)
 
     # -- screen picture ----------------------------------------------------
