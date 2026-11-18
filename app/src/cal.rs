@@ -338,10 +338,12 @@ fn wall(ui: &AppWindow, events: &[Ev], t: i64, written: Option<&[usize]>) {
                 num: local_format(day0, "%-d").parse().unwrap_or(0),
                 other_month: local_format(day0, "%m") != month,
                 sunday: weekday(day0) == 6,
-                notes: if notes.is_empty() && !is_today {
+                today: is_today,
+                // today's circle is drawn on by the page itself (spec 25.K4)
+                notes: if notes.is_empty() {
                     Default::default()
                 } else {
-                    draw::get(Job::Cell { notes, today: is_today, seed: (day0 / 86400) as u32 })
+                    draw::get(Job::Cell { notes, today: false, seed: (day0 / 86400) as u32 })
                 },
             }
         })

@@ -33,6 +33,13 @@ thread_local! {
 }
 const LEAVE_MS: u64 = 640;
 
+thread_local! {
+    /// The keys of the last update of a list, and the items first seen in a later update with when (spec 25.D3-D5: the
+    /// looks that print or write a new item in; not on the first read of a list).
+    static SEEN: std::cell::RefCell<(String, Vec<String>, Vec<(String, Instant)>)> = const { std::cell::RefCell::new((String::new(), Vec::new(), Vec::new())) };
+}
+const FRESH_MS: u64 = 900;
+
 fn item_key(i: &Item) -> String {
     if i.uid.is_empty() { i.summary.clone() } else { i.uid.clone() }
 }
@@ -147,6 +154,7 @@ fn row(i: &Item) -> TodoItem {
         done: i.done,
         tape: Default::default(),
         hand: Default::default(),
+        fresh: false,
     }
 }
 
@@ -230,7 +238,33 @@ pub fn refresh(ui: &AppWindow, s: &mut crate::UiState) {
         l.iter().map(|(k, _)| k.clone()).collect()
     });
     let stays = |i: &&Item| i.done && leaving.contains(&item_key(i));
-    let open: Vec<TodoItem> = items.iter().filter(|i| !i.done || stays(i)).map(|i| drawn(i, false)).collect();
+    let list_id = entities[sel].clone();
+    let fresh: Vec<String> = SEEN.with(|seen| {
+        let mut seen = seen.borrow_mut();
+        let keys: Vec<String> = items.iter().map(item_key).collect();
+        if seen.0 == list_id && !seen.1.is_empty() {
+            for k in &keys {
+                if !seen.1.contains(k) && !seen.2.iter().any(|(f, _)| f == k) {
+                    seen.2.push((k.clone(), Instant::now()));
+                }
+            }
+        } else {
+            seen.2.clear();
+        }
+        seen.0 = list_id.clone();
+        seen.1 = keys;
+        seen.2.retain(|(_, t)| t.elapsed() < Duration::from_millis(FRESH_MS));
+        seen.2.iter().map(|(k, _)| k.clone()).collect()
+    });
+    let open: Vec<TodoItem> = items
+        .iter()
+        .filter(|i| !i.done || stays(i))
+        .map(|i| {
+            let mut r = drawn(i, false);
+            r.fresh = fresh.contains(&item_key(i));
+            r
+        })
+        .collect();
     let done: Vec<TodoItem> = items.iter().filter(|i| i.done && !stays(i)).map(|i| drawn(i, true)).collect();
     ui.set_todo_leaving(items.iter().filter(|i| stays(i)).count() as i32);
     // the receipt and terminal looks' own lines and the receipt's stamp

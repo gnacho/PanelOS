@@ -9,7 +9,7 @@
 // waiting, none when off; so from across the room it is clear whether something is merely set or busy.
 // The device chip (top right) opens the rooms; the extra options (fan, swing, preset) open a sheet.
 // The app gives every text and decides what the device can do.
-import { Icon, GlowText, DragSheet, Dropdown, Toggle, RollDigit } from "widgets.slint";
+import { Icon, GlowText, DragSheet, Dropdown, Segmented, Toggle, RollDigit } from "widgets.slint";
 import { Theme, Act, Words } from "theme.slint";
 
 export struct ClimateDev {
@@ -150,14 +150,20 @@ component Seg7 inherits Rectangle {
     in property <int> v;            // 0 … 9; 10 "-", 11 blank, 12 "F"
     in property <color> ink;
     in property <color> ghost;
+    in property <bool> lag: true;   // a segment comes on in 60 ms and goes off in 120 ms, like a real LCD (25.R2, T8)
     in property <int> mask: 127;    // the segments this cell has (6: a half digit "1", segments b and c)
     property <int> bits: [63, 6, 91, 79, 102, 109, 125, 7, 127, 111, 64, 0, 113][max(0, min(12, root.v))];
     for s[i] in ["M 19.8 8.0 L 25.2 3.0 L 46.4 3.0 L 51.0 8.0 L 45.6 13.0 L 24.4 13.0 Z", "M 52.2 9.4 L 56.8 14.4 L 54.5 43.6 L 49.1 48.6 L 44.5 43.6 L 46.8 14.4 Z", "M 48.9 51.4 L 53.5 56.4 L 51.2 85.6 L 45.8 90.6 L 41.2 85.6 L 43.5 56.4 Z", "M 13.0 92.0 L 18.4 87.0 L 39.6 87.0 L 44.2 92.0 L 38.8 97.0 L 17.6 97.0 Z", "M 14.9 51.4 L 19.5 56.4 L 17.2 85.6 L 11.8 90.6 L 7.2 85.6 L 9.5 56.4 Z", "M 18.2 9.4 L 22.8 14.4 L 20.5 43.6 L 15.1 48.6 L 10.5 43.6 L 12.8 14.4 Z", "M 16.4 50.0 L 21.8 45.0 L 43.0 45.0 L 47.6 50.0 L 42.2 55.0 L 21.0 55.0 Z"]: Path {
         visible: Math.mod(Math.floor(root.mask / Math.pow(2, i)), 2) == 1;
         x: 0; y: 0; width: root.width; height: root.height;
         viewbox-width: 60; viewbox-height: 100;
-        fill: Math.mod(Math.floor(root.bits / Math.pow(2, i)), 2) == 1 ? root.ink : root.ghost;
+        property <bool> lit: Math.mod(Math.floor(root.bits / Math.pow(2, i)), 2) == 1;
+        fill: self.lit ? root.ink : root.ghost;
         commands: s;
+        states [
+            lag-on when root.lag && self.lit: { fill: root.ink; in { animate fill { duration: 60ms; } } }
+            lag-off when root.lag && !self.lit: { fill: root.ghost; in { animate fill { duration: 120ms; } } }
+        ]
     }
 }
 
@@ -177,20 +183,6 @@ component Pill inherits Rectangle {
         color: root.on ? root.ink : root.ink.with-alpha(0.8); vertical-alignment: center; }
 }
 
-component SheetChip inherits Rectangle {
-    in property <string> text;
-    in property <bool> on;
-    in property <bool> check;
-    in property <color> accent;
-    height: 32px;
-    width: lbl.preferred-width + 26px + (root.check && root.on ? 20px : 0px);
-    border-radius: 16px;
-    background: root.on ? (root.check ? #ffffff2e : #F5F3EE) : transparent;
-    border-width: root.on ? 0px : 1px; border-color: #ffffff40;
-    if root.check && root.on: Icon { x: 12px; width: 16px; height: parent.height; text: "\u{F012C}"; font-size: 15px; color: #ffffff; }
-    lbl := Text { x: root.check && root.on ? 33px : 13px; y: 0; width: self.preferred-width; height: root.height; text: root.text; font-size: 14px; font-weight: 500;
-        color: root.on && !root.check ? #101114 : #ffffff; vertical-alignment: center; }
-}
 
 // what every look needs from the device
 component ThermoBase inherits Rectangle {
@@ -217,7 +209,17 @@ component ThermoClassic inherits ThermoBase {
     property <float> cx: 240;
     property <float> cy: 196;
     property <float> r: 112;
-    property <float> at: 135 + 270 * root.ft;
+    // the target's angle settles with a small spring (about 1 degree past for a step) after a change
+    property <float> at-to: 135 + 270 * root.ft;
+    property <float> at: root.at-to;
+    animate at { duration: 320ms; easing: cubic-bezier(0.34, 1.45, 0.64, 1); }
+    // the room reaches the target: its dot pulses once (x1.5, 500 ms)
+    property <bool> reached: root.show-t && Math.abs(root.d.current - root.d.target) < max(0.05, root.d.step / 2);
+    property <bool> dot-pulse;
+    property <duration> dot-t0;
+    changed reached => { if root.reached { root.dot-t0 = animation-tick(); root.dot-pulse = true; } }
+    Timer { interval: 520ms; running: root.dot-pulse; triggered => { root.dot-pulse = false; } }
+    property <float> dot-k: root.dot-pulse ? 1 + 0.5 * Math.sin(180deg * clamp((animation-tick() - root.dot-t0) / 500ms, 0, 1)) : 1;
     property <float> ac: 135 + 270 * root.fc;
     property <color> gc: TK.tints[root.gm];
 
@@ -244,7 +246,7 @@ component ThermoClassic inherits ThermoBase {
     if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 24px; stroke: root.tint.with-alpha(0.16); }
     if root.show-t && root.ft > 0.004: ArcPath { cx: root.cx; cy: root.cy; r: root.r; a0: 135; a1: root.at; sw: 12px; stroke: root.tint; }
     // the room's temperature: a dot on the track
-    Disc { cx: root.cx + root.r * Math.cos(root.ac * 1deg); cy: root.cy + root.r * Math.sin(root.ac * 1deg); r: 5.5;
+    Disc { cx: root.cx + root.r * Math.cos(root.ac * 1deg); cy: root.cy + root.r * Math.sin(root.ac * 1deg); r: 5.5 * root.dot-k;
         background: Theme.dark ? #ffffff : #18181b; border-width: 2px; border-color: Theme.dark ? #00000059 : #ffffffa6; }
     // the target knob with a small shadow
     if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg) + 2; r: 17; background: #00000040; }
@@ -346,6 +348,17 @@ component PowerKey inherits Rectangle {
 }
 
 component ThermoRemote inherits ThermoBase {
+    // what the keys set: a change starts the 1 s wait for the send, the send flashes ))) (300 ms)
+    property <string> sig: root.d.target + "|" + root.d.mode + "|" + root.d.fan-i + "|" + root.d.swing-i + "|" + root.d.preset-i;
+    property <duration> tx-at;
+    property <bool> tx-wait;
+    property <bool> tx-flash;
+    property <duration> tx-t0;
+    changed sig => { root.tx-at = animation-tick(); root.tx-wait = true; }
+    Timer { interval: 100ms; running: root.tx-wait; triggered => {
+        if animation-tick() - root.tx-at >= 1s { root.tx-wait = false; root.tx-t0 = animation-tick(); root.tx-flash = true; } } }
+    Timer { interval: 320ms; running: root.tx-flash; triggered => { root.tx-flash = false; } }
+    property <float> tx-k: root.tx-flash ? Math.sin(180deg * clamp((animation-tick() - root.tx-t0) / 300ms, 0, 1)) : 0;
     in property <int> clock-h;
     in property <int> clock-m;
     property <bool> dk: Theme.dark;
@@ -423,6 +436,9 @@ component ThermoRemote inherits ThermoBase {
         Seg7 { x: 296px; y: 133px; width: 27px; height: 45px; v: root.show-t && root.half ? Math.mod(root.t10, 10) : 11; ink: root.seg; ghost: root.ghost; }
         Text { x: 292px; y: 66px; height: 22px; text: "°C"; font-size: 18px; font-weight: 800; color: root.show-t && !root.fahrenheit ? root.seg : root.ghost; }
         Text { x: 292px; y: 90px; height: 22px; text: "°F"; font-size: 18px; font-weight: 800; color: root.show-t && root.fahrenheit ? root.seg : root.ghost; }
+        // the transmit mark: when the presses stop (the app sends after about 1 s) it flashes once
+        Text { x: 300px; y: 14px; height: 27px; text: ")))"; font-size: 15px; font-weight: 800; letter-spacing: -1px; vertical-alignment: center;
+            color: root.tx-k > 0 ? root.ghost.mix(root.seg, 1 - root.tx-k) : root.ghost; }
         // ▲ / ▼ next to the digits: the only touch areas on the LCD, they set the target
         Path { x: 352px; y: 70px; width: 56px; height: 48px; viewbox-width: 56; viewbox-height: 48; commands: "M 28 4 L 53 44 L 3 44 Z";
             fill: root.show-t ? root.seg : root.ghost; }
@@ -545,13 +561,25 @@ component ThermoWall inherits ThermoBase {
     property <color> lever: root.dk ? #d8ceba : #f7f3ea;
     property <float> cx: 240;
     property <float> cy: 204;
-    property <float> at: 135 + 270 * root.ft;
+    // the pointer turns to a new target through the detents (one per step), the knob kicking 1 px at each
+    property <float> at-to: 135 + 270 * root.ft;
+    property <float> at: root.at-to;
+    animate at { duration: 260ms; easing: ease-out; }
+    property <int> det: Math.floor((root.at - 135) / max(0.5, 270 * root.d.step / root.span) + 0.5);
+    property <bool> kicking;
+    property <duration> kick-t0;
+    changed det => { root.kick-t0 = animation-tick(); root.kicking = true; }
+    Timer { interval: 60ms; running: root.kicking; triggered => { root.kicking = false; } }
+    property <float> kick: root.kicking && animation-tick() - root.kick-t0 < 40ms ? 1 : 0;
     // the needle thermometer in the middle: 10 … 30 °C (or, on the °F model, 50 … 90 °F) over 120° around a pivot under the centre
     property <float> px: 240;
     property <float> py: 222;
     property <float> g0: root.fahrenheit ? 50 : 10;
     property <float> gs: root.fahrenheit ? 40 : 20;
-    property <float> an: 210 + 120 * max(0, min(1, (root.d.current - root.g0) / root.gs));
+    // the needle swings with real damping: about 4 % past, settled in 900 ms
+    property <float> an-to: 210 + 120 * max(0, min(1, (root.d.current - root.g0) / root.gs));
+    property <float> an: root.an-to;
+    animate an { duration: 900ms; easing: cubic-bezier(0.3, 1.22, 0.45, 1); }
     property <color> hot: TK.tints[root.m].mix(root.print, root.dk ? 0.75 : 0.6);
 
     // the plate
@@ -590,13 +618,13 @@ component ThermoWall inherits ThermoBase {
     }
     // the knob: shadow, knurled rim, a domed face, the pointer (it turns: drawn at the target's angle)
     Disc { cx: root.cx; cy: root.cy + 5; r: 108; background: root.dk ? #00000099 : #00000038; }
-    Disc { cx: root.cx; cy: root.cy; r: 107; background: root.knob-base; }
+    Disc { cx: root.cx; cy: root.cy + root.kick; r: 107; background: root.knob-base; }
     Path { x: (root.cx - 120 - 1.1) * 1px; y: (root.cy - 120 - 1.1) * 1px; width: 242.2px; height: 242.2px; viewbox-width: 240; viewbox-height: 240;
         stroke: root.knurl; stroke-width: 2.2px; fill: transparent;
         commands: "M 217.00 120.00 L 227.00 120.00 M 216.63 128.45 L 226.59 129.33 M 215.53 136.84 L 225.37 138.58 M 213.69 145.11 L 223.35 147.69 M 211.15 153.18 L 220.55 156.60 M 207.91 160.99 L 216.97 165.22 M 204.00 168.50 L 212.66 173.50 M 199.46 175.64 L 207.65 181.37 M 194.31 182.35 L 201.97 188.78 M 188.59 188.59 L 195.66 195.66 M 182.35 194.31 L 188.78 201.97 M 175.64 199.46 L 181.37 207.65 M 168.50 204.00 L 173.50 212.66 M 160.99 207.91 L 165.22 216.97 M 153.18 211.15 L 156.60 220.55 M 145.11 213.69 L 147.69 223.35 M 136.84 215.53 L 138.58 225.37 M 128.45 216.63 L 129.33 226.59 M 120.00 217.00 L 120.00 227.00 M 111.55 216.63 L 110.67 226.59 M 103.16 215.53 L 101.42 225.37 M 94.89 213.69 L 92.31 223.35 M 86.82 211.15 L 83.40 220.55 M 79.01 207.91 L 74.78 216.97 M 71.50 204.00 L 66.50 212.66 M 64.36 199.46 L 58.63 207.65 M 57.65 194.31 L 51.22 201.97 M 51.41 188.59 L 44.34 195.66 M 45.69 182.35 L 38.03 188.78 M 40.54 175.64 L 32.35 181.37 M 36.00 168.50 L 27.34 173.50 M 32.09 160.99 L 23.03 165.22 M 28.85 153.18 L 19.45 156.60 M 26.31 145.11 L 16.65 147.69 M 24.47 136.84 L 14.63 138.58 M 23.37 128.45 L 13.41 129.33 M 23.00 120.00 L 13.00 120.00 M 23.37 111.55 L 13.41 110.67 M 24.47 103.16 L 14.63 101.42 M 26.31 94.89 L 16.65 92.31 M 28.85 86.82 L 19.45 83.40 M 32.09 79.01 L 23.03 74.78 M 36.00 71.50 L 27.34 66.50 M 40.54 64.36 L 32.35 58.63 M 45.69 57.65 L 38.03 51.22 M 51.41 51.41 L 44.34 44.34 M 57.65 45.69 L 51.22 38.03 M 64.36 40.54 L 58.63 32.35 M 71.50 36.00 L 66.50 27.34 M 79.01 32.09 L 74.78 23.03 M 86.82 28.85 L 83.40 19.45 M 94.89 26.31 L 92.31 16.65 M 103.16 24.47 L 101.42 14.63 M 111.55 23.37 L 110.67 13.41 M 120.00 23.00 L 120.00 13.00 M 128.45 23.37 L 129.33 13.41 M 136.84 24.47 L 138.58 14.63 M 145.11 26.31 L 147.69 16.65 M 153.18 28.85 L 156.60 19.45 M 160.99 32.09 L 165.22 23.03 M 168.50 36.00 L 173.50 27.34 M 175.64 40.54 L 181.37 32.35 M 182.35 45.69 L 188.78 38.03 M 188.59 51.41 L 195.66 44.34 M 194.31 57.65 L 201.97 51.22 M 199.46 64.36 L 207.65 58.63 M 204.00 71.50 L 212.66 66.50 M 207.91 79.01 L 216.97 74.78 M 211.15 86.82 L 220.55 83.40 M 213.69 94.89 L 223.35 92.31 M 215.53 103.16 L 225.37 101.42 M 216.63 111.55 L 226.59 110.67"; }
-    Disc { cx: root.cx; cy: root.cy; r: 95; background: root.knob-face; }
-    Disc { cx: root.cx; cy: root.cy - 3; r: 89; background: root.knob-hi.with-alpha(0.7); }
-    Disc { cx: root.cx; cy: root.cy + 1; r: 84; background: root.knob-face; }
+    Disc { cx: root.cx; cy: root.cy + root.kick; r: 95; background: root.knob-face; }
+    Disc { cx: root.cx; cy: root.cy - 3 + root.kick; r: 89; background: root.knob-hi.with-alpha(0.7); }
+    Disc { cx: root.cx; cy: root.cy + 1 + root.kick; r: 84; background: root.knob-face; }
     if root.show-t: Path {
         x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: root.pointer;
         commands: "M " + (root.cx + 94 * Math.cos(root.at * 1deg)) + " " + (root.cy + 94 * Math.sin(root.at * 1deg))
@@ -697,7 +725,15 @@ component ThermoNeon inherits ThermoBase {
     if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg); r: 14; background: root.tube.with-alpha(0.5); }
     if root.show-t: Disc { cx: root.cx + root.r * Math.cos(root.at * 1deg); cy: root.cy + root.r * Math.sin(root.at * 1deg); r: 9; background: #ffffff; }
     // centre
-    GlowText { x: 0; y: 112px; width: root.width; height: 22px; text: root.d.label; font-size: 16px; font-weight: 600; horizontal-alignment: center;
+    // a mode change: the neon strikes (off / on 2-3 times in 250 ms) before it lights steadily
+    property <int> m-now: root.m;
+    property <bool> striking;
+    property <duration> strike-t0;
+    changed m-now => { root.strike-t0 = animation-tick(); root.striking = true; }
+    Timer { interval: 260ms; running: root.striking; triggered => { root.striking = false; } }
+    property <float> st: root.striking ? (animation-tick() - root.strike-t0) / 1ms : 1000;
+    property <float> strike: root.st < 40 ? 0.15 : root.st < 80 ? 1 : root.st < 115 ? 0.2 : root.st < 165 ? 0.9 : root.st < 195 ? 0.25 : 1;
+    GlowText { x: 0; y: 112px; width: root.width; height: 22px; text: root.d.label; font-size: 16px; font-weight: 600; horizontal-alignment: center; opacity: root.strike;
         color: #ffffff; neon: true; glow: root.active ? root.tube : root.grid; }
     HorizontalLayout {
         x: 0; y: 144px; width: root.width; height: 72px; alignment: center; spacing: 0px;
@@ -813,13 +849,17 @@ export component ThermostatPage inherits Rectangle {
         ]: Rectangle {
             property <int> before: (ri > 0 && root.d.fans.length > 0 ? 1 : 0) + (ri > 1 && root.d.swings.length > 0 ? 1 : 0);
             visible: row.items.length > 0;
-            x: 16px; y: root.sh-r0 + self.before * 54px; width: parent.width - 32px; height: 32px;
+            x: 16px; y: root.sh-r0 + self.before * 54px - 8px; width: parent.width - 32px; height: 48px;
+            // the chosen step's index (the row knows it by name)
+            property <int> cur-i: row.items.length > 0 && row.items[0] == row.cur ? 0 : row.items.length > 1 && row.items[1] == row.cur ? 1
+                : row.items.length > 2 && row.items[2] == row.cur ? 2 : row.items.length > 3 && row.items[3] == row.cur ? 3
+                : row.items.length > 4 && row.items[4] == row.cur ? 4 : row.items.length > 5 && row.items[5] == row.cur ? 5
+                : row.items.length > 6 && row.items[6] == row.cur ? 6 : row.items.length > 7 && row.items[7] == row.cur ? 7 : -1;
             Icon { x: 0; y: 0; width: 28px; height: parent.height; text: row.icon; font-size: 20px; color: Theme.muted; }
-            HorizontalLayout {
-                x: 38px; y: 0; height: 32px; alignment: start; spacing: 6px;
-                for it[ii] in row.items: SheetChip { text: it; on: it == row.cur; accent: root.tint;
-                    TouchArea { clicked => { Act.act(ri == 0 ? "thermo.fan" : ri == 1 ? "thermo.swing" : "thermo.preset", ii); } } }
-            }
+            if row.items.length <= 4: Segmented { x: 38px; y: 4px; width: parent.width - 38px; options: row.items; selected: parent.cur-i;
+                picked(ii) => { Act.act(ri == 0 ? "thermo.fan" : ri == 1 ? "thermo.swing" : "thermo.preset", ii); } }
+            if row.items.length > 4: Dropdown { x: 38px; y: 0; width: parent.width - 38px; options: row.items; selected: parent.cur-i; up: true;
+                picked(ii) => { Act.act(ri == 0 ? "thermo.fan" : ri == 1 ? "thermo.swing" : "thermo.preset", ii); } }
         }
     }
 
@@ -853,10 +893,11 @@ export component ThermostatPage inherits Rectangle {
 
     // ---------------------------------------------------------------- rooms (the device picker)
     // the rooms: a sheet sized to its tiles (at most up to y 40), that follows the finger (DragSheet)
-    property <length> picker-need: min(root.height - 40px, 64px + Math.ceil(root.rooms.length / 2) * 94px + 8px);
+    property <length> picker-content: 64px + Math.ceil(root.rooms.length / 2) * 94px + 8px;
+    property <length> picker-need: min(424px, root.picker-content);
     DragSheet {
         width: parent.width; height: parent.height;
-        open: root.picker; need: root.picker-need;
+        open: root.picker; need: root.picker-need; content-need: root.picker-content;
         close => { Act.act("thermo.picker-close", ""); }
         sheet-color: Theme.surface; ink: Theme.text;
         clip: true;
@@ -872,10 +913,13 @@ export component ThermostatPage inherits Rectangle {
             Icon { text: "\u{F0156}"; font-size: 20px; color: Theme.text; }
             TouchArea { clicked => { Act.act("thermo.picker-close", ""); } }
         }
+        // the rooms scroll inside a tall sheet (at full height all of them fit or scroll)
+        Flickable { x: 0; y: 64px; width: parent.width; height: root.picker-need - 64px;
+            viewport-width: self.width; viewport-height: max(self.height, root.picker-content - 64px);
         for rm[i] in root.rooms: Rectangle {
             property <int> cc: Math.mod(i, 2);
             property <int> rr: Math.floor(i / 2);
-            x: 16px + self.cc * 228px; y: 64px + self.rr * 94px; width: 220px; height: 86px;
+            x: 16px + self.cc * 228px; y: self.rr * 94px; width: 220px; height: 86px;
             border-radius: 18px; background: rm.outside ? #ffffff0a : #ffffff12;
             TouchArea { clicked => { Act.act("thermo.room", i); } }
             border-width: rm.sel >= 0 ? 2px : 0px; border-color: Theme.text;
@@ -894,6 +938,7 @@ export component ThermostatPage inherits Rectangle {
                 Icon { width: 18px; text: rm.dev-icon[j]; font-size: 15px; color: rm.dev-tint[j]; }
                 Text { text: dl; font-size: 12px; color: rm.sel == j ? #ffffff : #ffffffb3; vertical-alignment: center; overflow: elide; }
             }
+        }
         }
     }
 }

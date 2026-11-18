@@ -4,6 +4,7 @@
 import { Theme, Act, Clock } from "theme.slint";
 import { Icon, GlowText, RollPair, Jelly } from "widgets.slint";
 import { PhotoSky } from "photo_sky.slint";
+import { NixieClock, LcdClock, TwinBellClock } from "clocks.slint";
 
 export struct Person {
     initials: string,
@@ -457,6 +458,8 @@ export struct ClockData {
     condition: string,
     high-low: string,    // "H 15° · L 7°"
     next: string,        // next event, "" if none
+    lcd-day: string,     // "WE" (the LCD clock)
+    lcd-date: string,    // "11-18" (month-day, the LCD clock)
     // Split-flap clock: current and previous digits, flip progress 0..1.
     d1: string, d2: string, d3: string, d4: string,
     o1: string, o2: string, o3: string, o4: string,
@@ -492,6 +495,20 @@ export component AnalogDial inherits Rectangle {
     width: self.size;
     height: self.size;
     property <bool> date-window: root.weekday != "" && !root.numerals;
+    // the hour that has begun (C3 glow at the full hour, C6 the accent numeral)
+    property <int> hour-now: Math.mod(Math.floor(root.h + 0.0001), 12);
+    property <bool> hour-new;
+    property <duration> hour-t0;
+    property <int> hour-old;
+    property <int> hour-last;
+    init => { root.hour-last = root.hour-now; root.hour-old = root.hour-now; }
+    changed hour-now => { root.hour-old = root.hour-last; root.hour-last = root.hour-now; root.hour-t0 = animation-tick(); root.hour-new = true; }
+    Timer { interval: 620ms; running: root.hour-new; triggered => { root.hour-new = false; } }
+    property <float> hour-t: root.hour-new ? (animation-tick() - root.hour-t0) / 1ms : 1000;
+    // C6: the numeral of the quarter the hour hand is in (12, 3, 6, 9)
+    property <int> q-now: Math.floor(root.hour-now / 3);
+    property <int> q-old: Math.floor(root.hour-old / 3);
+    property <float> q-k: clamp(root.hour-t / 400, 0, 1);
     // Distance from the centre to the edge of the face in direction a (deg), viewbox units.
     function edge(a: float) -> float {
         root.shape == 0 ? 44 : 44 / max(abs(Math.sin(a * 1deg)), abs(Math.cos(a * 1deg)))
@@ -520,6 +537,12 @@ export component AnalogDial inherits Rectangle {
         commands: root.minimal ? root.seg(i * 30, 42, 37)
             : root.seg(i * 30, root.edge(i * 30) - 1, root.edge(i * 30) - 7);
     }
+    // C3: at the full hour the 12 index glows once in the accent (600 ms)
+    if root.shape == 0 && !root.minimal && !root.numerals && root.hour-t < 600: Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        stroke: root.accent; stroke-width: 9px; stroke-line-cap: round; opacity: 0.45 * Math.sin(180deg * root.hour-t / 600);
+        commands: root.seg(0, root.edge(0) - 1, root.edge(0) - 7);
+    }
     for i in (root.numerals ? 4 : 0): Text {
         property <float> a: i * 90;
         property <float> r: root.edge(self.a) - 10;
@@ -528,7 +551,9 @@ export component AnalogDial inherits Rectangle {
         text: i == 0 ? "12" : i == 1 ? "3" : i == 2 ? "6" : "9";
         font-size: root.size * 0.11;
         font-weight: root.weight;
-        color: i == 0 ? root.accent : root.ink;
+        // C6: the current quarter's numeral in the accent, crossfading to the next at the hour (400 ms)
+        color: i == root.q-now ? (root.q-old != root.q-now ? root.accent.mix(root.ink, root.q-k) : root.accent)
+            : i == root.q-old && root.q-k < 1 ? root.ink.mix(root.accent, root.q-k) : root.ink;
     }
     // Date: window at 3 o'clock, or a small label under the 12 with numerals.
     if root.date-window: Rectangle {
@@ -541,8 +566,10 @@ export component AnalogDial inherits Rectangle {
         dw := HorizontalLayout {
             padding-left: 7px;
             spacing: 4px;
+            alignment: start;
             Text { text: root.weekday; font-size: 13px; color: root.mark; vertical-alignment: center; }
-            Text { text: root.day; font-size: 13px; font-weight: Theme.weight-strong; color: root.accent; vertical-alignment: center; }
+            // C4: at midnight the number rolls to the new one (400 ms)
+            RollPair { text: root.day; font-size: 13px; font-weight: Theme.weight-strong; color: root.accent; dur: 400ms; }
         }
     }
     if root.numerals && root.weekday != "": HorizontalLayout {
@@ -587,6 +614,12 @@ export component AnalogDial inherits Rectangle {
         stroke-width: root.size * 0.014;
         commands: root.seg(root.m * 6, -5, root.shape == 0 ? 36 : 38);
     }
+    // C5: the minimal face's second hand leaves a short trail (3 ghost hands at 30 / 15 / 7 %, 1.5 degrees apart)
+    for g[i] in (root.minimal && root.show-seconds ? [0.30, 0.15, 0.07] : []): Path {
+        width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
+        stroke: root.accent; stroke-width: 2px; opacity: g;
+        commands: root.seg(root.s * 6 - (i + 1) * 1.5, -8, root.shape == 0 ? 40 : 42);
+    }
     if root.show-seconds: Path {
         width: root.size; height: root.size; viewbox-width: 100; viewbox-height: 100;
         stroke: root.accent;
@@ -597,6 +630,31 @@ export component AnalogDial inherits Rectangle {
         width: 12px; height: 12px; border-radius: 6px;
         background: root.show-seconds ? root.accent : root.ink;
     }
+}
+
+// 25.C1: a line whose new text rises in from below while the old one slides up and out (300 ms); with fade, the two
+// only crossfade. Clipped only while it changes.
+component SwapText inherits Rectangle {
+    in property <string> text;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <color> ink: Theme.text;
+    in property <bool> fade;
+    property <string> now-t;
+    property <string> old-t;
+    init => { root.now-t = root.text; }
+    property <bool> moving;
+    property <duration> t0;
+    changed text => { root.old-t = root.now-t; root.now-t = root.text; root.t0 = animation-tick(); root.moving = root.old-t != "" && root.old-t != root.now-t; }
+    Timer { interval: 320ms; running: root.moving; triggered => { root.moving = false; } }
+    property <float> e: root.moving ? 1 - Math.pow(1 - clamp((animation-tick() - root.t0) / 300ms, 0, 1), 3) : 1;
+    preferred-width: max(tn.preferred-width, root.moving ? to.preferred-width : 0px); preferred-height: tn.preferred-height;
+    min-height: tn.preferred-height;
+    clip: root.moving;
+    to := Text { x: 0; y: root.fade ? 0px : -root.e * root.height; width: root.width; height: root.height; text: root.old-t; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.ink; vertical-alignment: center; opacity: root.moving ? 1 - root.e : 0; }
+    tn := Text { x: 0; y: root.fade ? 0px : (1 - root.e) * root.height; width: root.width; height: root.height; text: root.now-t; font-size: root.font-size; font-weight: root.font-weight;
+        color: root.ink; vertical-alignment: center; opacity: root.moving ? root.e : 1; }
 }
 
 // Date and weather on one line; the separator only when both show, so the
@@ -642,6 +700,7 @@ export component FlapCard inherits Rectangle {
     in property <int> weight: 600;
     in property <color> card: #1d1d21;
     in property <color> ink: #f4f4f5;
+    in property <bool> search;           // 25.T5: a rise runs down through the numbers in between, 60 ms a flap
     // Digit images (white on transparent, 188 x 300), per weight.
     property <[image]> w300: [@image-url("digits/300/0.png"), @image-url("digits/300/1.png"), @image-url("digits/300/2.png"), @image-url("digits/300/3.png"), @image-url("digits/300/4.png"), @image-url("digits/300/5.png"), @image-url("digits/300/6.png"), @image-url("digits/300/7.png"), @image-url("digits/300/8.png"), @image-url("digits/300/9.png")];
     property <[image]> w600: [@image-url("digits/600/0.png"), @image-url("digits/600/1.png"), @image-url("digits/600/2.png"), @image-url("digits/600/3.png"), @image-url("digits/600/4.png"), @image-url("digits/600/5.png"), @image-url("digits/600/6.png"), @image-url("digits/600/7.png"), @image-url("digits/600/8.png"), @image-url("digits/600/9.png")];
@@ -660,17 +719,42 @@ export component FlapCard inherits Rectangle {
     property <bool> flipping;
     property <duration> started;
     init => { root.shown = root.new-digit; root.old-digit = root.new-digit; }
+    property <bool> searching;
+    property <bool> quick;               // the searching flaps: 60 ms each, no delay
+    property <int> goal;
     changed new-digit => {
-        root.old-digit = root.shown;
-        root.shown = root.new-digit;
-        root.started = animation-tick();
-        root.flipping = root.old-digit != root.new-digit;
+        if root.search && root.idx(root.new-digit) > root.idx(root.shown) {
+            root.goal = root.idx(root.new-digit);
+            root.quick = true;
+            root.searching = true;
+            root.step();
+        } else {
+            root.searching = false;
+            root.quick = false;
+            root.old-digit = root.shown;
+            root.shown = root.new-digit;
+            root.started = animation-tick();
+            root.flipping = root.old-digit != root.new-digit;
+        }
     }
+    function step() {
+        root.old-digit = root.shown;
+        root.shown = "" + Math.mod(root.idx(root.shown) + 9, 10);
+        root.started = animation-tick();
+        root.flipping = true;
+        if root.idx(root.shown) == root.goal { root.searching = false; }
+    }
+    Timer { interval: 60ms; running: root.searching; triggered => { root.step(); } }
+    property <duration> fdur: root.quick ? 60ms : root.dur;
+    property <duration> fdelay: root.quick ? 0ms : root.delay;
     // the clock is read only while it flips, so a still card costs nothing
-    property <float> flip: root.flipping ? Math.max(0, Math.min(1, (animation-tick() - root.started - root.delay) / root.dur)) : 1;
-    Timer { interval: root.delay + root.dur + 60ms; running: root.flipping; triggered => { root.flipping = false; } }
+    property <float> flip: root.flipping ? Math.max(0, Math.min(1, (animation-tick() - root.started - root.fdelay) / root.fdur)) : 1;
+    Timer { interval: root.fdelay + root.fdur + 60ms; running: root.flipping; triggered => { root.flipping = false; root.quick = root.searching; } }
     property <length> half: self.height / 2;
-    property <bool> moving: root.flip < 1 && root.old-digit != root.new-digit;
+    property <bool> moving: root.flip < 1 && root.old-digit != root.shown;
+    // 25.C8: the landing (50 ms after the flap falls open): a 1 px knock, the shadow flickering once
+    property <float> landed: root.flipping && root.flip >= 1 ? (animation-tick() - root.started - root.fdelay - root.fdur) / 1ms : -1;
+    property <length> knock: root.landed >= 0 && root.landed < 40 ? 1px : 0px;
     property <float> p1: min(1, root.flip * 2);         // top flap rotating down
     property <float> p2: max(0, root.flip * 2 - 1);     // bottom flap falling open
     property <length> h1: root.half * Math.cos(root.p1 * 90deg);
@@ -680,14 +764,14 @@ export component FlapCard inherits Rectangle {
     clip: true;
     // Fixed halves: new top (revealed behind the falling flap), old bottom (until covered).
     Image {
-        y: 0; width: root.width; height: root.half;
-        source: root.glyph(root.new-digit);
+        y: root.knock; width: root.width; height: root.half;
+        source: root.glyph(root.shown);
         source-clip-y: 0; source-clip-height: 150;
         image-fit: fill; colorize: root.ink;
     }
     Image {
-        y: root.half; width: root.width; height: root.half;
-        source: root.glyph(root.moving ? root.old-digit : root.new-digit);
+        y: root.half + root.knock; width: root.width; height: root.half;
+        source: root.glyph(root.moving ? root.old-digit : root.shown);
         source-clip-y: 150; source-clip-height: 150;
         image-fit: fill; colorize: root.ink;
     }
@@ -716,12 +800,13 @@ export component FlapCard inherits Rectangle {
         background: root.card.mix(#000000, 0.6 + 0.4 * root.p2);
         Image {
             width: root.width; height: root.h2;
-            source: root.glyph(root.new-digit);
+            source: root.glyph(root.shown);
             source-clip-y: 150; source-clip-height: 150;
             image-fit: fill; colorize: root.ink.mix(#000000, 0.6 + 0.4 * root.p2);
         }
         Rectangle { y: parent.height - 1px; height: 1px; background: #000000.with-alpha(0.4 * (1 - root.p2)); }
     }
+    if root.landed >= 20 && root.landed < 50: Rectangle { y: root.half; height: root.half; background: #000000.with-alpha(0.14); }
     // Hinge
     Rectangle { y: root.half - 1px; height: 2px; background: #000000.with-alpha(0.55); }
 }
@@ -803,7 +888,7 @@ export component ClockFace inherits Rectangle {
                 RollPair { text: root.data.mm; font-size: 128px; font-weight: root.weight; color: Theme.text; }
             }
         }
-        if root.show-date: Text { text: root.data.date; font-size: 22px; color: Theme.muted; }
+        if root.show-date: SwapText { text: root.data.date; font-size: 22px; ink: Theme.muted; }
         if root.show-weather: HorizontalLayout {
             padding-top: 20px;
             spacing: 14px;
@@ -811,12 +896,12 @@ export component ClockFace inherits Rectangle {
             Icon { text: root.data.weather-icon; font-size: 52px; color: Theme.text; }
             VerticalLayout {
                 alignment: center;
-                Text { text: root.data.temperature; font-size: 36px; font-weight: root.weight; color: Theme.text; }
+                SwapText { text: root.data.temperature; font-size: 36px; font-weight: root.weight; ink: Theme.text; fade: true; }
             }
             VerticalLayout {
                 alignment: center;
-                Text { text: root.data.condition; font-size: Theme.font-body; color: Theme.text; }
-                Text { text: root.data.high-low; font-size: Theme.font-label; color: Theme.muted; }
+                SwapText { text: root.data.condition; font-size: Theme.font-body; ink: Theme.text; fade: true; }
+                SwapText { text: root.data.high-low; font-size: Theme.font-label; ink: Theme.muted; fade: true; }
             }
         }
         if root.has-next: HorizontalLayout {
@@ -837,9 +922,9 @@ export component ClockFace inherits Rectangle {
             transform-scale-x: min(root.width-k, (root.width - 24px) / max(1px, r1.preferred-width));
             r1 := HorizontalLayout {
                 alignment: center;
-                RollPair { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+                RollPair { text: root.data.hh; font-size: 176px; font-weight: root.weight; color: Theme.text; ink: true; }
                 Text { text: ":"; font-size: 176px; font-weight: root.weight; color: root.accent; opacity: root.colon; }
-                RollPair { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; }
+                RollPair { text: root.data.mm; font-size: 176px; font-weight: root.weight; color: Theme.text; ink: true; }
             }
         }
         if root.show-seconds: HorizontalLayout {
@@ -957,6 +1042,35 @@ export component ClockFace inherits Rectangle {
         if root.has-next: NextLine { data: root.data; accent: root.accent; }
     }
 
+    // 8: nixie tubes on the walnut plinth, 9: the LCD quartz watch, 10: the twin-bell clock (spec 24.9): each fills the
+    //    width like the others (centred, scaled to fit); date, weather and the next event under it (the LCD has its own
+    //    weekday and date)
+    property <length> look-w: root.width - 48px;
+    if root.style >= 8 && root.style <= 10: VerticalLayout {
+        y: root.top;
+        height: root.height - root.top - root.bottom;
+        padding-left: 24px;
+        padding-right: 24px;
+        alignment: center;
+        spacing: 14px;
+        if root.style == 8: NixieClock {
+            height: min(root.clock-only ? 300px : 220px, root.look-w * 168 / (root.show-seconds ? 438 : 302));
+            hh: root.data.hh; mm: root.data.mm; seconds: root.seconds; show-seconds: root.show-seconds;
+        }
+        if root.style == 9: LcdClock {
+            height: min(root.clock-only ? 300px : 236px, root.look-w * 200 / 348);
+            hh: root.data.hh; mm: root.data.mm; seconds: root.seconds; weekday: root.data.lcd-day; date: root.data.lcd-date;
+        }
+        if root.style == 10: TwinBellClock {
+            height: root.clock-only ? 320px : 252px;
+            hours: root.hours; minutes: root.minutes; seconds: root.seconds; show-seconds: root.show-seconds;
+        }
+        if (root.show-date && root.style != 9) || root.show-weather: InfoLine {
+            data: root.data; show-date: root.show-date && root.style != 9; show-weather: root.show-weather; size: 19px;
+        }
+        if root.has-next: NextLine { data: root.data; accent: root.accent; }
+    }
+
     // 6: smaller clock bouncing slowly around the screen
     property <length> wander-w: 260px;
     property <length> wander-h: 150px;
@@ -978,6 +1092,32 @@ export component ClockFace inherits Rectangle {
     function bounce(dist: float, range: float) -> float {
         range - abs(Math.mod(dist, 2 * range) - range)
     }
+    // C7: the distance since the last turn on each axis (the triangle wave turns at 0 and at its range), as time
+    property <float> wrx: (root.width - root.wander-w) / 1px;
+    property <float> wry: (root.height - root.wander-h) / 1px;
+    property <float> wux: Math.mod(root.wander-d + 37, 2 * root.wrx);
+    property <float> wuy: Math.mod(root.wander-d + 113, 2 * root.wry);
+    property <float> wsx: (root.wux < root.wrx ? root.wux : root.wux - root.wrx) / max(1, root.wander-v);
+    property <float> wsy: (root.wuy < root.wry ? root.wuy : root.wuy - root.wry) / max(1, root.wander-v);
+    // … and until the next one: a squash runs 60 ms on each side of the hit
+    property <float> wtx: (root.wux < root.wrx ? root.wrx - root.wux : 2 * root.wrx - root.wux) / max(1, root.wander-v);
+    property <float> wty: (root.wuy < root.wry ? root.wry - root.wuy : 2 * root.wry - root.wuy) / max(1, root.wander-v);
+    property <float> sqx: root.style == 6 ? 0.04 * max(0, 1 - min(root.wsx, root.wtx) / 0.06) : 0;
+    property <float> sqy: root.style == 6 ? 0.04 * max(0, 1 - min(root.wsy, root.wty) / 0.06) : 0;
+    // an exact corner (both turns within 40 ms of each other): a spark burst there for 400 ms
+    property <bool> spark: root.style == 6 && Math.abs(root.wsx - root.wsy) < 0.04 && root.wsx < 0.4;
+    if root.spark: Rectangle {
+        property <float> k: root.wsx / 0.4;
+        property <float> cx: root.wux < root.wrx ? 0 : root.width / 1px;
+        property <float> cy: root.wuy < root.wry ? 0 : root.height / 1px;
+        for d in 8: Rectangle {
+            property <angle> a: d * 12.86deg;
+            property <float> r: 6 + 46 * (1 - Math.pow(1 - parent.k, 2));
+            x: (parent.cx + (parent.cx > 0 ? -1 : 1) * Math.abs(self.r * Math.cos(self.a)) - 2) * 1px;
+            y: (parent.cy + (parent.cy > 0 ? -1 : 1) * Math.abs(self.r * Math.sin(self.a)) - 2) * 1px;
+            width: 4px; height: 4px; border-radius: 2px; background: root.accent.mix(#ffffff, 0.6); opacity: 1 - parent.k;
+        }
+    }
     if root.style == 6: VerticalLayout {
         x: root.bounce(root.wander-d + 37, (root.width - root.wander-w) / 1px) * 1px;
         y: root.bounce(root.wander-d + 113, (root.height - root.wander-h) / 1px) * 1px;
@@ -985,7 +1125,8 @@ export component ClockFace inherits Rectangle {
         height: root.wander-h;
         alignment: center;
         Rectangle {
-            transform-scale-x: min(root.width-k, root.wander-w / max(1px, r6.preferred-width));
+            transform-scale-x: min(root.width-k, root.wander-w / max(1px, r6.preferred-width)) * (1 - root.sqx);
+            transform-scale-y: 1 - root.sqy;
             r6 := HorizontalLayout {
                 alignment: center;
                 RollPair { text: root.data.hh; font-size: 84px; font-weight: root.weight; color: Theme.dark ? #c8c8cf : Theme.text; }
@@ -1061,6 +1202,13 @@ export component WeatherPanel inherits Rectangle {
     in property <bool> fx-flash: true;       // lightning flash
     in property <bool> fx-drops: true;       // rain drops on the glass
     in property <image> sky-frame;           // optional per-frame sky from the app
+    in property <bool> shown;                // the page is the one on screen (25.W1: it opens)
+    // 25.W1: when the page opens, the forecast bars grow from zero one after another (300 ms each, 20 ms apart)
+    property <bool> opening;
+    property <duration> open-t0;
+    changed shown => { if root.shown { root.open-t0 = animation-tick(); root.opening = true; } }
+    Timer { interval: 520ms; running: root.opening; triggered => { root.opening = false; } }
+    property <float> open-t: root.opening ? (animation-tick() - root.open-t0) / 1ms : 10000;
     property <length> top: 40px;
     property <length> bottom: 44px;
     background: Theme.background;
@@ -1133,9 +1281,10 @@ export component WeatherPanel inherits Rectangle {
         if root.show-days: VerticalLayout {
             spacing: 2px;
             opacity: root.fade(1.8);
-            for d in root.data.days: HorizontalLayout {
+            for d[di] in root.data.days: grow-row := HorizontalLayout {
                 height: 28px;
                 spacing: 10px;
+                property <float> grow: clamp((root.open-t - di * 20) / 300, 0, 1);
                 Text { width: 44px; text: d.label; font-size: Theme.font-label; color: Theme.text; vertical-alignment: center; }
                 Icon { width: 28px; text: d.icon; font-size: 20px; color: Theme.text; }
                 Text { width: 40px; text: d.precip > 0 ? d.precip + "%" : ""; font-size: 12px; color: #4aa8ff; vertical-alignment: center; }
@@ -1149,7 +1298,7 @@ export component WeatherPanel inherits Rectangle {
                             height: 6px; border-radius: 3px; background: Theme.surface-raised;
                             Rectangle {
                                 x: parent.width * (d.low - root.lo) / max(1, root.hi - root.lo);
-                                width: parent.width * (d.high - d.low) / max(1, root.hi - root.lo);
+                                width: parent.width * (d.high - d.low) / max(1, root.hi - root.lo) * (1 - Math.pow(1 - grow-row.grow, 3));
                                 border-radius: 3px;
                                 background: @linear-gradient(90deg, #4aa8ff 0%, #ffb547 100%);
                             }

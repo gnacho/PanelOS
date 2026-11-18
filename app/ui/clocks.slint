@@ -1,0 +1,369 @@
+// Clock faces from the stopwatch and alarm looks (spec 24.9): the nixie tubes, the LCD quartz watch and the
+// twin-bell clock, for the screensaver and the clock widget. Each is drawn in its own frame (the design boards'
+// numbers) and scaled to fit, centred. Seg7 (the seven-segment digit) is shared with the timers page.
+import { Theme } from "theme.slint";
+
+// The next alarm and whether one rings (set from the timers page's properties in app.slint).
+export global AlarmNow {
+    in-out property <float> next-h: -1;   // the next alarm's hour of the day (0..24), -1 when none is on
+    in-out property <bool> ringing;       // an alarm rings now
+}
+
+// A seven-segment digit in the 480 x 480 frame (spec 24.3, the board's geometry): slanted by 0.09, every unlit segment a
+// faint ghost (7 %). d: 0-9, 10 = "L", -1 = blank.
+export component Seg7 inherits Rectangle {
+    in property <int> d: -1;
+    in property <float> x0;
+    in property <float> y0;
+    in property <float> w;
+    in property <float> h;
+    in property <float> t;
+    in property <color> ink;
+    in property <float> slant: 0.09;
+    in property <float> gap: 0.18;
+    in property <color> off;              // an unlit segment in its own colour (no ghost)
+    in property <bool> ghost: true;
+    in property <bool> lag;               // the segments lag like a real LCD (25.T8)
+    width: 480px; height: 480px;
+    property <[int]> masks: [63, 6, 91, 79, 102, 109, 125, 7, 127, 111, 56];
+    property <int> mask: root.d >= 0 && root.d <= 10 ? root.masks[root.d] : 0;
+    property <float> g: root.t * root.gap;
+    property <float> m: root.y0 + root.h / 2;
+    pure function px(x: float, y: float) -> float { x + (root.y0 + root.h - y) * root.slant }
+    pure function pt(x: float, y: float) -> string { root.px(x, y) + " " + y }
+    pure function hor(y: float) -> string {
+        "M " + root.pt(root.x0 + root.g + root.t / 2, y + root.t / 2) + " L " + root.pt(root.x0 + root.g + root.t, y) + " L " + root.pt(root.x0 + root.w - root.g - root.t, y)
+            + " L " + root.pt(root.x0 + root.w - root.g - root.t / 2, y + root.t / 2) + " L " + root.pt(root.x0 + root.w - root.g - root.t, y + root.t)
+            + " L " + root.pt(root.x0 + root.g + root.t, y + root.t) + " Z"
+    }
+    pure function ver(x: float, ya: float, yb: float) -> string {
+        "M " + root.pt(x + root.t / 2, ya) + " L " + root.pt(x + root.t, ya + root.t / 2) + " L " + root.pt(x + root.t, yb - root.t / 2)
+            + " L " + root.pt(x + root.t / 2, yb) + " L " + root.pt(x, yb - root.t / 2) + " L " + root.pt(x, ya + root.t / 2) + " Z"
+    }
+    pure function on(bit: int) -> bool { Math.mod(Math.floor(root.mask / bit), 2) == 1 }
+    for sg[i] in [
+        { b: 1, c: root.hor(root.y0) },
+        { b: 2, c: root.ver(root.x0 + root.w - root.t, root.y0 + root.g + root.t / 2, root.m - root.g) },
+        { b: 4, c: root.ver(root.x0 + root.w - root.t, root.m + root.g, root.y0 + root.h - root.g - root.t / 2) },
+        { b: 8, c: root.hor(root.y0 + root.h - root.t) },
+        { b: 16, c: root.ver(root.x0, root.m + root.g, root.y0 + root.h - root.g - root.t / 2) },
+        { b: 32, c: root.ver(root.x0, root.y0 + root.g + root.t / 2, root.m - root.g) },
+        { b: 64, c: root.hor(root.m - root.t / 2) },
+    ]: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480;
+        property <bool> lit: root.on(sg.b);
+        fill: root.ghost || self.lit ? root.ink : root.off; opacity: root.ghost && !self.lit ? 0.07 : 1; commands: sg.c;
+        // 25.T8: like a real LCD a segment comes on in 60 ms and goes off in 120 ms
+        states [
+            lag-on when root.lag && self.lit: { opacity: 1; in { animate opacity { duration: 60ms; } } }
+            lag-off when root.lag && !self.lit: { opacity: root.ghost ? 0.07 : 1; in { animate opacity { duration: 120ms; } } }
+        ]
+    }
+}
+
+// One nixie tube of the clock (board C1): smoky glass (28 %) so the background shows through, the faint cathode
+// stack, the lit digit in four orange strokes, the 45 degree mesh in front, the socket. 54 x 132.
+component NixieGlass inherits Rectangle {
+    in property <int> d;
+    in property <float> f: 1;             // the glow, never quite steady
+    width: 54px; height: 132px;
+    // a digit change crossfades with an afterglow (as 25.T9): the old cathode dies over 120 ms, the new lights over 60 ms
+    property <int> cur: -1;
+    property <int> old: -1;
+    property <duration> t0;
+    property <bool> fading;
+    init => { root.cur = root.d; }
+    changed d => { root.old = root.cur; root.cur = root.d; root.t0 = animation-tick(); root.fading = true; }
+    Timer { interval: 130ms; running: root.fading; triggered => { root.fading = false; } }
+    property <float> since: root.fading ? (animation-tick() - root.t0) / 1ms : 1000;
+    property <float> new-k: clamp(root.since / 60, 0, 1);
+    property <float> old-k: root.old >= 0 && root.old <= 9 && root.old != root.d ? 1 - clamp(root.since / 120, 0, 1) : 0;
+    property <[string]> nx: ["M18 2 C30 2 34 16 34 36 C34 56 30 70 18 70 C6 70 2 56 2 36 C2 16 6 2 18 2 Z", "M11 13 L19 3 L19 70", "M4 16 C4 6 11 2 18 2 C27 2 32 8 32 17 C32 30 18 40 4 70 L33 70", "M4 4 L31 4 L16 30 C27 29 33 37 33 49 C33 62 26 70 17 70 C9 70 4 66 3 60", "M26 70 L26 2 L3 50 L34 50", "M31 3 L8 3 L5 32 C9 28 13 27 18 27 C28 27 33 35 33 48 C33 62 26 70 17 70 C9 70 4 66 3 60", "M28 6 C25 3 22 2 18 2 C8 2 3 14 3 40 C3 60 9 70 18 70 C27 70 33 62 33 52 C33 42 27 34 18 34 C10 34 4 40 3 48", "M3 3 L33 3 L13 70", "M18 34 C9 34 5 28 5 18 C5 8 11 2 18 2 C25 2 31 8 31 18 C31 28 27 34 18 34 C8 34 3 42 3 52 C3 63 10 70 18 70 C26 70 33 63 33 52 C33 42 28 34 18 34 Z", "M8 66 C11 69 14 70 18 70 C28 70 33 58 33 32 C33 12 27 2 18 2 C9 2 3 10 3 20 C3 30 9 38 18 38 C26 38 32 32 33 24"];
+    Rectangle { x: 4px; y: 122px; width: 46px; height: 10px; border-radius: 3px; background: #141010; border-width: 1px; border-color: #2c2622; }
+    Rectangle { x: -0.6px; y: -0.6px; width: 55.2px; height: 125.2px; border-radius: 26.6px; background: #180e0847; border-width: 1.2px; border-color: #ffffff47; }
+    Path { x: 0; y: 0; width: 54px; height: 124px; viewbox-width: 54; viewbox-height: 124; fill: #ff6a14; opacity: 0.13 * root.f;
+        commands: "M 7 62 A 20 34 0 1 0 47 62 A 20 34 0 1 0 7 62 Z"; }
+    for g[i] in root.nx: Path { visible: i != root.d; x: 1px; y: 18px; width: 52px; height: 88px; viewbox-x: -8; viewbox-y: -8; viewbox-width: 52; viewbox-height: 88;
+        fill: transparent; stroke: #8a7462; stroke-width: 1.4px; stroke-line-cap: round; stroke-line-join: round; opacity: 0.38; commands: g; }
+    if root.old-k > 0: Rectangle {
+        for w[i] in [{ s: 11px, c: #ff5a00, o: 0.16 }, { s: 6px, c: #ff7a1a, o: 0.42 }, { s: 3px, c: #ffb066, o: 0.9 }, { s: 1.2px, c: #fff0dc, o: 1.0 }]: Path {
+            x: 1px; y: 18px; width: 52px; height: 88px; viewbox-x: -8; viewbox-y: -8; viewbox-width: 52; viewbox-height: 88;
+            fill: transparent; stroke: w.c; stroke-width: w.s; stroke-line-cap: round; stroke-line-join: round; opacity: w.o * root.old-k * (i < 3 ? root.f : 1);
+            commands: root.nx[root.old]; }
+    }
+    for w[i] in [{ s: 11px, c: #ff5a00, o: 0.16 }, { s: 6px, c: #ff7a1a, o: 0.42 }, { s: 3px, c: #ffb066, o: 0.9 }, { s: 1.2px, c: #fff0dc, o: 1.0 }]: Path {
+        x: 1px; y: 18px; width: 52px; height: 88px; viewbox-x: -8; viewbox-y: -8; viewbox-width: 52; viewbox-height: 88;
+        fill: transparent; stroke: w.c; stroke-width: w.s; stroke-line-cap: round; stroke-line-join: round; opacity: w.o * root.new-k * (i < 3 ? root.f : 1);
+        commands: root.d >= 0 && root.d <= 9 ? root.nx[root.d] : root.nx[0]; }
+    Path { x: 0; y: 0; width: 54px; height: 124px; viewbox-width: 54; viewbox-height: 124; fill: transparent; stroke: #b9967a; stroke-width: 0.6px; opacity: 0.34;
+        commands: "M 43 14 L 47 18 M 11 14 L 7 18 M 34 14 L 47 27 M 20 14 L 7 27 M 25 14 L 47 36 M 29 14 L 7 36 M 16 14 L 47 45 M 38 14 L 7 45 M 7 14 L 47 54 M 47 14 L 7 54 M 7 23 L 47 63 M 47 23 L 7 63 M 7 32 L 47 72 M 47 32 L 7 72 M 7 41 L 47 81 M 47 41 L 7 81 M 7 50 L 47 90 M 47 50 L 7 90 M 7 59 L 47 99 M 47 59 L 7 99 M 7 68 L 47 108 M 47 68 L 7 108 M 7 77 L 42 112 M 47 77 L 12 112 M 7 86 L 33 112 M 47 86 L 21 112 M 7 95 L 24 112 M 47 95 L 30 112 M 7 104 L 15 112 M 47 104 L 39 112"; }
+    Rectangle { x: 9px; y: 8px; width: 5px; height: 92px; border-radius: 2.5px; background: #ffffff29; }
+    Rectangle { x: 20px; y: 2px; width: 14px; height: 5px; border-radius: 2.5px; background: #ffffff24; }
+}
+
+// The walnut plinth (boards C1 and S4): grain lines, end-grain shading, a bevel highlight, the darker lower edge and a
+// soft contact shadow. The grain is drawn for the two clock widths (hh:mm 284, hh:mm:ss 420).
+component WalnutPlinth inherits Rectangle {
+    in property <bool> wide;              // 420 px instead of 284
+    property <float> pw: root.wide ? 420 : 284;
+    width: root.pw * 1px; height: 26px;
+    Path { x: -root.pw * 0.02px; y: 0; width: root.pw * 1.04px; height: 40px; viewbox-width: root.pw * 1.04; viewbox-height: 40; fill: #000000; opacity: 0.45;
+        commands: "M 0 29 A " + root.pw * 0.52 + " 6 0 1 0 " + root.pw * 1.04 + " 29 A " + root.pw * 0.52 + " 6 0 1 0 0 29 Z"; }
+    Rectangle { border-radius: 5px; background: @linear-gradient(180deg, #8a5634 0%, #6b3f22 45%, #3f2313 100%); }
+    if !root.wide: Rectangle {
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 1.1px; opacity: 0.42;
+            commands: "M 0 3.6 L 10 4.2 L 20 4.1 L 30 3.8 L 40 4 L 50 4.5 L 60 4.4 L 70 3.8 L 80 3.4 L 90 3.7 L 100 3.8 L 110 3.2 L 120 2.7 L 130 2.9 L 140 3.4 L 150 3.4 L 160 3 L 170 3.2 L 180 3.9 L 190 4.3 L 200 4 L 210 3.8 L 220 4.2 L 230 4.6 L 240 4.2 L 250 3.6 L 260 3.5 L 270 3.8 L 280 3.6"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 0.7px; opacity: 0.22;
+            commands: "M 0 5.6 L 10 6.8 L 20 6.2 L 30 6 L 40 6.2 L 50 6.2 L 60 5.4 L 70 4.8 L 80 4.9 L 90 5.1 L 100 4.8 L 110 4.3 L 120 4.5 L 130 5.2 L 140 5.5 L 150 5.3 L 160 5.3 L 170 6.1 L 180 6.7 L 190 6.5 L 200 6.1 L 210 6.3 L 220 6.7 L 230 6.4 L 240 5.7 L 250 5.3 L 260 5.5 L 270 5.4 L 280 4.8"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 7.5 L 10 7.7 L 20 7 L 30 7.1 L 40 7.1 L 50 6.6 L 60 5.9 L 70 6 L 80 6.5 L 90 6.7 L 100 6.4 L 110 6.6 L 120 7.4 L 130 8.1 L 140 8 L 150 8 L 160 8.5 L 170 9.1 L 180 9 L 190 8.4 L 200 8.2 L 210 8.5 L 220 8.3 L 230 7.4 L 240 6.8 L 250 6.8 L 260 6.9 L 270 6.4 L 280 5.8"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 9.4 L 10 8.5 L 20 8.7 L 30 9.1 L 40 9.1 L 50 8.6 L 60 8.7 L 70 9.3 L 80 9.7 L 90 9.4 L 100 9.2 L 110 9.7 L 120 10.3 L 130 10.1 L 140 9.7 L 150 9.8 L 160 10.2 L 170 10.2 L 180 9.6 L 190 9.3 L 200 9.5 L 210 9.7 L 220 9.2 L 230 8.6 L 240 8.8 L 250 9.2 L 260 9.1 L 270 8.6 L 280 8.5"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 1.1px; opacity: 0.22;
+            commands: "M 0 11.3 L 10 10.3 L 20 11 L 30 11.4 L 40 11.1 L 50 11.1 L 60 11.7 L 70 12.3 L 80 12.2 L 90 11.8 L 100 12.1 L 110 12.6 L 120 12.5 L 130 11.9 L 140 11.6 L 150 11.9 L 160 11.9 L 170 11.3 L 180 10.7 L 190 10.8 L 200 11 L 210 10.7 L 220 10.1 L 230 10.1 L 240 10.6 L 250 10.8 L 260 10.5 L 270 10.4 L 280 11"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 13.3 L 10 13.9 L 20 14.5 L 30 14.3 L 40 14.1 L 50 14.4 L 60 14.9 L 70 14.8 L 80 14.1 L 90 13.9 L 100 14.2 L 110 14.1 L 120 13.4 L 130 12.7 L 140 12.8 L 150 13 L 160 12.5 L 170 11.8 L 180 11.8 L 190 12.2 L 200 12.3 L 210 11.9 L 220 11.8 L 230 12.5 L 240 13.1 L 250 13 L 260 12.8 L 270 13.4 L 280 14.2"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 15.2 L 10 16.1 L 20 16 L 30 15.4 L 40 15.3 L 50 15.7 L 60 15.7 L 70 15.1 L 80 14.7 L 90 15 L 100 15.3 L 110 14.9 L 120 14.3 L 130 14.4 L 140 14.9 L 150 14.9 L 160 14.4 L 170 14.3 L 180 14.8 L 190 15.2 L 200 14.9 L 210 14.7 L 220 15.1 L 230 15.7 L 240 15.7 L 250 15.2 L 260 15.4 L 270 15.9 L 280 16.1"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 0.7px; opacity: 0.22;
+            commands: "M 0 17.1 L 10 17.6 L 20 16.9 L 30 16.5 L 40 16.7 L 50 16.9 L 60 16.4 L 70 15.9 L 80 16 L 90 16.5 L 100 16.4 L 110 16 L 120 16 L 130 16.6 L 140 16.9 L 150 16.7 L 160 16.5 L 170 17.1 L 180 17.7 L 190 17.6 L 200 17.3 L 210 17.5 L 220 18.2 L 230 18.3 L 240 17.9 L 250 17.7 L 260 18.1 L 270 18.4 L 280 17.9"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 1.1px; opacity: 0.42;
+            commands: "M 0 19 L 10 17.8 L 20 17.4 L 30 17.6 L 40 18.1 L 50 18 L 60 17.6 L 70 17.8 L 80 18.5 L 90 18.8 L 100 18.6 L 110 18.6 L 120 19.2 L 130 19.9 L 140 19.8 L 150 19.5 L 160 19.8 L 170 20.5 L 180 20.6 L 190 20.1 L 200 20 L 210 20.4 L 220 20.6 L 230 20 L 240 19.5 L 250 19.5 L 260 19.8 L 270 19.4 L 280 18.6"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 21 L 10 20.2 L 20 20.4 L 30 21 L 40 21.2 L 50 20.8 L 60 20.7 L 70 21.3 L 80 21.7 L 90 21.4 L 100 21.1 L 110 21.3 L 120 21.9 L 130 21.8 L 140 21.3 L 150 21.2 L 160 21.7 L 170 21.8 L 180 21.3 L 190 20.9 L 200 21.1 L 210 21.5 L 220 21.1 L 230 20.5 L 240 20.5 L 250 20.9 L 260 20.9 L 270 20.3 L 280 20"; }
+        Path { x: 0; y: 0; width: 284px; height: 26px; viewbox-width: 284; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 0.7px; opacity: 0.22;
+            commands: "M 0 22.9 L 10 23.1 L 20 23.7 L 30 24 L 40 23.7 L 50 23.4 L 60 23.7 L 70 24.2 L 80 24 L 90 23.4 L 100 23.4 L 110 23.8 L 120 23.8 L 130 23.2 L 140 22.8 L 150 23 L 160 23.2 L 170 22.8 L 180 22.1 L 190 22.2 L 200 22.5 L 210 22.4 L 220 21.8 L 230 21.6 L 240 22.1 L 250 22.3 L 260 21.9 L 270 21.6 L 280 22"; }
+    }
+    if root.wide: Rectangle {
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 1.1px; opacity: 0.42;
+            commands: "M 0 3.6 L 10 4.2 L 20 4.1 L 30 3.8 L 40 4 L 50 4.5 L 60 4.4 L 70 3.8 L 80 3.4 L 90 3.7 L 100 3.8 L 110 3.2 L 120 2.7 L 130 2.9 L 140 3.4 L 150 3.4 L 160 3 L 170 3.2 L 180 3.9 L 190 4.3 L 200 4 L 210 3.8 L 220 4.2 L 230 4.6 L 240 4.2 L 250 3.6 L 260 3.5 L 270 3.8 L 280 3.6 L 290 2.9 L 300 2.7 L 310 3.2 L 320 3.5 L 330 3.2 L 340 3 L 350 3.5 L 360 4.2 L 370 4.2 L 380 3.8 L 390 3.9 L 400 4.5 L 410 4.5 L 420 3.9"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 0.7px; opacity: 0.22;
+            commands: "M 0 5.6 L 10 6.8 L 20 6.2 L 30 6 L 40 6.2 L 50 6.2 L 60 5.4 L 70 4.8 L 80 4.9 L 90 5.1 L 100 4.8 L 110 4.3 L 120 4.5 L 130 5.2 L 140 5.5 L 150 5.3 L 160 5.3 L 170 6.1 L 180 6.7 L 190 6.5 L 200 6.1 L 210 6.3 L 220 6.7 L 230 6.4 L 240 5.7 L 250 5.3 L 260 5.5 L 270 5.4 L 280 4.8 L 290 4.3 L 300 4.6 L 310 5 L 320 5 L 330 4.7 L 340 5 L 350 5.9 L 360 6.2 L 370 6 L 380 6 L 390 6.5 L 400 6.9 L 410 6.5 L 420 5.9"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 7.5 L 10 7.7 L 20 7 L 30 7.1 L 40 7.1 L 50 6.6 L 60 5.9 L 70 6 L 80 6.5 L 90 6.7 L 100 6.4 L 110 6.6 L 120 7.4 L 130 8.1 L 140 8 L 150 8 L 160 8.5 L 170 9.1 L 180 9 L 190 8.4 L 200 8.2 L 210 8.5 L 220 8.3 L 230 7.4 L 240 6.8 L 250 6.8 L 260 6.9 L 270 6.4 L 280 5.8 L 290 6 L 300 6.6 L 310 6.8 L 320 6.6 L 330 6.8 L 340 7.7 L 350 8.3 L 360 8.2 L 370 8.1 L 380 8.6 L 390 9.2 L 400 9 L 410 8.3 L 420 8.1"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 9.4 L 10 8.5 L 20 8.7 L 30 9.1 L 40 9.1 L 50 8.6 L 60 8.7 L 70 9.3 L 80 9.7 L 90 9.4 L 100 9.2 L 110 9.7 L 120 10.3 L 130 10.1 L 140 9.7 L 150 9.8 L 160 10.2 L 170 10.2 L 180 9.6 L 190 9.3 L 200 9.5 L 210 9.7 L 220 9.2 L 230 8.6 L 240 8.8 L 250 9.2 L 260 9.1 L 270 8.6 L 280 8.5 L 290 9.1 L 300 9.5 L 310 9.2 L 320 9 L 330 9.5 L 340 10.1 L 350 10 L 360 9.6 L 370 9.7 L 380 10.3 L 390 10.3 L 400 9.7 L 410 9.4 L 420 9.7"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 1.1px; opacity: 0.22;
+            commands: "M 0 11.3 L 10 10.3 L 20 11 L 30 11.4 L 40 11.1 L 50 11.1 L 60 11.7 L 70 12.3 L 80 12.2 L 90 11.8 L 100 12.1 L 110 12.6 L 120 12.5 L 130 11.9 L 140 11.6 L 150 11.9 L 160 11.9 L 170 11.3 L 180 10.7 L 190 10.8 L 200 11 L 210 10.7 L 220 10.1 L 230 10.1 L 240 10.6 L 250 10.8 L 260 10.5 L 270 10.4 L 280 11 L 290 11.6 L 300 11.6 L 310 11.3 L 320 11.7 L 330 12.4 L 340 12.5 L 350 12 L 360 11.9 L 370 12.4 L 380 12.5 L 390 12 L 400 11.4 L 410 11.5 L 420 11.7"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 13.3 L 10 13.9 L 20 14.5 L 30 14.3 L 40 14.1 L 50 14.4 L 60 14.9 L 70 14.8 L 80 14.1 L 90 13.9 L 100 14.2 L 110 14.1 L 120 13.4 L 130 12.7 L 140 12.8 L 150 13 L 160 12.5 L 170 11.8 L 180 11.8 L 190 12.2 L 200 12.3 L 210 11.9 L 220 11.8 L 230 12.5 L 240 13.1 L 250 13 L 260 12.8 L 270 13.4 L 280 14.2 L 290 14.3 L 300 14 L 310 14.1 L 320 14.7 L 330 14.9 L 340 14.4 L 350 14 L 360 14.2 L 370 14.4 L 380 13.9 L 390 13.1 L 400 12.9 L 410 13.1 L 420 12.9"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 15.2 L 10 16.1 L 20 16 L 30 15.4 L 40 15.3 L 50 15.7 L 60 15.7 L 70 15.1 L 80 14.7 L 90 15 L 100 15.3 L 110 14.9 L 120 14.3 L 130 14.4 L 140 14.9 L 150 14.9 L 160 14.4 L 170 14.3 L 180 14.8 L 190 15.2 L 200 14.9 L 210 14.7 L 220 15.1 L 230 15.7 L 240 15.7 L 250 15.2 L 260 15.4 L 270 15.9 L 280 16.1 L 290 15.7 L 300 15.4 L 310 15.7 L 320 16.1 L 330 15.7 L 340 15.1 L 350 15.2 L 360 15.5 L 370 15.4 L 380 14.8 L 390 14.5 L 400 14.9 L 410 15.1 L 420 14.6"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 0.7px; opacity: 0.22;
+            commands: "M 0 17.1 L 10 17.6 L 20 16.9 L 30 16.5 L 40 16.7 L 50 16.9 L 60 16.4 L 70 15.9 L 80 16 L 90 16.5 L 100 16.4 L 110 16 L 120 16 L 130 16.6 L 140 16.9 L 150 16.7 L 160 16.5 L 170 17.1 L 180 17.7 L 190 17.6 L 200 17.3 L 210 17.5 L 220 18.2 L 230 18.3 L 240 17.9 L 250 17.7 L 260 18.1 L 270 18.4 L 280 17.9 L 290 17.3 L 300 17.4 L 310 17.7 L 320 17.4 L 330 16.7 L 340 16.5 L 350 16.8 L 360 16.8 L 370 16.3 L 380 15.8 L 390 16.1 L 400 16.5 L 410 16.3 L 420 15.9"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 1.1px; opacity: 0.42;
+            commands: "M 0 19 L 10 17.8 L 20 17.4 L 30 17.6 L 40 18.1 L 50 18 L 60 17.6 L 70 17.8 L 80 18.5 L 90 18.8 L 100 18.6 L 110 18.6 L 120 19.2 L 130 19.9 L 140 19.8 L 150 19.5 L 160 19.8 L 170 20.5 L 180 20.6 L 190 20.1 L 200 20 L 210 20.4 L 220 20.6 L 230 20 L 240 19.5 L 250 19.5 L 260 19.8 L 270 19.4 L 280 18.6 L 290 18.4 L 300 18.7 L 310 18.6 L 320 17.9 L 330 17.5 L 340 17.8 L 350 18.1 L 360 17.8 L 370 17.4 L 380 17.6 L 390 18.3 L 400 18.4 L 410 18.1 L 420 18.2"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #2c170b; stroke-width: 0.7px; opacity: 0.42;
+            commands: "M 0 21 L 10 20.2 L 20 20.4 L 30 21 L 40 21.2 L 50 20.8 L 60 20.7 L 70 21.3 L 80 21.7 L 90 21.4 L 100 21.1 L 110 21.3 L 120 21.9 L 130 21.8 L 140 21.3 L 150 21.2 L 160 21.7 L 170 21.8 L 180 21.3 L 190 20.9 L 200 21.1 L 210 21.5 L 220 21.1 L 230 20.5 L 240 20.5 L 250 20.9 L 260 20.9 L 270 20.3 L 280 20 L 290 20.4 L 300 20.8 L 310 20.4 L 320 20 L 330 20.3 L 340 20.8 L 350 20.8 L 360 20.3 L 370 20.4 L 380 21 L 390 21.3 L 400 21 L 410 20.7 L 420 21.2"; }
+        Path { x: 0; y: 0; width: 420px; height: 26px; viewbox-width: 420; viewbox-height: 26; fill: transparent; stroke: #c08a5c; stroke-width: 0.7px; opacity: 0.22;
+            commands: "M 0 22.9 L 10 23.1 L 20 23.7 L 30 24 L 40 23.7 L 50 23.4 L 60 23.7 L 70 24.2 L 80 24 L 90 23.4 L 100 23.4 L 110 23.8 L 120 23.8 L 130 23.2 L 140 22.8 L 150 23 L 160 23.2 L 170 22.8 L 180 22.1 L 190 22.2 L 200 22.5 L 210 22.4 L 220 21.8 L 230 21.6 L 240 22.1 L 250 22.3 L 260 21.9 L 270 21.6 L 280 22 L 290 22.5 L 300 22.5 L 310 22.1 L 320 22.3 L 330 23 L 340 23.3 L 350 22.9 L 360 22.8 L 370 23.4 L 380 23.9 L 390 23.7 L 400 23.3 L 410 23.6 L 420 24.1"; }
+    }
+    Rectangle { border-radius: 5px; background: @linear-gradient(90deg, #00000059 0%, #00000000 6%, #00000000 94%, #00000066 100%); }
+    Rectangle { x: 4px; y: 0; width: parent.width - 8px; height: 1.6px; border-radius: 1px; background: #ffffff38; }
+    Rectangle { x: 0; y: parent.height - 1.6px; width: parent.width; height: 1.6px; border-radius: 1px; background: #00000059; }
+}
+
+// Style 8: the nixie tubes as a clock (board C1): hh:mm, seconds optional, the colon as two neon dots, on the walnut
+// plinth; nothing else behind them. Native frame 302 x 168 (438 x 168 with seconds).
+export component NixieClock inherits Rectangle {
+    in property <string> hh;
+    in property <string> mm;
+    in property <float> seconds;          // 0..60
+    in property <bool> show-seconds;
+    property <float> fw: root.show-seconds ? 438 : 302;
+    property <float> fh: 168;
+    property <float> k: min(root.width / 1px / root.fw, root.height / 1px / root.fh);
+    property <int> h: root.hh.to-float();
+    property <int> m: root.mm.to-float();
+    property <int> s: Math.floor(root.seconds);
+    // the glow of each tube, never quite steady (12 times a second)
+    property <float> ft;
+    Timer { interval: 80ms; running: true; triggered => { root.ft = animation-tick() / 1ms; } }
+    pure function fl(n: int) -> float { 0.94 + 0.06 * Math.abs(Math.sin(1rad * (root.ft / 37 + n * 1.7)) * Math.sin(1rad * (root.ft / 91 + n))) }
+    fr := Rectangle {
+        width: root.fw * 1px; height: root.fh * 1px;
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        transform-scale-x: root.k; transform-scale-y: root.k; transform-origin: { x: self.width / 2, y: self.height / 2 };
+        WalnutPlinth { x: 9px; y: 132px; wide: root.show-seconds; }
+        // the digits: 60 px apart in a pair, 16 px for a colon (tube lefts from the board's layout)
+        for t[i] in root.show-seconds ? [{ x: 26, d: Math.floor(root.h / 10) }, { x: 86, d: Math.mod(root.h, 10) }, { x: 162, d: Math.floor(root.m / 10) },
+                { x: 222, d: Math.mod(root.m, 10) }, { x: 298, d: Math.floor(root.s / 10) }, { x: 358, d: Math.mod(root.s, 10) }]
+            : [{ x: 26, d: Math.floor(root.h / 10) }, { x: 86, d: Math.mod(root.h, 10) }, { x: 162, d: Math.floor(root.m / 10) }, { x: 222, d: Math.mod(root.m, 10) }]:
+            NixieGlass { x: t.x * 1px; y: 0; d: t.d; f: root.fl(i); }
+        for c in root.show-seconds ? [151, 287] : [151]: Rectangle {
+            for yy in [46, 80]: Rectangle {
+                Rectangle { x: (c - 8.5) * 1px; y: (yy - 8.5) * 1px; width: 17px; height: 17px; border-radius: 8.5px; background: #ff6a00; opacity: 0.18; }
+                Rectangle { x: (c - 4.6) * 1px; y: (yy - 4.6) * 1px; width: 9.2px; height: 9.2px; border-radius: 4.6px; background: #ff8a2a; opacity: 0.5; }
+                Rectangle { x: (c - 2.6) * 1px; y: (yy - 2.6) * 1px; width: 5.2px; height: 5.2px; border-radius: 2.6px; background: #ffd8a8; }
+            }
+        }
+    }
+}
+
+// Style 9: the LCD quartz watch as a clock (boards C2, C4): HH:MM in segments with a blinking colon, small seconds, the
+// weekday and the date, AL when an alarm is on; the resin case (white in light mode) from 3 x 2 cells, the LCD alone
+// below that. A tap on the LCD lights it for 3 s.
+export component LcdClock inherits Rectangle {
+    in property <string> hh;
+    in property <string> mm;
+    in property <float> seconds;
+    in property <string> weekday;         // "WE"
+    in property <string> date;            // "11-18"
+    in property <bool> cased: true;
+    property <bool> glow;
+    Timer { interval: 3s; running: root.glow; triggered => { root.glow = false; } }
+    property <float> fw: root.cased ? 348 : 212;
+    property <float> fh: root.cased ? 200 : 84;
+    property <float> ox: root.cased ? 66 : 246;
+    property <float> oy: root.cased ? 58 : 62;
+    property <float> k: min(root.width / 1px / root.fw, root.height / 1px / root.fh);
+    property <int> h: root.hh.to-float();
+    property <int> m: root.mm.to-float();
+    property <int> s: Math.floor(root.seconds);
+    property <float> colon: Math.mod(root.seconds, 1) < 0.5 ? 1 : 0.08;
+    property <color> body: Theme.dark ? #1b1c20 : #efece5;
+    property <color> bevel: Theme.dark ? #2b2c31 : #d6d2c8;
+    property <color> pusher: Theme.dark ? #3a3b40 : #c9c5bb;
+    property <color> print: Theme.dark ? #a7a39b : #55524c;
+    property <float> gk: root.glow ? 1 : 0;
+    animate gk { duration: root.glow ? 60ms : 1000ms; easing: ease-out; }
+    property <color> ink: #0b2723.mix(#1d2620, root.gk);
+    property <brush> lcd: @linear-gradient(180deg, #7fe7d6.mix(#b6c2ac, root.gk) 0%, #45c2b0.mix(#9cab95, root.gk) 100%);
+    fr := Rectangle {
+        width: root.fw * 1px; height: root.fh * 1px;
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        transform-scale-x: root.k; transform-scale-y: root.k; transform-origin: { x: self.width / 2, y: self.height / 2 };
+        // the board's 480 x 480 frame
+        Rectangle { x: -root.ox * 1px; y: -root.oy * 1px; width: 480px; height: 480px;
+            if root.cased: Rectangle {
+                Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #000000; opacity: 0.4;
+                    commands: "M 80 250 A 160 8 0 1 0 400 250 A 160 8 0 1 0 80 250 Z"; }
+                for pp in [{ x: 66, y: 84 }, { x: 66, y: 196 }, { x: 402, y: 84 }, { x: 402, y: 196 }]: Rectangle {
+                    x: pp.x * 1px; y: pp.y * 1px; width: 12px; height: 22px; border-radius: 3px; background: root.pusher; }
+                Rectangle { x: 74px; y: 58px; width: 332px; height: 188px; border-radius: 40px; background: root.body; }
+                Rectangle { x: 82.5px; y: 66.5px; width: 315px; height: 171px; border-radius: 33.5px; border-width: 3px; border-color: root.bevel; }
+                for pr in [{ x: 100, y: 84, t: "LIGHT", a: 0 }, { x: 380, y: 84, t: "ALARM", a: 2 }, { x: 100, y: 226, t: "MODE", a: 0 }, { x: 380, y: 226, t: "ADJUST", a: 2 }]: Text {
+                    x: (pr.a == 0 ? pr.x : pr.x - 100) * 1px; y: (pr.y - 8.6) * 1px; width: 100px; text: pr.t; font-size: 8px; font-weight: 700; letter-spacing: 1.2px;
+                    color: root.print; horizontal-alignment: pr.a == 0 ? TextHorizontalAlignment.left : TextHorizontalAlignment.right; }
+                Text { x: 190px; y: 75.4px; width: 100px; text: "QUARTZ"; font-size: 8px; font-weight: 700; letter-spacing: 2px; color: #FF4A1C; horizontal-alignment: center; }
+                Rectangle { x: 103px; y: 91px; width: 274px; height: 124px; border-radius: 13px; background: root.lcd; border-width: 2px; border-color: #2e8f82.mix(#7d8a76, root.gk); }
+                Text { x: 120px; y: 98px; text: root.weekday; font-size: 15px; font-weight: 700; letter-spacing: 1px; color: root.ink; }
+                Text { x: 260px; y: 98px; width: 100px; text: root.date; font-size: 15px; font-weight: 700; color: root.ink; horizontal-alignment: right; }
+                Text { x: 196px; y: 102.3px; text: "AL"; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: root.ink; opacity: AlarmNow.next-h >= 0 ? 1 : 0.08; }
+                Text { x: 222px; y: 102.3px; text: "SIG"; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: root.ink; opacity: 0.08; }
+                Seg7 { d: root.h >= 10 ? Math.floor(root.h / 10) : -1; x0: 124; y0: 124; w: 40; h: 66; t: 8; ink: root.ink; lag: true; }
+                Seg7 { d: Math.mod(root.h, 10); x0: 172; y0: 124; w: 40; h: 66; t: 8; ink: root.ink; lag: true; }
+                Seg7 { d: Math.floor(root.m / 10); x0: 238; y0: 124; w: 40; h: 66; t: 8; ink: root.ink; lag: true; }
+                Seg7 { d: Math.mod(root.m, 10); x0: 286; y0: 124; w: 40; h: 66; t: 8; ink: root.ink; lag: true; }
+                Seg7 { d: Math.floor(root.s / 10); x0: 334; y0: 162; w: 16; h: 28; t: 4; ink: root.ink; lag: true; }
+                Seg7 { d: Math.mod(root.s, 10); x0: 352; y0: 162; w: 16; h: 28; t: 4; ink: root.ink; lag: true; }
+                Rectangle { x: 228.6px; y: 142.6px; width: 6.8px; height: 6.8px; border-radius: 3.4px; background: root.ink; opacity: root.colon; }
+                Rectangle { x: 225.6px; y: 168.6px; width: 6.8px; height: 6.8px; border-radius: 3.4px; background: root.ink; opacity: root.colon; }
+            }
+            if !root.cased: Rectangle {
+                Rectangle { x: 246px; y: 62px; width: 212px; height: 84px; border-radius: 12px; background: root.body; }
+                Rectangle { x: 254px; y: 68px; width: 196px; height: 72px; border-radius: 8px; background: root.lcd; }
+                Text { x: 264px; y: 72.3px; text: root.weekday; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: root.ink; }
+                Text { x: 340px; y: 72.3px; width: 100px; text: root.date; font-size: 10px; font-weight: 700; color: root.ink; horizontal-alignment: right; }
+                Seg7 { d: root.h >= 10 ? Math.floor(root.h / 10) : -1; x0: 266; y0: 92; w: 28; h: 42; t: 6; ink: root.ink; lag: true; }
+                Seg7 { d: Math.mod(root.h, 10); x0: 300; y0: 92; w: 28; h: 42; t: 6; ink: root.ink; lag: true; }
+                Seg7 { d: Math.floor(root.m / 10); x0: 352; y0: 92; w: 28; h: 42; t: 6; ink: root.ink; lag: true; }
+                Seg7 { d: Math.mod(root.m, 10); x0: 386; y0: 92; w: 28; h: 42; t: 6; ink: root.ink; lag: true; }
+                Seg7 { d: Math.floor(root.s / 10); x0: 420; y0: 114; w: 11; h: 20; t: 3; ink: root.ink; lag: true; }
+                Seg7 { d: Math.mod(root.s, 10); x0: 432; y0: 114; w: 11; h: 20; t: 3; ink: root.ink; lag: true; }
+                Rectangle { x: 342.6px; y: 101.6px; width: 4.8px; height: 4.8px; border-radius: 2.4px; background: root.ink; opacity: root.colon; }
+                Rectangle { x: 340.6px; y: 118.6px; width: 4.8px; height: 4.8px; border-radius: 2.4px; background: root.ink; opacity: root.colon; }
+            }
+        }
+    }
+    // the LCD's tap (outside the scaled frame, so it lands where the LCD is drawn)
+    property <float> lx: root.cased ? 104 : 254;
+    property <float> ly: root.cased ? 92 : 68;
+    property <float> lw: root.cased ? 272 : 196;
+    property <float> lh: root.cased ? 122 : 72;
+    TouchArea {
+        x: fr.x + fr.width / 2 + (root.lx - root.ox - root.fw / 2) * root.k * 1px; y: fr.y + fr.height / 2 + (root.ly - root.oy - root.fh / 2) * root.k * 1px;
+        width: root.lw * root.k * 1px; height: root.lh * root.k * 1px;
+        clicked => { root.glow = true; }
+    }
+}
+
+// Style 10: the twin-bell alarm clock as a clock (boards C3, C4): hour, minute and second hands, the alarm hand at the
+// next alarm (hidden when none is on), a contact shadow under the feet; when an alarm rings it rings too (the A1 shake).
+// Native frame x 150..330, y 98..304 of the board.
+export component TwinBellClock inherits Rectangle {
+    in property <float> hours;            // 0..12
+    in property <float> minutes;          // 0..60
+    in property <float> seconds;          // 0..60
+    in property <bool> show-seconds: true;
+    in property <color> metal: #c9c6bf;
+    in property <bool> highlight: true;   // the body's highlight arc (the clock; the A1 look has none)
+    in property <bool> shadow: true;      // the contact shadow under the feet
+    in property <bool> ting;              // 25.T10: the hammer taps the left bell once (150 ms) …
+    in property <float> ting-t;           // … ms into it
+    property <float> fw: 180;
+    property <float> fh: 206;
+    property <float> k: min(root.width / 1px / root.fw, root.height / 1px / root.fh);
+    property <bool> ring: AlarmNow.ringing;
+    property <int> rk: root.ring ? Math.mod(Math.floor(animation-tick() / 45ms), 2) : 0;
+    property <float> sx: root.ring ? (root.rk == 1 ? 2.5 : -2.5) : 0;
+    property <float> sy: root.ring ? (root.rk == 1 ? -1 : 1) : 0;
+    property <float> bl: root.ring ? (root.rk == 1 ? -2 : 2) : 0;
+    property <float> hx: root.ring ? (root.rk == 1 ? 228 : 252) : root.ting ? 240 - 12 * Math.sin(180deg * clamp(root.ting-t / 150, 0, 1)) : 240;
+    property <float> jump: root.ting && root.ting-t > 50 && root.ting-t < 110 ? -1 : 0;
+    property <angle> ha: root.hours / 12 * 360deg;
+    property <angle> ma: root.minutes / 60 * 360deg;
+    property <angle> sa: root.seconds / 60 * 360deg;
+    property <angle> aa: Math.mod(AlarmNow.next-h, 12) / 12 * 360deg;
+    pure function px(a: angle, r: float) -> float { 240 + r * Math.sin(a) }
+    pure function py(a: angle, r: float) -> float { 210 - r * Math.cos(a) }
+    fr := Rectangle {
+        width: root.fw * 1px; height: root.fh * 1px;
+        x: (root.width - self.width) / 2; y: (root.height - self.height) / 2;
+        transform-scale-x: root.k; transform-scale-y: root.k; transform-origin: { x: self.width / 2, y: self.height / 2 };
+        // the contact shadow stays on the ground
+        if root.shadow: Path { x: -150px; y: -98px; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #000000; opacity: 0.45;
+            commands: "M 167 296 A 73 6.7 0 1 0 313 296 A 73 6.7 0 1 0 167 296 Z"; }
+        Rectangle { x: (root.sx - 150) * 1px; y: (root.sy - 98) * 1px; width: 480px; height: 480px;
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: root.metal; stroke-width: 6px; stroke-line-cap: round;
+                commands: "M 204 132 Q 240 84 276 132"; }
+            Rectangle { x: root.bl * 1px; y: root.jump * 1px; width: 480px; height: 480px;
+                Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #FF4A1C; commands: "M 164.5 160.1 A 26 26 -36 0 1 206.6 129.6 Z"; }
+                Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #c8320c; stroke-width: 6px; stroke-line-cap: round; commands: "M 165.1 160.9 L 207.1 130.4"; }
+                Rectangle { x: 165.1px; y: 118.2px; width: 8px; height: 8px; border-radius: 4px; background: root.metal; }
+            }
+            Rectangle { x: -root.bl * 1px; y: 0; width: 480px; height: 480px;
+                Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #FF4A1C; commands: "M 273.4 129.6 A 26 26 36 0 1 315.5 160.1 Z"; }
+                Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #c8320c; stroke-width: 6px; stroke-line-cap: round; commands: "M 272.9 130.4 L 314.9 160.9"; }
+                Rectangle { x: 306.9px; y: 118.2px; width: 8px; height: 8px; border-radius: 4px; background: root.metal; }
+            }
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: root.metal; stroke-width: 3px; stroke-line-cap: round;
+                commands: "M 240 132 L " + root.hx + " 108"; }
+            Rectangle { x: (root.hx - 6) * 1px; y: 100px; width: 12px; height: 12px; border-radius: 6px; background: root.metal; }
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: root.metal; stroke-width: 8px; stroke-line-cap: round;
+                commands: "M 194 272 L 180 294 M 286 272 L 300 294"; }
+            Rectangle { x: 152px; y: 122px; width: 176px; height: 176px; border-radius: 88px; background: #FF4A1C; border-width: 4px; border-color: #c8320c; }
+            if root.highlight: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #ffffff; stroke-width: 4px; stroke-line-cap: round; opacity: 0.25;
+                commands: "M 178 160 A 80 80 0 0 1 252 128"; }
+            Rectangle { x: 168px; y: 138px; width: 144px; height: 144px; border-radius: 72px; background: #F5F3EE; }
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #101114; stroke-width: 1px; stroke-line-cap: round;
+                commands: "M 247 143.4 L 246.6 147.3 M 253.9 144.5 L 253.1 148.4 M 260.7 146.3 L 259.5 150.1 M 267.3 148.8 L 265.6 152.4 M 279.4 155.8 L 277 159 M 284.8 160.2 L 282.2 163.2 M 289.8 165.2 L 286.8 167.8 M 294.2 170.6 L 291 173 M 301.2 182.7 L 297.6 184.4 M 303.7 189.3 L 299.9 190.5 M 305.5 196.1 L 301.6 196.9 M 306.6 203 L 302.7 203.4 M 306.6 217 L 302.7 216.6 M 305.5 223.9 L 301.6 223.1 M 303.7 230.7 L 299.9 229.5 M 301.2 237.3 L 297.6 235.6 M 294.2 249.4 L 291 247 M 289.8 254.8 L 286.8 252.2 M 284.8 259.8 L 282.2 256.8 M 279.4 264.2 L 277 261 M 267.3 271.2 L 265.6 267.6 M 260.7 273.7 L 259.5 269.9 M 253.9 275.5 L 253.1 271.6 M 247 276.6 L 246.6 272.7 M 233 276.6 L 233.4 272.7 M 226.1 275.5 L 226.9 271.6 M 219.3 273.7 L 220.5 269.9 M 212.7 271.2 L 214.4 267.6 M 200.6 264.2 L 203 261 M 195.2 259.8 L 197.8 256.8 M 190.2 254.8 L 193.2 252.2 M 185.8 249.4 L 189 247 M 178.8 237.3 L 182.4 235.6 M 176.3 230.7 L 180.1 229.5 M 174.5 223.9 L 178.4 223.1 M 173.4 217 L 177.3 216.6 M 173.4 203 L 177.3 203.4 M 174.5 196.1 L 178.4 196.9 M 176.3 189.3 L 180.1 190.5 M 178.8 182.7 L 182.4 184.4 M 185.8 170.6 L 189 173 M 190.2 165.2 L 193.2 167.8 M 195.2 160.2 L 197.8 163.2 M 200.6 155.8 L 203 159 M 212.7 148.8 L 214.4 152.4 M 219.3 146.3 L 220.5 150.1 M 226.1 144.5 L 226.9 148.4 M 233 143.4 L 233.4 147.3"; }
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #101114; stroke-width: 2.4px; stroke-line-cap: round;
+                commands: "M 240 143 L 240 151 M 273.5 152 L 269.5 158.9 M 298 176.5 L 291.1 180.5 M 307 210 L 299 210 M 298 243.5 L 291.1 239.5 M 273.5 268 L 269.5 261.1 M 240 277 L 240 269 M 206.5 268 L 210.5 261.1 M 182 243.5 L 188.9 239.5 M 173 210 L 181 210 M 182 176.5 L 188.9 180.5 M 206.5 152 L 210.5 158.9"; }
+            for n in [{ v: "12", x: 240, y: 161 }, { v: "3", x: 289, y: 210 }, { v: "6", x: 240, y: 259 }, { v: "9", x: 191, y: 210 }]: Text { x: (n.x - 20) * 1px; y: (n.y - 12) * 1px; width: 40px; height: 24px; text: n.v; font-family: "Space Grotesk"; font-size: 15px; font-weight: 500;
+                color: #101114; horizontal-alignment: center; vertical-alignment: center; }
+            if AlarmNow.next-h >= 0: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #FF4A1C; stroke-width: 2px; stroke-line-cap: round;
+                commands: "M 240 210 L " + root.px(root.aa, 44) + " " + root.py(root.aa, 44); }
+            if AlarmNow.next-h >= 0: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #FF4A1C;
+                commands: "M " + root.px(root.aa, 52) + " " + root.py(root.aa, 52) + " L " + root.px(root.aa - 6.9deg, 42) + " " + root.py(root.aa - 6.9deg, 42)
+                    + " L " + root.px(root.aa + 6.9deg, 42) + " " + root.py(root.aa + 6.9deg, 42) + " Z"; }
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #101114; stroke-width: 5px; stroke-line-cap: round;
+                commands: "M 240 210 L " + root.px(root.ha, 36) + " " + root.py(root.ha, 36); }
+            Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #101114; stroke-width: 3.2px; stroke-line-cap: round;
+                commands: "M 240 210 L " + root.px(root.ma, 54) + " " + root.py(root.ma, 54); }
+            if root.show-seconds: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #6b6862; stroke-width: 1.2px; stroke-line-cap: round;
+                commands: "M " + root.px(root.sa + 180deg, 12) + " " + root.py(root.sa + 180deg, 12) + " L " + root.px(root.sa, 60) + " " + root.py(root.sa, 60); }
+            Rectangle { x: 235px; y: 205px; width: 10px; height: 10px; border-radius: 5px; background: #101114; }
+            Rectangle { x: 238px; y: 208px; width: 4px; height: 4px; border-radius: 2px; background: #FF4A1C; }
+        }
+    }
+}

@@ -131,12 +131,35 @@ pub fn refresh(ui: &AppWindow, s: &crate::UiState) {
             label: if a.label.is_empty() { "Alarm".into() } else { a.label.clone().into() },
             on: a.on,
             tint: tint(i),
+            hour: a.h as f32 + a.m as f32 / 60.0,
+            soon: minutes_to(a, t).is_some_and(|m| m <= 1440),
         })
         .collect();
     if let Some(m) = crate::pages::update_rows(&ui.get_timers_alarms(), rows) {
         ui.set_timers_alarms(m);
     }
     let next = s.settings.alarms.iter().enumerate().filter_map(|(i, a)| minutes_to(a, t).map(|m| (m, i, a))).min_by_key(|(m, _, _)| *m);
+    // the looks' numbers: the next alarm's time of day and the minutes until it; the sun from the weather
+    match next {
+        Some((m, _, a)) => {
+            ui.set_timers_next_h(a.h as f32 + a.m as f32 / 60.0);
+            ui.set_timers_next_in(m as i32);
+            ui.set_timers_next_time(format!("{}:{:02}", a.h, a.m).into());
+            ui.set_timers_next_label(if a.label.is_empty() { "Alarm".into() } else { a.label.clone().into() });
+            let from = (a.h as i32 * 60 + a.m as i32 - 30).rem_euclid(1440);
+            ui.set_timers_dawn_from(format!("{}:{:02}", from / 60, from % 60).into());
+        }
+        None => {
+            ui.set_timers_next_h(-1.0);
+            ui.set_timers_next_in(-1);
+        }
+    }
+    let hours = |t: &str| t.split_once(':').and_then(|(h, m)| Some(h.parse::<f32>().ok()? + m.parse::<f32>().ok()? / 60.0));
+    let w = ui.get_weather();
+    if let (Some(r), Some(st)) = (hours(w.sunrise.as_str()), hours(w.sunset.as_str())) {
+        ui.set_timers_sunrise_h(r);
+        ui.set_timers_sunset_h(st);
+    }
     let text = match next {
         Some((m, i, a)) => {
             ui.set_timers_next_tint(tint(i));

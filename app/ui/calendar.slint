@@ -47,6 +47,7 @@ export struct WallCell {
     num: int,
     other-month: bool,
     sunday: bool,
+    today: bool,           // circled in red (drawn on when the page opens, 25.K4)
     notes: image,          // wall calendar: the day's events written in pen (today circled), drawn by the app
 }
 
@@ -108,12 +109,19 @@ component CalBoardLook inherits Rectangle {
     FlapText { x: 396px; y: 52px; cells: 5; text: root.clock; ink: #f4f4f2; }
     for c in [{ t: "TIME", x: 19 }, { t: "EVENT", x: 97 }, { t: "CAL", x: 318 }, { t: "STATUS", x: 357 }]: Text {
         x: c.x * 1px; y: 94px; height: 14px; text: c.t; font-size: 10px; font-weight: 700; letter-spacing: 1.4px; color: #8a8a90; vertical-alignment: center; }
-    for r[i] in root.rows: Rectangle { x: 19px; y: 112px + i * 33px; width: 442px; height: 26px;
+    for r[i] in root.rows: br := Rectangle { x: 19px; y: 112px + i * 33px; width: 442px; height: 26px;
         property <color> ink: r.state == 2 ? #ffd23f66 : #ffd23f;
+        // 25.K2: when the event starts its status blinks NOW three times in amber (3 x 400 ms)
+        property <bool> boarding: r.state == 1;
+        property <bool> blinking;
+        property <duration> blink-t0;
+        changed boarding => { if br.boarding { br.blink-t0 = animation-tick(); br.blinking = true; } }
+        Timer { interval: 1200ms; running: br.blinking; triggered => { br.blinking = false; } }
+        property <bool> now-on: br.blinking && Math.mod(Math.floor((animation-tick() - br.blink-t0) / 200ms), 2) == 0;
         FlapText { x: 0; y: 0; cells: 5; text: r.time; ink: parent.ink; }
         FlapText { x: 78px; y: 0; cells: 16; text: r.what; ink: parent.ink; }
         FlapText { x: 299px; y: 0; cells: 2; text: r.gate; ink: parent.ink; }
-        FlapText { x: 338px; y: 0; cells: 8; text: r.status; ink: r.state == 1 ? #4cd964 : r.state == 3 ? #f4f4f2 : parent.ink; }
+        FlapText { x: 338px; y: 0; cells: 8; text: br.blinking ? (br.now-on ? "NOW" : "") : r.status; ink: br.blinking ? #ffb21e : r.state == 1 ? #4cd964 : r.state == 3 ? #f4f4f2 : parent.ink; }
         TouchArea { y: -4px; height: parent.height + 8px; clicked => { Act.act("cal.board", i); } }
     }
     if root.rows.length == 0: Text { x: 19px; y: 130px; width: 442px; height: 30px; text: root.empty; font-family: "DejaVu Sans Mono"; font-size: 17px;
@@ -176,6 +184,21 @@ component CalTearLook inherits Rectangle {
         if root.more != "": Text { height: 20px; text: root.more; font-size: 12px; color: #8a8880; vertical-alignment: center; }
         if root.events.length == 0: Text { height: 24px; text: root.free; font-size: 14px; color: #8a8880; horizontal-alignment: center; vertical-alignment: center; }
     }
+    // 25.K3: a tap on the sheet lifts its lower right corner 6 px for 400 ms, inviting a tear
+    property <bool> curl;
+    property <duration> curl-t0;
+    Timer { interval: 420ms; running: root.curl; triggered => { root.curl = false; } }
+    property <float> ck: root.curl ? 6 * Math.sin(180deg * clamp((animation-tick() - root.curl-t0) / 400ms, 0, 1)) : 0;
+    TouchArea { x: 84px; y: 76px; width: 312px; height: 360px; clicked => { root.curl-t0 = animation-tick(); root.curl = true; } }
+    if root.ck > 0.05: Rectangle {
+        // the lifted corner: the page's back folds up over a triangle of the page under it
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #e4e2db;
+            commands: "M " + (396 - 2.4 * root.ck) + " 436 L 396 436 L 396 " + (436 - 2.4 * root.ck) + " Z"; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #f1efe8;
+            commands: "M " + (396 - 2.4 * root.ck) + " 436 L " + (396 - 2.4 * root.ck) + " " + (436 - 2.4 * root.ck) + " L 396 " + (436 - 2.4 * root.ck) + " Z"; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: transparent; stroke: #00000026; stroke-width: 1px;
+            commands: "M " + (396 - 2.4 * root.ck) + " 436 L 396 " + (436 - 2.4 * root.ck); }
+    }
     for e[i] in root.events: TouchArea { x: 104px; y: 306px + i * 24px; width: 272px; height: 24px; clicked => { Act.act("cal.tear", i); } }
     Text { x: 104px; y: 400px; width: 272px; height: 34px; text: root.line; font-size: 12px; color: #6f6d66; horizontal-alignment: center;
         vertical-alignment: center; wrap: word-wrap; overflow: elide; }
@@ -193,6 +216,10 @@ component CalWallLook inherits Rectangle {
     in property <[string]> names;          // "MON" …
     in property <[WallCell]> cells;
     property <color> red: #c8202a;
+    // 25.K4: today's circle is drawn on like a marker stroke when the page opens (400 ms)
+    property <float> cp;
+    init => { root.cp = 1; }
+    animate cp { duration: 400ms; delay: 150ms; easing: ease-in-out; }
     Rectangle { x: 12px; y: 48px; width: 456px; height: 432px; background: #fbfbf8; drop-shadow-blur: 8px; drop-shadow-color: #00000059; drop-shadow-offset-y: 2px; }
     Image { x: 16px; y: 62px; width: 448px; height: 88px; source: root.photo; }
     // the spiral: a hole in the page and a wire loop over its edge, every 23 px
@@ -211,6 +238,9 @@ component CalWallLook inherits Rectangle {
         Text { x: 5px; y: 2px; width: 30px; height: 14px; text: c.num; font-size: 11px; font-weight: 800;
             color: c.other-month ? #c4c4c0 : c.sunday ? root.red : #2a2a2e; vertical-alignment: center; }
         Image { x: 0; y: 0; width: 64px; height: 46px; source: c.notes; }
+        if c.today && root.cp > 0.01: Path { x: 0; y: 0; width: 64px; height: 46px; viewbox-width: 64; viewbox-height: 46; fill: transparent;
+            stroke: #c0242a; stroke-width: 1.7px; stroke-line-cap: round; stroke-line-join: round;
+            commands: "M " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.0000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.0000, root.cp) * 6.7332) * 1rad) + 0 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.0250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.0250, root.cp) * 6.7332) * 1rad) + 1 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.0500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.0500, root.cp) * 6.7332) * 1rad) + 2 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.0750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.0750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.0750, root.cp) * 6.7332) * 1rad) + 3 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.1000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.1000, root.cp) * 6.7332) * 1rad) + 4 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.1250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.1250, root.cp) * 6.7332) * 1rad) + 5 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.1500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.1500, root.cp) * 6.7332) * 1rad) + 6 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.1750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.1750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.1750, root.cp) * 6.7332) * 1rad) + 7 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.2000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.2000, root.cp) * 6.7332) * 1rad) + 8 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.2250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.2250, root.cp) * 6.7332) * 1rad) + 9 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.2500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.2500, root.cp) * 6.7332) * 1rad) + 10 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.2750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.2750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.2750, root.cp) * 6.7332) * 1rad) + 11 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.3000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.3000, root.cp) * 6.7332) * 1rad) + 12 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.3250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.3250, root.cp) * 6.7332) * 1rad) + 13 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.3500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.3500, root.cp) * 6.7332) * 1rad) + 14 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.3750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.3750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.3750, root.cp) * 6.7332) * 1rad) + 15 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.4000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.4000, root.cp) * 6.7332) * 1rad) + 16 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.4250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.4250, root.cp) * 6.7332) * 1rad) + 17 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.4500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.4500, root.cp) * 6.7332) * 1rad) + 18 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.4750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.4750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.4750, root.cp) * 6.7332) * 1rad) + 19 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.5000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.5000, root.cp) * 6.7332) * 1rad) + 20 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.5250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.5250, root.cp) * 6.7332) * 1rad) + 21 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.5500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.5500, root.cp) * 6.7332) * 1rad) + 22 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.5750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.5750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.5750, root.cp) * 6.7332) * 1rad) + 23 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.6000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.6000, root.cp) * 6.7332) * 1rad) + 24 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.6250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.6250, root.cp) * 6.7332) * 1rad) + 25 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.6500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.6500, root.cp) * 6.7332) * 1rad) + 26 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.6750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.6750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.6750, root.cp) * 6.7332) * 1rad) + 27 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.7000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.7000, root.cp) * 6.7332) * 1rad) + 28 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.7250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.7250, root.cp) * 6.7332) * 1rad) + 29 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.7500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.7500, root.cp) * 6.7332) * 1rad) + 30 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.7750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.7750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.7750, root.cp) * 6.7332) * 1rad) + 31 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.8000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.8000, root.cp) * 6.7332) * 1rad) + 32 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.8250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.8250, root.cp) * 6.7332) * 1rad) + 33 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.8500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.8500, root.cp) * 6.7332) * 1rad) + 34 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.8750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.8750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.8750, root.cp) * 6.7332) * 1rad) + 35 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.9000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.9000, root.cp) * 6.7332) * 1rad) + 36 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.9250, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9250, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.9250, root.cp) * 6.7332) * 1rad) + 37 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.9500, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9500, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.9500, root.cp) * 6.7332) * 1rad) + 38 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(0.9750, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(0.9750, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(0.9750, root.cp) * 6.7332) * 1rad) + 39 * 0.05) + " L " + (10 + 13 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(1.0000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.cos((-1.9 + min(1.0000, root.cp) * 6.7332) * 1rad)) + " " + (7.5 + 9.5 * (1 + 0.04 * Math.sin((3 * (-1.9 + min(1.0000, root.cp) * 6.7332) + -1.9) * 1rad)) * Math.sin((-1.9 + min(1.0000, root.cp) * 6.7332) * 1rad) + 40 * 0.05); }
         TouchArea { clicked => { Act.act("cal.wall-day", i); } } }
     Rectangle { x: 464px; y: 200px; width: 1px; height: 276px; background: #d8d8d4; }
 }
@@ -218,6 +248,12 @@ component CalWallLook inherits Rectangle {
 export component CalendarPage inherits Rectangle {
     in property <int> view;                // 0 agenda, 1 day, 2 week, 3 month, 4 three days (plain look)
     in property <int> look;                // 0 plain, 1 departure board, 2 tear-off, 3 wall calendar
+    // 25.K1: a tapped event lifts (its shadow grows, 120 ms) before its details open
+    property <string> lift-key;
+    property <bool> lifting;
+    property <duration> lift-t0;
+    property <float> lift-k: root.lifting ? clamp((animation-tick() - root.lift-t0) / 120ms, 0, 1) : 0;
+    Timer { interval: 120ms; running: root.lifting; triggered => { root.lifting = false; root.detail = true; } }
     // departure board
     in property <[CalBoard]> board-rows;
     in property <string> board-clock;
@@ -369,7 +405,11 @@ export component CalendarPage inherits Rectangle {
             x: 66px + e.lane * (398px / max(1, e.lanes)); width: 398px / max(1, e.lanes) - 4px;
             y: e.start / 60 * root.hh + 1px; height: max(22px, (e.end - e.start) / 60 * root.hh - 2px);
             border-radius: 8px; background: e.tint.with-alpha(Theme.dark ? 0.28 : 0.22); opacity: e.past ? 0.5 : 1;
-            TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.title + " · " + e.time; root.detail = true; } }
+            TouchArea { clicked => { root.detail-ev = e; root.detail-when = root.title + " · " + e.time;
+                root.lift-key = e.title + "|" + e.start; root.lift-t0 = animation-tick(); root.lifting = true; } }
+            drop-shadow-blur: root.lifting && root.lift-key == e.title + "|" + e.start ? 10px * root.lift-k : 0px;
+            drop-shadow-offset-y: root.lifting && root.lift-key == e.title + "|" + e.start ? 3px * root.lift-k : 0px;
+            drop-shadow-color: #00000066;
             Rectangle { x: 5px; y: 5px; width: 3px; height: parent.height - 10px; border-radius: 1.5px; background: e.tint; }
             Text { x: 14px; y: 3px; width: parent.width - 20px; height: 18px; text: e.title; font-size: 13px; font-weight: 600; color: Theme.text; vertical-alignment: center; overflow: elide; }
             if db.height >= 40px: Text { x: 14px; y: 20px; width: parent.width - 20px; height: 16px; text: e.time; font-size: 12px; color: Theme.muted; vertical-alignment: center; overflow: elide; }
@@ -377,6 +417,16 @@ export component CalendarPage inherits Rectangle {
         if root.day-today: Rectangle { x: 52px; y: root.now-min / 60 * root.hh - 4px; width: root.width - 68px; height: 8px;
             Rectangle { x: 0; y: 0; width: 8px; height: 8px; border-radius: 4px; background: Theme.accent; }
             Rectangle { x: 6px; y: 3px; width: parent.width - 6px; height: 2px; background: Theme.accent; } }
+    }
+    // 25.K1: the now line's dot breathes (1.6 s): a soft ring round it, over the timeline (which is drawn once into a layer)
+    property <float> breath-t;
+    Timer { interval: 50ms; running: root.look == 0 && root.view == 1 && root.day-today; triggered => { root.breath-t = animation-tick() / 1ms; } }
+    property <float> breath: 0.5 - 0.5 * Math.cos(360deg * root.breath-t / 1600);
+    if root.look == 0 && root.view == 1 && root.day-today: Rectangle {
+        x: 0; y: 140px; width: root.width; height: root.height - 140px; clip: true;
+        property <length> dy: root.now-min / 60 * root.hh - root.scroll;
+        Rectangle { x: 56px - (6px + 5px * root.breath); y: parent.dy - (6px + 5px * root.breath); width: 2 * (6px + 5px * root.breath); height: self.width;
+            border-radius: self.width / 2; background: Theme.accent.with-alpha(0.35 * (1 - root.breath)); }
     }
 
     // ---------------------------------------------------------------- week and 3 days: day heads, all-day row, columns of hours
@@ -409,9 +459,13 @@ export component CalendarPage inherits Rectangle {
             x: root.wx + e.day * root.gw + 2px + e.lane * ((root.gw - 4px) / max(1, e.lanes)); width: (root.gw - 4px) / max(1, e.lanes) - 1px;
             y: e.start / 60 * root.gh + 1px; height: max(12px, (e.end - e.start) / 60 * root.gh - 2px);
             border-radius: 5px; background: e.tint.with-alpha(Theme.dark ? 0.38 : 0.30); opacity: e.past ? 0.5 : 1;
+            drop-shadow-blur: root.lifting && root.lift-key == e.title + "|" + e.start + "|" + e.day ? 8px * root.lift-k : 0px;
+            drop-shadow-offset-y: root.lifting && root.lift-key == e.title + "|" + e.start + "|" + e.day ? 2px * root.lift-k : 0px;
+            drop-shadow-color: #00000066;
             TouchArea { clicked => {
                 if wb.width >= 26px {
-                    root.detail-ev = e; root.detail-when = root.week-names[e.day] + " " + root.week-nums[e.day] + " · " + e.time; root.detail = true;
+                    root.detail-ev = e; root.detail-when = root.week-names[e.day] + " " + root.week-nums[e.day] + " · " + e.time;
+                    root.lift-key = e.title + "|" + e.start + "|" + e.day; root.lift-t0 = animation-tick(); root.lifting = true;
                 } else {
                     Act.act("cal.week-day", e.day);
                 }
@@ -470,10 +524,11 @@ export component CalendarPage inherits Rectangle {
 
     // ---------------------------------------------------------------- a day's events (a tap on a day in the month grid, the wall calendar
     // or a week column): a list sized to its content, a tap on one opens its details over it
-    property <length> day-need: min(root.height - 60px, 72px + max(40px, dsr.preferred-height) + 20px);
+    property <length> day-content: 72px + max(40px, dsr.preferred-height) + 20px;
+    property <length> day-need: min(424px, root.day-content);
     DragSheet {
         width: parent.width; height: parent.height;
-        open: root.day-sheet; need: root.day-need;
+        open: root.day-sheet; need: root.day-need; content-need: root.day-content;
         close => { Act.act("cal.day-sheet-close", ""); }
         Text { x: 24px; y: 24px; width: parent.width - 48px; height: 28px; text: root.day-sheet-title; font-size: 18px; font-weight: 600; color: Theme.text;
             vertical-alignment: center; overflow: elide; }

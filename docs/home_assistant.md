@@ -105,6 +105,8 @@ Up to PanelOS 0.0.3 the panel's display, settings and sensors were on the ESPHom
 - **All panels**: what each panel can do, and **Copy settings** to other panels (each part copied, adapted to what the target can do, or skipped, with the reason).
 - **Add a panel** starts the integration's setup for another panel, with its defaults or a copy of an existing panel.
 
+The clock widget's style picker greys a style that does not fit the widget's size, and resizing a widget stops at its smallest size and says why (nixie 3 × 1, or 4 × 1 with seconds; LCD quartz 2 × 1; twin-bell 2 × 2). The timers page has a picker for the stopwatch's and the alarms' own looks.
+
 Every look, background, voice look and screensaver clock face is shown as the panel itself draws it. The pictures come from a panel running the app with demo content (neutral weather, calendars, lists and a player with its own cover art; `frontend/looks/<name>-<dark|light>.webp`, 224 px). Once a panel has shown a look while its settings were open, the page keeps that panel's own screen as the picture of that look instead (in the browser, newest first). So the picture of the look a panel uses is its real screen with its own content.
 
 What a panel can do (its touch screen, pictures, web view, video, microphone, speaker, sensors) comes from the panel itself (`caps` in its device report); sections, page types, looks and options it cannot do are left out or shown greyed with the reason. "Sending to the panel…" turns into "Up to date on the panel" once the integration has stored the change and sent it on.

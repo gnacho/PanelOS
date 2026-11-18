@@ -32,6 +32,7 @@ import { VoicePage } from "voice.slint";
 import { QuickTile, QuickGroup, QuickPage } from "quick.slint";
 import { SetRow, SetBar, SetSeg, SetSection, SettingsLayer } from "settings.slint";
 import { WebLoading, PullToRefresh } from "loading.slint";
+import { AlarmNow } from "clocks.slint";
 
 export { WxIcons }
 export { Theme, Act, Words, Phrases, FoundHa, WifiNet, Person, TimerInfo, ClockData, WeatherHour, WeatherDay, WeatherData }
@@ -448,6 +449,13 @@ export component AppWindow inherits Window {
     in property <[float]> timers-lap-marks;
     in property <int> timers-sw-look;
     in property <int> timers-alarm-look;
+    in property <float> timers-next-h: -1;
+    in property <int> timers-next-in: -1;
+    in property <string> timers-next-time;
+    in property <string> timers-next-label;
+    in property <string> timers-dawn-from;
+    in property <float> timers-sunrise-h: 7;
+    in property <float> timers-sunset-h: 16.5;
     in property <int> timers-focus;
     in property <[AlarmItem]> timers-alarms;
     in property <string> timers-next-alarm;
@@ -820,6 +828,7 @@ export component AppWindow inherits Window {
                 if slot.kind == "home" && home-slot.home-theme == 9: Rectangle {
                     background: home-slot.home-light ? #F5F3EE : #000000;
                     HomeGrid {
+                        rise: true; shown: root.page == i && !root.screensaver-on;
                         items: home-slot.home-items;
                         data: root.weather;
                         clock: root.clock;
@@ -855,6 +864,7 @@ export component AppWindow inherits Window {
                 // the weather picture changes softly: on a new condition the new picture fades in over the old one,
                 // or the old one fades out over the new one (3 s); the widgets lie over both, drawn once
                 if slot.kind == "home" && home-slot.home-theme != 8 && home-slot.home-theme != 9 && home-slot.mood-k < 0.999: PhotoSky {
+                    taps: home-slot.mood-k <= 0.001;
                     mood: home-slot.mood-a;
                     theme: home-slot.home-theme;
                     light-variant: home-slot.light-scene;
@@ -882,6 +892,7 @@ export component AppWindow inherits Window {
                     moon-veil: root.weather.moon-veil;
                 }
                 if slot.kind == "home" && home-slot.home-theme != 8 && home-slot.home-theme != 9 && home-slot.mood-k > 0.001: PhotoSky {
+                    taps: true;
                     mood: home-slot.mood-b;
                     opacity: home-slot.mood-k;
                     theme: home-slot.home-theme;
@@ -908,6 +919,19 @@ export component AppWindow inherits Window {
                     moon-phase: root.weather.moon-phase;
                     sun-veil: root.weather.sun-veil;
                     moon-veil: root.weather.moon-veil;
+                }
+                // 25.H3: after the screensaver the line drawing draws itself once, left to right (1.2 s): the page's ground
+                // drawn back from the left over the scene, with a soft leading edge
+                property <bool> saver: root.screensaver-on;
+                property <bool> line-drawing;
+                property <duration> line-t0;
+                changed saver => { if !self.saver && self.home-theme == 7 && root.page == i { self.line-t0 = animation-tick(); self.line-drawing = true; } }
+                Timer { interval: 1250ms; running: home-slot.line-drawing; triggered => { home-slot.line-drawing = false; } }
+                property <float> line-k: self.line-drawing ? clamp((animation-tick() - self.line-t0) / 1200ms, 0, 1) : 1;
+                if slot.kind == "home" && home-slot.home-theme == 7 && home-slot.line-drawing: Rectangle {
+                    x: (root.width + 24px) * home-slot.line-k - 24px; width: root.width + 24px; height: root.height;
+                    Rectangle { x: 0; width: 24px; background: @linear-gradient(90deg, Theme.background.with-alpha(0) 0%, Theme.background 100%); }
+                    Rectangle { x: 24px; width: root.width; background: Theme.background; }
                 }
                 if slot.kind == "home" && home-slot.home-theme != 8 && home-slot.home-theme != 9: Rectangle {
                     HomeGrid {
@@ -987,6 +1011,7 @@ export component AppWindow inherits Window {
                     sky-frame: root.weather-sky-frame;
                     variant: slot.variant;
                     appear: 1;
+                    shown: root.page == i && !root.screensaver-on;
                     accent: root.clock-accent;
                     weight: 600;
                     show-details: root.weather-details;
@@ -1023,6 +1048,8 @@ export component AppWindow inherits Window {
                     pulse: root.timers-pulse; mode: root.timers-mode; theme: slot.variant; pick: root.timers-focus; alarms: root.timers-alarms; quick: root.timers-quick; sheet: root.timers-sheet;
                     next-alarm: root.timers-next-alarm; watch: root.timers-watch; watch-running: root.timers-watch-running; laps: root.timers-laps;
                     lap-at: root.timers-lap-at; lap-best: root.timers-lap-best; lap-marks: root.timers-lap-marks; sw-look: root.timers-sw-look; alarm-look: root.timers-alarm-look;
+                    now-h: root.clock.hh.to-float() + root.clock.mm.to-float() / 60; now-s: root.clock-sec; next-h: root.timers-next-h; next-in: root.timers-next-in; next-time: root.timers-next-time; next-label: root.timers-next-label; dawn-from: root.timers-dawn-from;
+                    sunrise-h: root.timers-sunrise-h; sunset-h: root.timers-sunset-h;
                     ring-alarm: root.timers-ring-alarm; ring-time: root.timers-ring-time; ring-tint: root.timers-ring-tint; settings: root.timers-settings;
                     colourful: root.timers-colourful; alarm-on: root.timers-alarm-on; timer-on: root.timers-timer-on; watch-on: root.timers-watch-on;
                     next-tint: root.timers-next-tint; watch-tint: root.timers-watch-tint;
@@ -1302,6 +1329,10 @@ export component AppWindow inherits Window {
     property <float> theme-k: Theme.dark ? 1 : 0;
     animate theme-k { duration: root.theme-slow ? 1200ms : 700ms; easing: cubic-bezier(0.37, 0, 0.63, 1); }
     changed theme-k => { Theme.k = root.theme-k; }
+    // the clocks of spec 24.9 show the next alarm and ring with it
+    changed timers-next-h => { AlarmNow.next-h = root.timers-next-h; }
+    changed timers-ringing => { AlarmNow.ringing = root.timers-ringing && root.timers-ring-alarm; }
+    changed timers-ring-alarm => { AlarmNow.ringing = root.timers-ringing && root.timers-ring-alarm; }
     init => { Theme.k = Theme.dark ? 1 : 0; }
 
     // ---- screensaver ----

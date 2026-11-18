@@ -97,12 +97,14 @@ component PagerLook inherits Rectangle {
     in property <image> body;              // the pager, drawn for the theme
     in property <image> led;               // the lit alert LED
     in property <int> first-row: 0;        // the first list row shown (the arrows scroll)
+    in property <bool> backlight;          // 25.N3: lit while it buzzes for a new message
     property <color> ink: #1e2a17;
     Image { x: 0; y: 0; width: 480px; height: 480px; source: root.body; }
     TouchArea { x: 78px; y: 332px; width: 100px; height: 56px; clicked => { Act.act("info.up", ""); } }
     TouchArea { x: 190px; y: 332px; width: 100px; height: 56px; clicked => { Act.act("info.ok", ""); } }
     TouchArea { x: 302px; y: 332px; width: 100px; height: 56px; clicked => { Act.act("info.down", ""); } }
     if root.notes.length > 0: Image { x: 390px; y: 64px; width: 44px; height: 44px; source: root.led; }
+    if root.backlight: Rectangle { x: 64px; y: 118px; width: 352px; height: 184px; background: #c8ff9a59; }
     Rectangle { x: 64px; y: 118px; width: 352px; height: 184px; clip: true;
         LcdText { x: 12px; y: 6px; width: parent.width - 24px; height: 22px;
             text: root.notes.length == 0 ? "NO MSG" : root.open ? "MSG " + root.index + "/" + root.notes.length : root.notes.length + " MSG"; }
@@ -130,6 +132,9 @@ component NewsLook inherits Rectangle {
     in property <string> ticker;           // the headlines with the app's own lines between them
     in property <int> ticker-epoch;
     in property <string> empty;
+    in property <float> arrive-t: 10000;   // 25.N4: ms since a new one came; a warning wipes in its BREAKING bar and types its title
+    property <float> wipe: clamp(root.arrive-t / 300, 0, 1);
+    property <float> typed: clamp((root.arrive-t - 300) / 700, 0, 1);
     background: @linear-gradient(160deg, #0b1f4d 0%, #071230 100%);
     // channel bug
     Rectangle { x: 16px; y: 48px; width: 112px; height: 26px; border-radius: 4px; background: #ffffff;
@@ -149,8 +154,10 @@ component NewsLook inherits Rectangle {
             Text { x: 14px; y: 0; width: parent.width - 28px; height: parent.height; text: root.n.message; font-size: 15px; font-weight: 500; color: #1d2a44;
                 vertical-alignment: center; wrap: word-wrap; overflow: elide; } } }
     if !root.open: VerticalLayout { x: 16px; y: 90px; width: 448px; spacing: 6px; alignment: start;
-        for m[i] in root.notes: HorizontalLayout { height: 36px; spacing: 0px;
-            Rectangle { width: 92px; background: m.level == 1 ? #d8202a : #f2a51a;
+        for m[i] in root.notes: nr := HorizontalLayout { height: 36px; spacing: 0px;
+            property <bool> breaking: i == 0 && m.level == 1 && root.arrive-t < 1000;
+            Rectangle { width: 92px; background: m.level == 1 ? #d8202a : #f2a51a; clip: true;
+                if nr.breaking: Rectangle { x: 92px * root.wipe; width: 92px; background: #ffffff; }
                 TouchArea { clicked => { Act.act("info.read", i); } }
                 Text { x: 8px; y: 0; height: parent.height; text: m.level == 1 ? "BREAKING" : "JUST IN"; font-size: 11px; font-weight: 900; color: #ffffff; vertical-alignment: center; } }
             Rectangle { horizontal-stretch: 1; background: #ffffff;
@@ -158,7 +165,10 @@ component NewsLook inherits Rectangle {
                 Text { x: 10px; y: 0; width: parent.width - 92px; height: parent.height; text: m.title.to-uppercase(); font-size: 14px; font-weight: 800; color: #0b1f4d;
                     vertical-alignment: center; overflow: elide; }
                 Text { x: parent.width - 82px; y: 0; width: 74px; height: parent.height; text: m.when; font-size: 11px; color: #5b6680; horizontal-alignment: right;
-                    vertical-alignment: center; } } }
+                    vertical-alignment: center; }
+                // the title types itself in: a white cover drawn back from the left
+                if nr.breaking: Rectangle { x: 10px + (parent.width - 102px) * root.typed; y: 0; width: (parent.width - 102px) * (1 - root.typed); height: parent.height;
+                    background: #ffffff; } } }
         if root.notes.length == 0: Rectangle { height: 120px;
             Text { width: parent.width; height: parent.height; text: root.empty; font-size: 22px; font-weight: 900; color: #ffffff; horizontal-alignment: center;
                 vertical-alignment: center; wrap: word-wrap; } } }
@@ -179,11 +189,15 @@ component FridgeLook inherits Rectangle {
     in property <image> door;              // the fridge door, light or dark
     in property <image> empty;             // a note for "nothing here" (drawn by the app)
     in property <length> scroll;
+    in property <float> arrive-t: 10000;   // ms since a new note came (25.N2: it slaps onto the door)
+    property <float> slap-k: clamp(root.arrive-t / 200, 0, 1);
+    property <float> slap: root.arrive-t < 200 ? 1 + 0.08 * (1 - root.slap-k) * Math.cos(root.slap-k * 540deg) : 1;
     Image { x: 0; y: 0; width: 480px; height: 480px; source: root.door; }
     if !root.open: Flickable { x: 0; y: 44px; width: root.width; height: root.height - 44px;
         content-width: root.width; content-height: max(self.height, 12px + Math.ceil(root.notes.length / 2) * 196px + 30px); content-y: -root.scroll;
         for m[i] in root.notes: Rectangle { x: (Math.mod(i, 2) == 0 ? 14px : 246px) + Math.mod(i * 13, 9) * 1px; y: 10px + Math.floor(i / 2) * 196px + Math.mod(i * 7, 11) * 1px;
             width: m.paper.width * 1px; height: m.paper.height * 1px;
+            transform-scale-x: i == 0 ? root.slap : 1; transform-scale-y: i == 0 ? root.slap : 1; transform-origin: { x: self.width / 2, y: self.height / 2 };
             Image { width: parent.width; height: parent.height; source: m.paper; }
             TouchArea { clicked => { Act.act("info.read", i); } } }
         if root.notes.length == 0: Image { x: (root.width - root.empty.width * 1px) / 2; y: 80px; width: root.empty.width * 1px; height: root.empty.height * 1px; source: root.empty; } }
@@ -233,6 +247,18 @@ export component InfoPage inherits Rectangle {
     in property <int> pager-first;
     property <int> unread: 0;
     background: Theme.background;
+    // a new notification (more of them than before): ms since it came, for the looks' own motions (25.N)
+    property <int> n-count: root.notes.length;
+    property <int> n-last;
+    property <bool> arriving;
+    property <duration> arrive-t0;
+    init => { root.n-last = root.n-count; }
+    changed n-count => { if root.n-count > root.n-last { root.arrive-t0 = animation-tick(); root.arriving = true; } root.n-last = root.n-count; }
+    Timer { interval: 1100ms; running: root.arriving; triggered => { root.arriving = false; } }
+    property <float> arrive-t: root.arriving ? (animation-tick() - root.arrive-t0) / 1ms : 10000;
+    // N3: two 400 ms bursts at 30 Hz, +-2 px
+    property <bool> buzzing: root.arrive-t < 400 || (root.arrive-t >= 600 && root.arrive-t < 1000);
+    property <length> buzz: root.buzzing ? 2px * Math.sin(360deg * 30 * root.arrive-t / 1000) : 0px;
 
     // ---------------------------------------------------------------- plain: the notifications page
     if root.look == 0: Text { x: 16px; y: 46px; width: 330px; height: 34px; text: "Notifications"; font-size: 24px; font-weight: 600; color: Theme.text; vertical-alignment: center; }
@@ -246,8 +272,9 @@ export component InfoPage inherits Rectangle {
             Text { text: "Clear all"; font-size: 14px; font-weight: 600; color: Theme.text; vertical-alignment: center; } } }
     if root.look == 0: Flickable { x: 0; y: 108px; width: root.width; height: root.height - 108px;
         content-width: root.width; content-height: max(self.height, nl.preferred-height); content-y: -root.scroll;
-        nl := VerticalLayout { x: 0; y: 0; width: root.width; padding-left: 16px; padding-right: 16px; padding-bottom: 40px; spacing: 8px; alignment: start;
-            for m[i] in root.notes: NoteRow { n: m;
+        nl := VerticalLayout { x: 0; y: root.arrive-t < 220 ? -84px * Math.pow(1 - root.arrive-t / 220, 3) : 0px;
+            width: root.width; padding-left: 16px; padding-right: 16px; padding-bottom: 40px; spacing: 8px; alignment: start;
+            for m[i] in root.notes: NoteRow { n: m; opacity: i == 0 && root.arrive-t < 220 ? root.arrive-t / 220 : 1;
                 TouchArea { clicked => { Act.act("info.read", i); } } }
             if root.notes.length == 0: Rectangle { height: 230px;
                 Icon { x: 0; y: 30px; width: parent.width; height: 72px; text: "\u{F0A91}"; font-size: 64px; color: Theme.faint; }
@@ -257,10 +284,12 @@ export component InfoPage inherits Rectangle {
                     horizontal-alignment: center; wrap: word-wrap; overflow: elide; } } } }
 
     // ---------------------------------------------------------------- looks
-    if root.look == 1: FridgeLook { notes: root.notes; open: root.card; n: root.card-note; door: root.fridge-door; empty: root.fridge-empty; scroll: root.scroll; }
-    if root.look == 2: PagerLook { notes: root.notes; open: root.card; n: root.card-note; index: root.card-index; clock: root.clock; empty: root.pager-empty;
-        body: root.pager-body; led: root.pager-led; first-row: root.pager-first; }
-    if root.look == 3: NewsLook { notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; ticker-epoch: root.news-epoch; empty: root.news-empty; }
+    if root.look == 1: FridgeLook { notes: root.notes; open: root.card; n: root.card-note; door: root.fridge-door; empty: root.fridge-empty; scroll: root.scroll;
+        arrive-t: root.arrive-t; }
+    if root.look == 2: PagerLook { x: root.buzz; notes: root.notes; open: root.card; n: root.card-note; index: root.card-index; clock: root.clock; empty: root.pager-empty;
+        body: root.pager-body; led: root.pager-led; first-row: root.pager-first; backlight: root.arrive-t < 1100; }
+    if root.look == 3: NewsLook { notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; ticker-epoch: root.news-epoch; empty: root.news-empty;
+        arrive-t: root.arrive-t; }
 
     // ---------------------------------------------------------------- plain pop-up card (the looks show their own)
     if root.look == 0 && root.card: Rectangle { background: Theme.scrim; TouchArea { clicked => { Act.act("info.close", ""); } } }

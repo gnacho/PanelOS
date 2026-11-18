@@ -9,9 +9,10 @@
 // Images are drawn at their exact size (the renderer scales without filtering). Coloured shapes are a
 // white mask (colorize = the colour) with a grey + alpha shading layer on top.
 import { Theme, Act, Clock, Words } from "theme.slint";
-import { Icon, Glyph, PlayGlyph, GlowText, DragSheet } from "widgets.slint";
+import { Icon, Glyph, PlayGlyph, GlowText, DragSheet, Dropdown } from "widgets.slint";
 import { FlapCard } from "panels.slint";
 import { Keyboard } from "overlays.slint";
+import { Seg7, TwinBellClock } from "clocks.slint";
 
 export struct TimerItem {
     label: string,      // "Pasta", "" when unnamed
@@ -27,6 +28,8 @@ export struct AlarmItem {
     label: string,      // "Wake up"
     on: bool,
     tint: color,        // its colour (colourful mode) or the panel colour
+    hour: float,        // its time as hours of the day (6.75)
+    soon: bool,         // on and due within 24 hours
 }
 
 // synthwave: a pixel car pulling away from the viewer along a floor line (the app sends one at a time:
@@ -38,6 +41,9 @@ export struct SwCar {
     tint: color,        // its colour (random, vivid)
     born: float,        // the scene clock (seconds) when it appeared
     dur: float,         // seconds from below the front edge to the horizon
+    pushed: bool,       // shoved by a tap (25.H5) …
+    push-t: float,      // … at this scene time
+    push-dir: float,    // … to this side (1 right, -1 left)
 }
 
 // text and line colour that follows the theme (the synthwave scene, the ringing screen, the flip box and the kitchen
@@ -93,42 +99,47 @@ component TimeText inherits Text {
     font-size: root.size * (1 + 0.06 * Math.sin(180deg * root.bp));
 }
 
-// A seven-segment digit in the 480 × 480 frame (spec 24.3, the board's geometry): slanted by 0.09, every unlit segment a
-// faint ghost (7 %). d: 0–9, 10 = "L", -1 = blank.
-component Seg7 inherits Rectangle {
-    in property <int> d: -1;
-    in property <float> x0;
-    in property <float> y0;
-    in property <float> w;
-    in property <float> h;
-    in property <float> t;
-    in property <color> ink;
-    width: 480px; height: 480px;
-    property <[int]> masks: [63, 6, 91, 79, 102, 109, 125, 7, 127, 111, 56];
-    property <int> mask: root.d >= 0 && root.d <= 10 ? root.masks[root.d] : 0;
-    property <float> g: root.t * 0.18;
-    property <float> m: root.y0 + root.h / 2;
-    pure function px(x: float, y: float) -> float { x + (root.y0 + root.h - y) * 0.09 }
-    pure function pt(x: float, y: float) -> string { root.px(x, y) + " " + y }
-    pure function hor(y: float) -> string {
-        "M " + root.pt(root.x0 + root.g + root.t / 2, y + root.t / 2) + " L " + root.pt(root.x0 + root.g + root.t, y) + " L " + root.pt(root.x0 + root.w - root.g - root.t, y)
-            + " L " + root.pt(root.x0 + root.w - root.g - root.t / 2, y + root.t / 2) + " L " + root.pt(root.x0 + root.w - root.g - root.t, y + root.t)
-            + " L " + root.pt(root.x0 + root.g + root.t, y + root.t) + " Z"
+
+// One nixie tube (spec 24.4): the glass with its haze and highlights, all ten cathodes faint, the lit digit glowing
+// orange (four strokes, no blur), never quite steady; the 45° anode mesh in front; the socket.
+component NixieTube inherits Rectangle {
+    in property <int> d;
+    in property <int> n;                  // which tube (its own flicker)
+    width: 54px; height: 140px;
+    property <[string]> nx: ["M18 2 C30 2 34 16 34 36 C34 56 30 70 18 70 C6 70 2 56 2 36 C2 16 6 2 18 2 Z", "M11 13 L19 3 L19 70", "M4 16 C4 6 11 2 18 2 C27 2 32 8 32 17 C32 30 18 40 4 70 L33 70", "M4 4 L31 4 L16 30 C27 29 33 37 33 49 C33 62 26 70 17 70 C9 70 4 66 3 60", "M26 70 L26 2 L3 50 L34 50", "M31 3 L8 3 L5 32 C9 28 13 27 18 27 C28 27 33 35 33 48 C33 62 26 70 17 70 C9 70 4 66 3 60", "M28 6 C25 3 22 2 18 2 C8 2 3 14 3 40 C3 60 9 70 18 70 C27 70 33 62 33 52 C33 42 27 34 18 34 C10 34 4 40 3 48", "M3 3 L33 3 L13 70", "M18 34 C9 34 5 28 5 18 C5 8 11 2 18 2 C25 2 31 8 31 18 C31 28 27 34 18 34 C8 34 3 42 3 52 C3 63 10 70 18 70 C26 70 33 63 33 52 C33 42 28 34 18 34 Z", "M8 66 C11 69 14 70 18 70 C28 70 33 58 33 32 C33 12 27 2 18 2 C9 2 3 10 3 20 C3 30 9 38 18 38 C26 38 32 32 33 24"];
+    property <float> f: 0.94 + 0.06 * Math.abs(Math.sin(1rad * (animation-tick() / 37ms + root.n * 1.7)) * Math.sin(1rad * (animation-tick() / 91ms + root.n)));
+    // a digit change (25.T9): the old cathode dies over 120 ms while the new one lights over 60 ms
+    property <int> cur: -1;
+    property <int> old: -1;
+    property <duration> t0;
+    property <bool> fading;
+    init => { root.cur = root.d; }
+    changed d => { root.old = root.cur; root.cur = root.d; root.t0 = animation-tick(); root.fading = true; }
+    Timer { interval: 130ms; running: root.fading; triggered => { root.fading = false; } }
+    property <float> since: root.fading ? (animation-tick() - root.t0) / 1ms : 1000;
+    property <float> new-k: max(0.5, clamp(root.since / 60, 0, 1));
+    property <float> old-k: root.old >= 0 && root.old <= 9 && root.old != root.d ? 1 - clamp(root.since / 120, 0, 1) : 0;
+    Rectangle { x: 0; y: 0; width: 54px; height: 132px; border-radius: 26px; border-width: 1px; border-color: #ffffff29; clip: true;
+        background: @linear-gradient(90deg, #ffffff05 0%, #ffffff0f 22%, #ffffff04 50%, #ffffff0b 100%);
+        Rectangle { x: 6px; y: 20px; width: 42px; height: 96px; background: @radial-gradient(circle, #ff6e14.with-alpha(0.22 * root.f) 0%, #ff6e1400 70%); }
+        for g[i] in root.nx: Path { visible: i != root.d; x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
+            stroke: #7a6655; stroke-width: 1.5px; stroke-line-cap: round; stroke-line-join: round; opacity: 0.32; commands: g; }
+        if root.old-k > 0: Rectangle {
+            for w[i] in [{ s: 11px, c: #ff5a00, o: 0.16 }, { s: 6px, c: #ff7a1a, o: 0.42 }, { s: 3px, c: #ffb066, o: 0.9 }, { s: 1.2px, c: #fff0dc, o: 1.0 }]: Path {
+                x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
+                stroke: w.c; stroke-width: w.s; stroke-line-cap: round; stroke-line-join: round; opacity: w.o * root.old-k * (i < 3 ? root.f : 1);
+                commands: root.nx[root.old]; }
+        }
+        for w[i] in [{ s: 11px, c: #ff5a00, o: 0.16 }, { s: 6px, c: #ff7a1a, o: 0.42 }, { s: 3px, c: #ffb066, o: 0.9 }, { s: 1.2px, c: #fff0dc, o: 1.0 }]: Path {
+            x: 9px; y: 30px; width: 36px; height: 72px; viewbox-width: 36; viewbox-height: 72;
+            stroke: w.c; stroke-width: w.s; stroke-line-cap: round; stroke-line-join: round; opacity: w.o * root.new-k * (i < 3 ? root.f : 1);
+            commands: root.d >= 0 && root.d <= 9 ? root.nx[root.d] : root.nx[0]; }
+        Path { x: 0; y: 0; width: 54px; height: 132px; viewbox-width: 54; viewbox-height: 132; stroke: #b08a6a; stroke-width: 0.6px; opacity: 0.32;
+            commands: "M 43.0 14.0 L 47.0 18.0 M 11.0 14.0 L 7.0 18.0 M 34.0 14.0 L 47.0 27.0 M 20.0 14.0 L 7.0 27.0 M 25.0 14.0 L 47.0 36.0 M 29.0 14.0 L 7.0 36.0 M 16.0 14.0 L 47.0 45.0 M 38.0 14.0 L 7.0 45.0 M 7.0 14.0 L 47.0 54.0 M 47.0 14.0 L 7.0 54.0 M 7.0 23.0 L 47.0 63.0 M 47.0 23.0 L 7.0 63.0 M 7.0 32.0 L 47.0 72.0 M 47.0 32.0 L 7.0 72.0 M 7.0 41.0 L 47.0 81.0 M 47.0 41.0 L 7.0 81.0 M 7.0 50.0 L 47.0 90.0 M 47.0 50.0 L 7.0 90.0 M 7.0 59.0 L 47.0 99.0 M 47.0 59.0 L 7.0 99.0 M 7.0 68.0 L 47.0 108.0 M 47.0 68.0 L 7.0 108.0 M 7.0 77.0 L 47.0 117.0 M 47.0 77.0 L 7.0 117.0 M 7.0 86.0 L 39.0 118.0 M 47.0 86.0 L 15.0 118.0 M 7.0 95.0 L 30.0 118.0 M 47.0 95.0 L 24.0 118.0 M 7.0 104.0 L 21.0 118.0 M 47.0 104.0 L 33.0 118.0 M 7.0 113.0 L 12.0 118.0 M 47.0 113.0 L 42.0 118.0"; }
+        Rectangle { x: 9px; y: 8px; width: 5px; height: 96px; border-radius: 3px; background: #ffffff21; }
+        Rectangle { x: 20px; y: 2px; width: 14px; height: 6px; border-radius: 3px; background: #ffffff1a; }
     }
-    pure function ver(x: float, ya: float, yb: float) -> string {
-        "M " + root.pt(x + root.t / 2, ya) + " L " + root.pt(x + root.t, ya + root.t / 2) + " L " + root.pt(x + root.t, yb - root.t / 2)
-            + " L " + root.pt(x + root.t / 2, yb) + " L " + root.pt(x, yb - root.t / 2) + " L " + root.pt(x, ya + root.t / 2) + " Z"
-    }
-    pure function on(bit: int) -> bool { Math.mod(Math.floor(root.mask / bit), 2) == 1 }
-    for sg[i] in [
-        { b: 1, c: root.hor(root.y0) },
-        { b: 2, c: root.ver(root.x0 + root.w - root.t, root.y0 + root.g + root.t / 2, root.m - root.g) },
-        { b: 4, c: root.ver(root.x0 + root.w - root.t, root.m + root.g, root.y0 + root.h - root.g - root.t / 2) },
-        { b: 8, c: root.hor(root.y0 + root.h - root.t) },
-        { b: 16, c: root.ver(root.x0, root.m + root.g, root.y0 + root.h - root.g - root.t / 2) },
-        { b: 32, c: root.ver(root.x0, root.y0 + root.g + root.t / 2, root.m - root.g) },
-        { b: 64, c: root.hor(root.m - root.t / 2) },
-    ]: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: root.ink; opacity: root.on(sg.b) ? 1 : 0.07; commands: sg.c; }
+    Rectangle { x: 4px; y: 128px; width: 46px; height: 12px; border-radius: 3px; background: #121010; border-width: 1px; border-color: #2a2522; }
 }
 
 // A straight stroke in the 480 × 480 screen frame (box grown by the stroke width, see above).
@@ -272,6 +283,8 @@ export component SynthScene inherits Rectangle {
     in property <float> palm-lk;
     in property <float> palm-rk;
     in property <float> star-k: 1;         // shooting star strength (home page: only at night)
+    in property <bool> taps;               // 25.H4 / H5: the home background answers taps (sky: a shooting star, road: a car, a car: a shove)
+    in property <float> pulse-t: -1;       // 25.T4: ms into the neon pulse running from the horizon to the front (600 ms), -1 none
     // the sky and the floor; during a crossfade (home page: day <-> night) the second pair on top
     if root.mix < 0.999: Image { x: 0; y: 0; width: 480px; height: 330px; source: root.back; }
     if root.mix < 0.999: Image { x: 0; y: 330px; width: 480px; height: 150px; source: root.floor; }
@@ -292,6 +305,15 @@ export component SynthScene inherits Rectangle {
         Rectangle { y: 1px; height: 3px; background: root.grid.with-alpha(0.22 * fl.a); }
         Rectangle { y: 2px; height: fl.yy > 410 ? 2px : 1px; background: root.grid.with-alpha(0.9 * fl.a); }
     }
+    // the neon pulse: a bright band in the grid's colour, speeding up towards the viewer like the floor lines
+    if root.pulse-t >= 0 && root.pulse-t < 600: Rectangle {
+        property <float> k: root.pulse-t / 600;
+        property <float> yy: 330 + 150 * self.k * self.k;
+        property <float> h: 3 + 15 * self.k;
+        x: 0; y: (self.yy - self.h) * 1px; width: 480px; height: self.h * 2px;
+        background: @linear-gradient(180deg, root.grid.with-alpha(0) 0%, root.grid.with-alpha(0.55) 50%, root.grid.with-alpha(0) 100%);
+        Rectangle { y: parent.height / 2 - 1px; height: 2px; background: root.grid.mix(#ffffff, 0.5); }
+    }
     // shooting star now and then (stars scene, every 10 s)
     property <float> sh: (root.t / 10) - Math.floor(root.t / 10);
     if root.scene == 3 && root.sh < 0.16 && root.star-k > 0.01: star := Rectangle {
@@ -303,41 +325,98 @@ export component SynthScene inherits Rectangle {
         Seg { stroke: #ffffffb3; stroke-width: 1.4px; x1: star.hx - 40; y1: star.hy - 11; x2: star.hx; y2: star.hy; }
         Rectangle { x: (star.hx - 1.5) * 1px; y: (star.hy - 1.5) * 1px; width: 3px; height: 3px; border-radius: 1.5px; background: #ffffff; }
     }
+    // 25.H4: a tap on the sky sends a shooting star from there (0.6 s); a tap on the road asks for a car in that lane
+    property <float> tap-x;
+    property <float> tap-y;
+    property <bool> tap-star;
+    property <duration> tap-t0;
+    Timer { interval: 620ms; running: root.tap-star; triggered => { root.tap-star = false; } }
+    if root.taps: TouchArea {
+        clicked => {
+            if self.mouse-y < 330px {
+                root.tap-x = self.mouse-x / 1px; root.tap-y = self.mouse-y / 1px; root.tap-t0 = animation-tick(); root.tap-star = true;
+            } else {
+                Act.act("synth.lane", self.mouse-x / 1px);
+            }
+        }
+    }
+    if root.tap-star: tstar := Rectangle {
+        property <float> p: clamp((animation-tick() - root.tap-t0) / 600ms, 0, 1);
+        property <float> hx: root.tap-x + self.p * 150;
+        property <float> hy: root.tap-y + self.p * 40;
+        opacity: 1 - self.p * self.p;
+        Seg { stroke: #ffffff26; stroke-width: 3px; x1: tstar.hx - 64 * min(1, tstar.p * 4); y1: tstar.hy - 18 * min(1, tstar.p * 4); x2: tstar.hx; y2: tstar.hy; }
+        Seg { stroke: #ffffffb3; stroke-width: 1.4px; x1: tstar.hx - 40 * min(1, tstar.p * 4); y1: tstar.hy - 11 * min(1, tstar.p * 4); x2: tstar.hx; y2: tstar.hy; }
+        Rectangle { x: (tstar.hx - 1.5) * 1px; y: (tstar.hy - 1.5) * 1px; width: 3px; height: 3px; border-radius: 1.5px; background: #ffffff; }
+    }
     // the car kinds' layers (paint takes the car's colour; the patrol car's paint is empty: its livery is fixed)
     property <[image]> car-paint: [@image-url("timers/sw/pcar-0-paint.png"), @image-url("timers/sw/pcar-1-paint.png"), @image-url("timers/sw/pcar-2-paint.png"), @image-url("timers/sw/pcar-3-paint.png"), @image-url("timers/sw/pcar-4-paint.png"), @image-url("timers/sw/pcar-5-paint.png")];
     property <[image]> car-shade: [@image-url("timers/sw/pcar-0-shade.png"), @image-url("timers/sw/pcar-1-shade.png"), @image-url("timers/sw/pcar-2-shade.png"), @image-url("timers/sw/pcar-3-shade.png"), @image-url("timers/sw/pcar-4-shade.png"), @image-url("timers/sw/pcar-5-shade.png")];
     property <[image]> car-fixed: [@image-url("timers/sw/pcar-0-fixed.png"), @image-url("timers/sw/pcar-1-fixed.png"), @image-url("timers/sw/pcar-2-fixed.png"), @image-url("timers/sw/pcar-3-fixed.png"), @image-url("timers/sw/pcar-4-fixed.png"), @image-url("timers/sw/pcar-5-fixed.png")];
+    // 25.H5: the three-quarter sprites, nose left (yaw) and nose right (yawr)
+    property <[image]> yaw-paint: [@image-url("timers/sw/pcar-0-yaw-paint.png"), @image-url("timers/sw/pcar-1-yaw-paint.png"), @image-url("timers/sw/pcar-2-yaw-paint.png"), @image-url("timers/sw/pcar-3-yaw-paint.png"), @image-url("timers/sw/pcar-4-yaw-paint.png"), @image-url("timers/sw/pcar-5-yaw-paint.png")];
+    property <[image]> yaw-shade: [@image-url("timers/sw/pcar-0-yaw-shade.png"), @image-url("timers/sw/pcar-1-yaw-shade.png"), @image-url("timers/sw/pcar-2-yaw-shade.png"), @image-url("timers/sw/pcar-3-yaw-shade.png"), @image-url("timers/sw/pcar-4-yaw-shade.png"), @image-url("timers/sw/pcar-5-yaw-shade.png")];
+    property <[image]> yaw-fixed: [@image-url("timers/sw/pcar-0-yaw-fixed.png"), @image-url("timers/sw/pcar-1-yaw-fixed.png"), @image-url("timers/sw/pcar-2-yaw-fixed.png"), @image-url("timers/sw/pcar-3-yaw-fixed.png"), @image-url("timers/sw/pcar-4-yaw-fixed.png"), @image-url("timers/sw/pcar-5-yaw-fixed.png")];
+    property <[image]> yawr-paint: [@image-url("timers/sw/pcar-0-yawr-paint.png"), @image-url("timers/sw/pcar-1-yawr-paint.png"), @image-url("timers/sw/pcar-2-yawr-paint.png"), @image-url("timers/sw/pcar-3-yawr-paint.png"), @image-url("timers/sw/pcar-4-yawr-paint.png"), @image-url("timers/sw/pcar-5-yawr-paint.png")];
+    property <[image]> yawr-shade: [@image-url("timers/sw/pcar-0-yawr-shade.png"), @image-url("timers/sw/pcar-1-yawr-shade.png"), @image-url("timers/sw/pcar-2-yawr-shade.png"), @image-url("timers/sw/pcar-3-yawr-shade.png"), @image-url("timers/sw/pcar-4-yawr-shade.png"), @image-url("timers/sw/pcar-5-yawr-shade.png")];
+    property <[image]> yawr-fixed: [@image-url("timers/sw/pcar-0-yawr-fixed.png"), @image-url("timers/sw/pcar-1-yawr-fixed.png"), @image-url("timers/sw/pcar-2-yawr-fixed.png"), @image-url("timers/sw/pcar-3-yawr-fixed.png"), @image-url("timers/sw/pcar-4-yawr-fixed.png"), @image-url("timers/sw/pcar-5-yawr-fixed.png")];
     // pixel cars pulling away along a floor line, big near, smaller towards the horizon (far ones first)
     for c in root.cars: car := Rectangle {
+        // a shove (25.H5): pt seconds into it (2.5 s); it slows to 60 % (the time it loses moves it back on its trip), slides
+        // 1.25 lanes away from the tap and steers back; yawed away from the tap while it slides, the other way as it steers back
+        property <float> pt: c.pushed ? root.t - c.push-t : 100;
+        property <bool> skid: c.pushed && self.pt >= 0 && self.pt < 2.5;
+        property <float> lost: !c.pushed || self.pt < 0 ? 0 : self.pt < 2.5 ? 0.4 * (2.5 / 3.1416) * (1 - Math.cos(180deg * self.pt / 2.5)) : 0.4 * 2 * 2.5 / 3.1416;
+        property <float> slide: !car.skid ? 0 : car.pt < 0.9 ? 1.25 * (1 - Math.pow(1 - car.pt / 0.9, 2))
+            : 1.25 * (1 - (car.pt - 0.9) / 1.6 * (car.pt - 0.9) / 1.6 * (3 - 2 * (car.pt - 0.9) / 1.6));
+        // 0 straight, 1 nose right, -1 nose left
+        property <int> yaw: !car.skid ? 0 : car.pt < 0.9 ? (c.push-dir > 0 ? 1 : -1) : car.pt < 1.5 ? (c.push-dir > 0 ? -1 : 1) : 0;
         // depth: 0.46 = still under the bottom edge … 1 = tyres on the edge, 176 px wide … 60 = 3 px, gone
-        property <float> age: max(0, root.t - c.born);
+        property <float> age: max(0, root.t - c.born - self.lost);
         property <float> d: 0.46 * Math.pow(60 / 0.46, min(1, self.age / max(1, c.dur)));
         property <float> sp: 43.8 / self.d + 2.2;           // floor line spacing at this depth
         property <float> s: 176 / 48 / car.d;                // sprite scale: 176 px wide at d 1, shrinking to nothing
-        property <float> cx: 240 + c.line * self.sp;         // on its line
+        property <float> cx: 240 + (c.line + c.push-dir * self.slide) * self.sp;         // on its line
         property <float> gy: 330 + 150 / car.d;              // ground under the tyres
         property <float> sm: max(0, min(1, (1.8 - car.d) / 0.8));  // smoke only while it pulls away (near)
         // it fades out over the last 6 % of the trip (a few pixels wide by then) instead of vanishing
         property <float> fade: max(0, min(1, (1 - min(1, self.age / max(1, c.dur))) / 0.06));
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
             opacity: car.fade;
-            source: root.car-paint[c.kind];
+            source: car.yaw == 0 ? root.car-paint[c.kind] : car.yaw > 0 ? root.yawr-paint[c.kind] : root.yaw-paint[c.kind];
             colorize: c.tint; }
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
             opacity: car.fade;
-            source: root.car-shade[c.kind]; }
+            source: car.yaw == 0 ? root.car-shade[c.kind] : car.yaw > 0 ? root.yawr-shade[c.kind] : root.yaw-shade[c.kind]; }
         if car.d < 59.9: Image { x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
             opacity: car.fade;
-            source: root.car-fixed[c.kind]; }
+            source: car.yaw == 0 ? root.car-fixed[c.kind] : car.yaw > 0 ? root.yawr-fixed[c.kind] : root.yaw-fixed[c.kind]; }
+        // a tap on the car shoves it away from the tap (a fresh shove while it skids)
+        if root.taps && car.d < 6: TouchArea { x: (car.cx - 26 * car.s) * 1px; y: (car.gy - 24 * car.s) * 1px; width: 52px * car.s; height: 28px * car.s;
+            clicked => { Act.act("synth.push", c.born + ":" + (self.mouse-x < self.width / 2 ? 1 : -1)); } }
+        // heavy tyre smoke while it skids: 14 squares from both rear tyres, 2-6 sprite pixels, drifting back and outwards (0.8 s)
+        if car.skid && car.pt < 1.6: Rectangle {
+            for p in 14: Rectangle {
+                property <float> side: Math.mod(p, 2) == 0 ? -1 : 1;
+                property <float> ph: car.pt * 1.25 + p / 14 - Math.floor(car.pt * 1.25 + p / 14);
+                property <float> sz: Math.round((2 + Math.mod(p * 7, 5)) * (0.8 + 0.4 * self.ph) * car.s);
+                x: (car.cx + self.side * (17 + 12 * self.ph) * car.s - self.sz / 2) * 1px;
+                y: (car.gy - 3 * car.s + self.ph * 12 * car.s - self.sz / 2) * 1px;
+                width: self.sz * 1px; height: self.sz * 1px;
+                background: #e6dcf5.with-alpha(0.6 * (1 - self.ph) * car.fade);
+            }
+        }
         // the patrol car's light bar: red flashes twice (on 70 ms, off 60, on 70, off 120), then blue the same
         property <float> fp: Math.mod(car.age, 0.64);
         // (the overlays stay; only their opacity flashes)
         if c.kind == 5 && car.d < 59.9: Image {
             x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
-            opacity: car.fp < 0.07 || (car.fp >= 0.13 && car.fp < 0.20) ? car.fade : 0; source: @image-url("timers/sw/pcar-5-flash-red.png"); }
+            opacity: car.fp < 0.07 || (car.fp >= 0.13 && car.fp < 0.20) ? car.fade : 0;
+            source: car.yaw == 0 ? @image-url("timers/sw/pcar-5-flash-red.png") : car.yaw > 0 ? @image-url("timers/sw/pcar-5-yawr-flash-red.png") : @image-url("timers/sw/pcar-5-yaw-flash-red.png"); }
         if c.kind == 5 && car.d < 59.9: Image {
             x: (car.cx - 24 * car.s) * 1px; y: (car.gy - 22 * car.s) * 1px; width: 48px * car.s; height: 24px * car.s; image-rendering: pixelated;
-            opacity: (car.fp >= 0.32 && car.fp < 0.39) || (car.fp >= 0.45 && car.fp < 0.52) ? car.fade : 0; source: @image-url("timers/sw/pcar-5-flash-blue.png"); }
+            opacity: (car.fp >= 0.32 && car.fp < 0.39) || (car.fp >= 0.45 && car.fp < 0.52) ? car.fade : 0;
+            source: car.yaw == 0 ? @image-url("timers/sw/pcar-5-flash-blue.png") : car.yaw > 0 ? @image-url("timers/sw/pcar-5-yawr-flash-blue.png") : @image-url("timers/sw/pcar-5-yaw-flash-blue.png"); }
         // a little pixel smoke from the rear tyres, drifting towards the viewer
         if car.sm > 0: Rectangle {
             for p in 6: Rectangle {
@@ -379,6 +458,15 @@ export component TimersPage inherits Rectangle {
     in property <[float]> lap-marks;      // the laps' times on the stopwatch, oldest first (up to 8)
     in property <int> sw-look;            // stopwatch look: 0 plain, 1 chronograph, 2 timing tower, 3 LCD watch, 4 nixie
     in property <int> alarm-look;         // alarm look: 0 plain, 1 twin-bell, 2 sunrise, 3 clock radio, 4 24-hour dial
+    in property <float> now-h;            // the time now, hours of the day
+    in property <float> now-s;            // … and its seconds (smooth)
+    in property <float> next-h: -1;       // the next alarm, hours of the day (-1: none on)
+    in property <int> next-in: -1;        // … minutes until it
+    in property <string> next-time;       // … "6:45"
+    in property <string> next-label;      // … its label
+    in property <string> dawn-from;       // … half an hour before it ("6:15")
+    in property <float> sunrise-h: 7;     // the sun, hours of the day (from Home Assistant)
+    in property <float> sunset-h: 16.5;
     in property <color> watch-tint: #3d9bff;
     in property <bool> ringing;           // a timer or an alarm rings (full screen)
     in property <bool> ring-alarm;        // … it is an alarm
@@ -436,9 +524,26 @@ export component TimersPage inherits Rectangle {
     property <int> n: root.timers.length;
     property <int> funcs: (root.alarm-on ? 1 : 0) + (root.timer-on ? 1 : 0) + (root.watch-on ? 1 : 0);
     property <length> top: root.funcs > 1 ? 98px : 52px;          // content starts under the tabs
+    // a timer ends (25.T1, T4): the plain look's ring bursts (300 ms), the synthwave floor pulses (600 ms), then the
+    // ringing screen comes
+    property <bool> pre-ring;
+    property <duration> ring-t0;
+    property <int> ring-theme;
+    changed ringing => {
+        if root.ringing && !root.ring-alarm && root.mode == 1 && (root.theme == 0 || root.theme == 3) {
+            root.ring-theme = root.theme;
+            root.ring-t0 = animation-tick();
+            root.pre-ring = true;
+        } else {
+            root.pre-ring = false;
+        }
+    }
+    Timer { interval: root.ring-theme == 3 ? 600ms : 300ms; running: root.pre-ring; triggered => { root.pre-ring = false; } }
+    property <float> ring-t: root.pre-ring ? (animation-tick() - root.ring-t0) / 1ms : 1000;
+    property <bool> ring-shown: root.ringing && !root.pre-ring;
     property <TimerItem> cur: root.n > 0 ? root.timers[min(root.pick, root.n - 1)] : { label: "", remaining: 0, total: 1, running: false, tint: #e8262d };
     property <float> fr: root.cur.total > 0 ? root.cur.remaining / root.cur.total : 0;
-    property <bool> synth: !root.ringing && root.mode == 1 && root.theme == 3;
+    property <bool> synth: (!root.ringing || (root.pre-ring && root.ring-theme == 3)) && root.mode == 1 && root.theme == 3;
     property <bool> synth-quick: root.synth && root.n == 0;
     property <[color]> sw-rings: [#ff2a6d, #ffd319, #ff8b3d, #c86bfa, #00e5ff, #ff2e88, #f9f871, #8a5cff,
                                   #ff6ec7, #00f0c8, #ffb86b, #a17bff, #7df9ff, #b967ff, #01ffc3, #ff71ce];
@@ -521,7 +626,31 @@ export component TimersPage inherits Rectangle {
         property <float> cx: 240;
         property <float> cy: Math.round((root.vis / 1px + 380) / 2);
         property <float> rf: 94;
-        property <float> mins: root.cur.remaining / 60;
+        property <float> mins-now: root.cur.remaining / 60;
+        // more time (25.T2): three ratchet steps of 40 ms (a 1 px jolt each) to one minute mark past the new time, then a
+        // 200 ms spring back
+        property <float> wind-from;
+        property <float> wind-to;
+        property <bool> winding;
+        property <duration> wind-t0;
+        changed mins-now => {
+            if kit.mins-now > kit.mins-last + 0.4 {
+                kit.wind-from = kit.mins-last;
+                kit.wind-to = kit.mins-now;
+                kit.wind-t0 = animation-tick();
+                kit.winding = true;
+            }
+            kit.mins-last = kit.mins-now;
+        }
+        property <float> mins-last;
+        init => { kit.mins-last = kit.mins-now; }
+        Timer { interval: 330ms; running: kit.winding; triggered => { kit.winding = false; } }
+        property <float> wt: kit.winding ? (animation-tick() - kit.wind-t0) / 1ms : 1000;
+        property <float> mins: !kit.winding ? kit.mins-now
+            : kit.wt < 120 ? kit.wind-from + (kit.wind-to + 1 - kit.wind-from) * Math.min(3, Math.floor(kit.wt / 40) + 1) / 3
+            : kit.wind-to + (kit.mins-now - kit.wind-to) + Math.pow(1 - clamp((kit.wt - 120) / 200, 0, 1), 2) * Math.cos(clamp((kit.wt - 120) / 200, 0, 1) * 180deg * 0.5);
+        property <length> jolt: kit.winding && kit.wt < 120 && Math.mod(kit.wt, 40) < 14 ? 1px : 0px;
+        y: kit.jolt;
         Image { x: (kit.cx - 132) * 1px; y: (kit.cy - 132) * 1px; width: 264px; height: 264px; source: @image-url("timers/kit/shadow.png"); }
         Image { x: (kit.cx - 132) * 1px; y: (kit.cy - 132) * 1px; width: 264px; height: 264px; source: @image-url("timers/kit/body-mask.png"); colorize: root.cur.tint; }
         Image { x: (kit.cx - 132) * 1px; y: (kit.cy - 132) * 1px; width: 264px; height: 264px; source: @image-url("timers/kit/body-shade.png"); }
@@ -575,6 +704,7 @@ export component TimersPage inherits Rectangle {
         init => {
             hg.li = Math.min(46, Math.floor(hg.lf));
             hg.tint = hg.tint-now;
+            if root.cur.total - root.cur.remaining < 2 { hg.flip-t0 = animation-tick(); hg.flipping = true; }
         }
         changed lf => {
             if Math.min(46, Math.floor(hg.lf)) != hg.li {
@@ -592,7 +722,32 @@ export component TimersPage inherits Rectangle {
         property <float> sp: hg.flowing ? (animation-tick() - Clock.base) / 1ms / 83 : 0;
         property <int> si: Math.mod(Math.floor(hg.sp), 4);
         property <float> sk: hg.sp - Math.floor(hg.sp);
+        // a new timer (25.T3): the glass flips through 9 frames (20 … 180 degrees) in 500 ms, ease-in-out, the sand sliding
+        // inside; then a 100 ms crossfade to the normal layers at the full level
+        property <string> key: root.cur.label + "|" + root.cur.total;
+        property <bool> flipping;
+        property <duration> flip-t0;
+        changed key => { if root.cur.total - root.cur.remaining < 2 { hg.flip-t0 = animation-tick(); hg.flipping = true; } }
+        Timer { interval: 620ms; running: hg.flipping; triggered => { hg.flipping = false; } }
+        property <float> ft: hg.flipping ? (animation-tick() - hg.flip-t0) / 1ms : 1000;
+        property <float> fu: clamp(hg.ft / 500, 0, 1);
+        property <float> fe: hg.fu < 0.5 ? 2 * hg.fu * hg.fu : 1 - Math.pow(2 - 2 * hg.fu, 2) / 2;
+        property <int> fk: Math.max(1, Math.min(9, Math.ceil(hg.fe * 9)));
+        property <float> normal-k: !hg.flipping ? 1 : hg.ft < 500 ? 0 : clamp((hg.ft - 500) / 100, 0, 1);
+        property <[image]> flip-back: [@image-url("timers/hg/flip-back-1.png"), @image-url("timers/hg/flip-back-2.png"), @image-url("timers/hg/flip-back-3.png"), @image-url("timers/hg/flip-back-4.png"), @image-url("timers/hg/flip-back-5.png"), @image-url("timers/hg/flip-back-6.png"), @image-url("timers/hg/flip-back-7.png"), @image-url("timers/hg/flip-back-8.png"), @image-url("timers/hg/flip-back-9.png")];
+        property <[image]> flip-mask: [@image-url("timers/hg/flip-sand-mask-1.png"), @image-url("timers/hg/flip-sand-mask-2.png"), @image-url("timers/hg/flip-sand-mask-3.png"), @image-url("timers/hg/flip-sand-mask-4.png"), @image-url("timers/hg/flip-sand-mask-5.png"), @image-url("timers/hg/flip-sand-mask-6.png"), @image-url("timers/hg/flip-sand-mask-7.png"), @image-url("timers/hg/flip-sand-mask-8.png"), @image-url("timers/hg/flip-sand-mask-9.png")];
+        property <[image]> flip-shade: [@image-url("timers/hg/flip-sand-shade-1.png"), @image-url("timers/hg/flip-sand-shade-2.png"), @image-url("timers/hg/flip-sand-shade-3.png"), @image-url("timers/hg/flip-sand-shade-4.png"), @image-url("timers/hg/flip-sand-shade-5.png"), @image-url("timers/hg/flip-sand-shade-6.png"), @image-url("timers/hg/flip-sand-shade-7.png"), @image-url("timers/hg/flip-sand-shade-8.png"), @image-url("timers/hg/flip-sand-shade-9.png")];
+        property <[image]> flip-front: [@image-url("timers/hg/flip-front-1.png"), @image-url("timers/hg/flip-front-2.png"), @image-url("timers/hg/flip-front-3.png"), @image-url("timers/hg/flip-front-4.png"), @image-url("timers/hg/flip-front-5.png"), @image-url("timers/hg/flip-front-6.png"), @image-url("timers/hg/flip-front-7.png"), @image-url("timers/hg/flip-front-8.png"), @image-url("timers/hg/flip-front-9.png")];
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/floor-shadow.png"); }
+        if hg.flipping && hg.normal-k < 1: Rectangle {
+            x: hg.x0 - 64px; y: hg.y0 - 32px; width: 300px; height: 300px;
+            opacity: 1 - hg.normal-k;
+            Image { width: 300px; height: 300px; source: hg.flip-back[hg.fk - 1]; }
+            Image { width: 300px; height: 300px; source: hg.flip-mask[hg.fk - 1]; colorize: hg.tint; }
+            Image { width: 300px; height: 300px; source: hg.flip-shade[hg.fk - 1]; }
+            Image { width: 300px; height: 300px; source: hg.flip-front[hg.fk - 1]; }
+        }
+        Rectangle { opacity: hg.normal-k;
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/post-back.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/glass-back.png"); }
         // The sand, the two bulbs apart (split at the neck: rows 0-119 hold the top sand, the bottom sand starts below row 139). Top: the current level, the fuller one
@@ -627,6 +782,7 @@ export component TimersPage inherits Rectangle {
         }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/glass-front.png"); }
         Image { x: hg.x0; y: hg.y0; width: 172px; height: 244px; source: @image-url("timers/hg/frame.png"); }
+        }
         // name, time, total on the right
         Text { x: 252px; y: hg.y0 + 118px - 64px; width: 210px; height: 24px; text: root.name(root.cur.label); font-size: 18px; font-weight: 600;
             color: root.cur.tint.mix(TFg.c, 0.55); overflow: elide; vertical-alignment: center; }
@@ -650,8 +806,8 @@ export component TimersPage inherits Rectangle {
         HorizontalLayout {
             x: 0; y: flp.fy; width: root.width; height: flp.ch; alignment: center; spacing: 8px;
             // the cards flip at every change, shortened to 2 x 160 ms (they change every second)
-            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.floor(flp.mm / 10); dur: 320ms; delay: 210ms; }
-            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.mod(flp.mm, 10); dur: 320ms; delay: 140ms; }
+            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.floor(flp.mm / 10); dur: 320ms; delay: 210ms; search: true; }
+            FlapCard { width: flp.cw; height: flp.ch; card: #17171b; weight: 700; new-digit: Math.mod(flp.mm, 10); dur: 320ms; delay: 140ms; search: true; }
             VerticalLayout { alignment: center; spacing: 26px;
                 Rectangle { width: 12px; height: 12px; border-radius: 6px; background: #ffffff; }
                 Rectangle { width: 12px; height: 12px; border-radius: 6px; background: #ffffff; } }
@@ -665,6 +821,7 @@ export component TimersPage inherits Rectangle {
     // ---------------------------------------------------------------- 3 synthwave: the scene, then the tubes
     if root.synth: syn := Rectangle {
         SynthScene { back: root.sw-back; floor: root.sw-floor; scene: root.sw-scene; grid: root.grid; t: root.sw-t; cars: root.sw-cars;
+            pulse-t: root.pre-ring && root.ring-theme == 3 ? root.ring-t : -1;
             palm-l: root.sw-palm-l; palm-r: root.sw-palm-r; palm-l2: root.sw-palm-l2; palm-r2: root.sw-palm-r2; palm-lk: root.sw-palm-lk; palm-rk: root.sw-palm-rk; }
 
         // one timer: a big tube, the controls at the bottom
@@ -754,15 +911,219 @@ export component TimersPage inherits Rectangle {
     changed lap-n => { if root.lap-n > root.lap-last { root.lap-t0 = animation-tick(); root.lap-sliding = true; } root.lap-last = root.lap-n; }
     Timer { interval: 200ms; running: root.lap-sliding; triggered => { root.lap-sliding = false; } }
     property <length> lap-off: root.lap-sliding ? -34px * Math.pow(1 - clamp((animation-tick() - root.lap-t0) / 180ms, 0, 1), 3) : 0px;
+    // ---------------------------------------------------------------- alarm looks (spec 24): 4 24-hour dial
+    // midnight at the bottom, noon at the top, the night darker; the sleep arc from now to the next alarm in Signal with the
+    // sleep left in the middle; the alarms as markers (filled: on and due within 24 h, a ring: on, another day, faint: off);
+    // the now hand; under it the alarms as chips (a tap toggles)
+    // the time left: "8 h 58 min", or "12 min" under an hour
+    pure function left-text(m: int) -> string { m >= 60 ? Math.floor(m / 60) + " h " + Math.mod(m, 60) + " min" : m + " min" }
+    pure function dang(h: float) -> angle { (h / 24 * 360 + 180) * 1deg }
+    pure function dpx(h: float, r: float) -> float { 240 + r * Math.sin(root.dang(h)) }
+    pure function dpy(h: float, r: float) -> float { 216 - r * Math.cos(root.dang(h)) }
+    pure function darc(h1: float, h2: float) -> string {
+        "M " + root.dpx(h1, 112) + " " + root.dpy(h1, 112) + " A 112 112 0 " + (Math.mod(h2 - h1 + 24, 24) > 12 ? "1" : "0") + " 1 " + root.dpx(h2, 112) + " " + root.dpy(h2, 112)
+    }
+    property <float> arc-span: root.next-h >= 0 ? Math.mod(root.next-h - root.now-h + 24, 24) : 0;
+    property <float> arc-shown: root.arc-span;
+    animate arc-shown { duration: 400ms; easing: ease-in-out; }
+    if !root.ringing && root.mode == 0 && root.alarm-look == 4: Rectangle {
+        property <color> day: Theme.dark ? #1d1e22 : #e6e2d9;
+        property <color> night: Theme.dark ? #0e1424 : #c9c4b8;
+        property <color> faint: TFg.c.with-alpha(0.55);
+        Rectangle { x: 240px - 112px - 9px; y: 216px - 112px - 9px; width: 242px; height: 242px; border-radius: 121px; border-width: 18px; border-color: parent.day; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: parent.night; stroke-width: 18px;
+            commands: root.darc(root.sunset-h, root.sunrise-h); }
+        if root.arc-shown > 0.02: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: #FF4A1C; stroke-width: 18px;
+            stroke-line-cap: round; opacity: 0.9; commands: root.darc(root.now-h, root.now-h + root.arc-shown); }
+        for k in 24: Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke-line-cap: round;
+            stroke: Math.mod(k, 6) == 0 ? TFg.c : parent.faint; stroke-width: Math.mod(k, 6) == 0 ? 2.4px : 1.2px;
+            commands: "M " + root.dpx(k, 99) + " " + root.dpy(k, 99) + " L " + root.dpx(k, Math.mod(k, 6) == 0 ? 89 : 94) + " " + root.dpy(k, Math.mod(k, 6) == 0 ? 89 : 94); }
+        for n in [0, 6, 12, 18, 3, 9, 15, 21]: Text { x: (root.dpx(n, 76) - 20) * 1px; y: (root.dpy(n, 76) - 10) * 1px; width: 40px; height: 20px; text: n;
+            font-family: "Space Grotesk"; font-size: Math.mod(n, 6) == 0 ? 15px : 11px; font-weight: 500; color: Math.mod(n, 6) == 0 ? TFg.c : parent.faint;
+            horizontal-alignment: center; vertical-alignment: center; }
+        // the sun at noon, the moon at midnight
+        Rectangle { x: 233px; y: 151px; width: 14px; height: 14px; border-radius: 7px; border-width: 1.6px; border-color: parent.faint; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: parent.faint; stroke-width: 1.6px; stroke-line-cap: round;
+            commands: "M 240 145 L 240 141 M 240 175 L 240 171 M 227 158 L 223 158 M 257 158 L 253 158"; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: parent.faint;
+            commands: "M 246 268 A 10 10 0 1 1 238 253 A 8 8 0 0 0 246 268 Z"; }
+        // the now hand
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: TFg.c; stroke-width: 2.4px; stroke-line-cap: round;
+            commands: "M " + root.dpx(root.now-h, 16) + " " + root.dpy(root.now-h, 16) + " L " + root.dpx(root.now-h, 126) + " " + root.dpy(root.now-h, 126); }
+        Rectangle { x: (root.dpx(root.now-h, 112) - 7) * 1px; y: (root.dpy(root.now-h, 112) - 7) * 1px; width: 14px; height: 14px; border-radius: 7px;
+            background: TFg.c; border-width: 2px; border-color: Theme.background; }
+        // the alarms on the ring
+        for a in root.alarms: Rectangle { x: (root.dpx(a.hour, 112) - 10.5) * 1px; y: (root.dpy(a.hour, 112) - 10.5) * 1px; width: 21px; height: 21px; border-radius: 10.5px;
+            background: a.on && a.soon ? a.tint : Theme.background; border-width: 3px; border-color: a.on ? a.tint : parent.faint; }
+        // between the 6 and the 18: the time left (or that no alarm is on) and the next alarm under it
+        Text { x: 172px; y: 166px; width: 136px; height: 34px; text: root.next-in < 0 ? "No alarm on" : root.left-text(root.next-in);
+            font-family: root.next-in < 0 ? "Noto Sans" : "Space Grotesk"; font-size: root.next-in < 0 ? 15px : root.next-in >= 600 ? 22px : 26px; font-weight: root.next-in < 0 ? 600 : 500;
+            color: TFg.c; horizontal-alignment: center; vertical-alignment: center; }
+        if root.next-in >= 0: Text { x: 172px; y: 198px; width: 136px; height: 18px; text: "of sleep until " + root.next-time; font-size: 13px; font-weight: 500;
+            color: parent.faint; horizontal-alignment: center; vertical-alignment: center; }
+        // the alarms as chips
+        HorizontalLayout { x: 20px; y: 362px; width: root.width - 40px; height: 40px; spacing: 8px; alignment: center;
+            for a[i] in root.alarms: Rectangle {
+                visible: i < 3;
+                width: i < 3 ? cl.preferred-width + 34px : 0px; border-radius: 20px; background: TFg.c.with-alpha(0.08); opacity: a.on ? 1 : 0.45;
+                Rectangle { x: 12px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: a.on ? a.tint : transparent;
+                    border-width: 1.5px; border-color: a.tint; }
+                cl := Text { x: 26px; height: parent.height; text: a.time + "  " + a.days; font-size: 14px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
+                TouchArea { clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; root.on-t0 = animation-tick(); root.on-i = i; root.on-anim = true; } Act.act("alarms.toggle", i); } }
+            }
+        }
+    }
+
+    // 3 clock radio: the body (a picture), the red LED time, AL1 / AL2 lit for the first two alarms when on, three preset keys
+    // (the alarms, each with its LED; a tap toggles), the next alarm under it
+    property <bool> radio-al: root.on-anim && root.on-i >= 0 && root.on-i < root.alarms.length && root.alarm-look == 3;
+    property <float> radio-h: root.radio-al ? root.alarms[root.on-i].hour : root.now-h;
+    property <int> radio-hh: Math.floor(root.radio-h);
+    property <int> radio-mm: Math.mod(Math.floor(root.radio-h * 60 + 0.001), 60);
+    if !root.ringing && root.mode == 0 && root.alarm-look == 3: radio := Rectangle {
+        Image { x: 30px; y: 98px; width: 420px; height: 236px; source: Theme.dark ? @image-url("timers/radio-dark.png") : @image-url("timers/radio-light.png"); }
+        Seg7 { d: root.radio-hh >= 10 ? Math.floor(root.radio-hh / 10) : -1; x0: 234; y0: 152; w: 34; h: 62; t: 7; slant: 0; gap: 0.2; ghost: false; ink: #ff2d1a; off: #2a0c09; }
+        Seg7 { d: Math.mod(root.radio-hh, 10); x0: 274; y0: 152; w: 34; h: 62; t: 7; slant: 0; gap: 0.2; ghost: false; ink: #ff2d1a; off: #2a0c09; }
+        Seg7 { d: Math.floor(root.radio-mm / 10); x0: 326; y0: 152; w: 34; h: 62; t: 7; slant: 0; gap: 0.2; ghost: false; ink: #ff2d1a; off: #2a0c09; }
+        Seg7 { d: Math.mod(root.radio-mm, 10); x0: 366; y0: 152; w: 34; h: 62; t: 7; slant: 0; gap: 0.2; ghost: false; ink: #ff2d1a; off: #2a0c09; }
+        Rectangle { x: 311px; y: 170px; width: 8px; height: 8px; border-radius: 4px; background: #ff2d1a; }
+        Rectangle { x: 309px; y: 202px; width: 8px; height: 8px; border-radius: 4px; background: #ff2d1a; }
+        Text { x: 228px; y: 236px; text: "AL1"; font-size: 10px; font-weight: 700; letter-spacing: 1px;
+            color: root.alarms.length > 0 && root.alarms[0].on ? #ff2d1a : #3a1410; }
+        Text { x: 258px; y: 236px; text: "AL2"; font-size: 10px; font-weight: 700; letter-spacing: 1px;
+            color: root.alarms.length > 1 && root.alarms[1].on ? #ff2d1a : #3a1410; }
+        // the preset keys
+        for a[i] in root.alarms: Rectangle {
+            visible: i < 3;
+            x: 212px + i * (68px + 8px); y: 262px + (kta.pressed ? 2px : 0px); width: 68px; height: 54px; border-radius: 9px;
+            background: Theme.dark ? #26262b : #f4eedf;
+            Rectangle { x: 0; y: parent.height - 3px; width: parent.width; height: 3px; border-bottom-left-radius: 9px; border-bottom-right-radius: 9px;
+                background: Theme.dark ? #121214 : #cdbf9f; }
+            Rectangle { x: 8px; y: 7px; width: 6px; height: 6px; border-radius: 3px; background: a.on ? #ff2d1a : (Theme.dark ? #3a3a40 : #bfb196);
+                drop-shadow-blur: a.on ? 6px : 0px; drop-shadow-color: #ff2d1a;
+                animate background { duration: 150ms; } }
+            Text { x: parent.width - 18px; y: 4px; width: 10px; text: i + 1; font-size: 10px; font-weight: 700; color: Theme.dark ? #e8e4dc : #3a332a; opacity: 0.6;
+                horizontal-alignment: right; }
+            Text { x: 0; y: 20px; width: parent.width; height: 24px; text: a.time; font-size: 15px; font-weight: 700; color: Theme.dark ? #e8e4dc : #3a332a;
+                horizontal-alignment: center; vertical-alignment: center; opacity: a.on ? 1 : 0.5; }
+            kta := TouchArea { clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; root.on-t0 = animation-tick(); root.on-i = i; root.on-anim = true; } Act.act("alarms.toggle", i); } }
+        }
+        HorizontalLayout { x: 0; y: 344px; width: root.width; height: 22px; alignment: center; spacing: 8px;
+            Text { text: root.next-in < 0 ? "No alarm on" : "Next " + root.next-time; font-size: 15px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
+            if root.next-in >= 0: Text { text: "in " + root.left-text(root.next-in); font-size: 15px; font-weight: 500;
+                color: TFg.c.with-alpha(0.55); vertical-alignment: center; }
+        }
+    }
+
+    // 2 sunrise: the page is a sky with two hills; the next alarm big in the sky; half an hour before it the sky goes from
+    // night to dawn (by 60 %) and on to sunrise, the stars fade and the sun rises after the half (spec 24.6)
+    property <float> dawn: root.next-in >= 0 && root.next-in <= 30 ? clamp(1 - root.next-in / 30, 0, 1) : 0;
+    property <bool> sky-bright: !Theme.dark || root.dawn > 0.78;
+    pure function sky3(i: int, k: float) -> color {
+        k < 0.6 ? root.sky-c(1, i).mix(root.sky-c(0, i), k / 0.6) : root.sky-c(2, i).mix(root.sky-c(1, i), (k - 0.6) / 0.4)
+    }
+    pure function sky-c(stage: int, i: int) -> color {
+        Theme.dark
+            ? (stage == 0 ? [#050b1c, #0f1c3c, #22335a][i] : stage == 1 ? [#2a2b5c, #b0517a, #ffa862][i] : [#5f8fcf, #f3b58a, #ffcf86][i])
+            : (stage == 0 ? [#cfd7e2, #dde3ea, #eef0f2][i] : stage == 1 ? [#d9cfe0, #f0d6d8, #fbe2c8][i] : [#cfe2f3, #f7e7cf, #ffd6a0][i])
+    }
+    if !root.ringing && root.mode == 0 && root.alarm-look == 2: sky := Rectangle {
+        property <color> fg: root.sky-bright ? #101114 : #F5F3EE;
+        property <color> faint: root.sky-bright ? #10111499 : #F5F3EEa6;
+        background: @linear-gradient(180deg, root.sky3(0, root.dawn) 0%, root.sky3(1, root.dawn) 55%, root.sky3(2, root.dawn) 100%);
+        if Theme.dark: Rectangle {
+            for st in [{ x: 175, y: 107, r: 1.5, tw: 4.09 }, { x: 47, y: 78, r: 1.2, tw: 3.66 }, { x: 269, y: 139, r: 0.8, tw: 0.54 }, { x: 224, y: 65, r: 1.0, tw: 0.57 }, { x: 227, y: 60, r: 0.8, tw: 5.95 }, { x: 332, y: 61, r: 1.5, tw: 0.31 }, { x: 123, y: 53, r: 1.0, tw: 1.82 }, { x: 83, y: 90, r: 1.2, tw: 3.52 }, { x: 359, y: 122, r: 0.8, tw: 3.65 }, { x: 337, y: 126, r: 1.2, tw: 0.61 }, { x: 374, y: 62, r: 0.8, tw: 3.89 }, { x: 264, y: 248, r: 1.2, tw: 2.92 }, { x: 242, y: 215, r: 1.2, tw: 1.56 }, { x: 102, y: 154, r: 0.8, tw: 3.61 }, { x: 278, y: 283, r: 1.2, tw: 4.58 }, { x: 157, y: 67, r: 0.8, tw: 3.21 }, { x: 94, y: 205, r: 1.0, tw: 5.86 }, { x: 225, y: 50, r: 0.8, tw: 4.80 }, { x: 303, y: 190, r: 1.2, tw: 4.37 }, { x: 314, y: 284, r: 1.5, tw: 0.43 }, { x: 57, y: 168, r: 1.5, tw: 4.38 }, { x: 43, y: 61, r: 1.2, tw: 4.06 }, { x: 358, y: 258, r: 1.2, tw: 4.50 }, { x: 464, y: 207, r: 0.8, tw: 5.91 }, { x: 191, y: 116, r: 0.8, tw: 3.10 }, { x: 121, y: 177, r: 1.0, tw: 4.64 }, { x: 213, y: 230, r: 1.5, tw: 0.51 }, { x: 239, y: 235, r: 1.2, tw: 5.55 }, { x: 429, y: 250, r: 1.2, tw: 4.44 }, { x: 193, y: 224, r: 1.0, tw: 0.95 }]: Rectangle { x: (st.x - st.r) * 1px; y: (st.y - st.r) * 1px; width: st.r * 2px; height: st.r * 2px; border-radius: st.r * 1px; background: #ffffff;
+                opacity: max(0, 1 - root.dawn * 1.7) * (0.55 + 0.45 * Math.sin(1rad * ((animation-tick() / 1ms) / 900 + st.tw))); }
+        }
+        property <float> sun-k: max(max(0, (root.dawn - 0.5) / 0.5), root.on-t < 600 ? 0.6 * Math.sin(180deg * root.on-t / 600) : 0);
+        Rectangle { x: 318px - 110px; y: (392 - sky.sun-k * 96) * 1px - 110px; width: 220px; height: 220px; border-radius: 110px; opacity: sky.sun-k;
+            background: @radial-gradient(circle, #ffd27abf 0%, #ffd27a00 100%); }
+        Rectangle { x: 288px; y: (392 - sky.sun-k * 96) * 1px - 30px; width: 60px; height: 60px; border-radius: 30px; background: #ffd98a; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480;
+            fill: Theme.dark ? #5a3a4a.mix(#0d1526, root.dawn) : #d8b9a4.mix(#c3cad3, root.dawn);
+            commands: "M 0 338 C 60 318 120 322 180 334 C 250 348 320 312 400 318 C 440 321 465 330 480 334 L 480 480 L 0 480 Z"; }
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480;
+            fill: Theme.dark ? #2e1d29.mix(#060a14, root.dawn) : #c49c86.mix(#b4bcc6, root.dawn);
+            commands: "M 0 362 C 90 352 160 366 240 364 C 330 362 400 350 480 356 L 480 480 L 0 480 Z"; }
+        Text { x: 0; y: 128px; width: root.width; height: 100px; text: root.next-in < 0 ? "–:––" : root.next-time; font-family: "Space Grotesk"; font-size: 96px; font-weight: 500;
+            letter-spacing: -2px; color: sky.fg; horizontal-alignment: center; vertical-alignment: center; }
+        Text { x: 0; y: 234px; width: root.width; height: 22px; text: root.next-in < 0 ? "No alarm on" : root.next-label; font-size: 17px; font-weight: 600; color: sky.fg;
+            horizontal-alignment: center; vertical-alignment: center; }
+        if root.next-in >= 0: Text { x: 0; y: 256px; width: root.width; height: 20px; font-size: 14px; color: sky.faint; horizontal-alignment: center; vertical-alignment: center;
+            text: "in " + root.left-text(root.next-in) + " · the sky brightens from " + root.dawn-from; }
+        HorizontalLayout { x: 16px; y: 388px; width: root.width - 32px; height: 40px; spacing: 8px; alignment: center;
+            for a[i] in root.alarms: Rectangle {
+                visible: i < 3;
+                width: i < 3 ? sl.preferred-width + 34px : 0px; border-radius: 20px; background: Theme.dark ? #F5F3EE1f : #10111414; opacity: a.on ? 1 : 0.5;
+                Rectangle { x: 12px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: a.on ? a.tint : transparent;
+                    border-width: 1.5px; border-color: a.tint; }
+                sl := Text { x: 26px; height: parent.height; text: a.time + "  " + a.days; font-size: 14px; font-weight: 600; color: Theme.dark ? #F5F3EE : #101114; vertical-alignment: center; }
+                TouchArea { clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; root.on-t0 = animation-tick(); root.on-i = i; root.on-anim = true; } Act.act("alarms.toggle", i); } }
+            }
+        }
+    }
+
+    // 1 twin-bell clock: the red clock (a picture) with its hour, minute and second hands and the alarm hand (Signal, an
+    // arrow tip) at the next alarm; under it the next alarm and the time left, then the alarms as chips (a tap toggles)
+    if !root.ringing && root.mode == 0 && root.alarm-look == 1: bell := Rectangle {
+        TwinBellClock { x: 150px; y: 98px; width: 180px; height: 206px; metal: Theme.dark ? #b9b6af : #8d8a84; highlight: false; shadow: false;
+            hours: Math.mod(root.now-h, 12); minutes: Math.mod(root.now-h * 60, 60); seconds: root.now-s;
+            ting: root.on-t < 150; ting-t: root.on-t; }
+        HorizontalLayout { x: 0; y: 318px; width: root.width; height: 24px; alignment: center; spacing: 8px;
+            Text { text: root.next-in < 0 ? "No alarm on" : "Next " + root.next-time; font-size: 16px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
+            if root.next-in >= 0: Text { text: "in " + root.left-text(root.next-in); font-size: 15px; color: TFg.c.with-alpha(0.55); vertical-alignment: center; }
+        }
+        HorizontalLayout { x: 16px; y: 356px; width: root.width - 32px; height: 40px; spacing: 8px; alignment: center;
+            for a[i] in root.alarms: Rectangle {
+                visible: i < 3;
+                width: i < 3 ? bl.preferred-width + 34px : 0px; border-radius: 20px; background: TFg.c.with-alpha(0.08); opacity: a.on ? 1 : 0.45;
+                Rectangle { x: 12px; y: (parent.height - 8px) / 2; width: 8px; height: 8px; border-radius: 4px; background: a.on ? a.tint : transparent;
+                    border-width: 1.5px; border-color: a.tint; }
+                bl := Text { x: 26px; height: parent.height; text: a.time + "  " + a.days; font-size: 14px; font-weight: 600; color: TFg.c; vertical-alignment: center; }
+                TouchArea { clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; root.on-t0 = animation-tick(); root.on-i = i; root.on-anim = true; } Act.act("alarms.toggle", i); } }
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- alarms
     property <bool> bell-shake;
     property <duration> bell-t0;
+    // an alarm switched on (25.T10-T12): which one, when; for a second
+    property <bool> on-anim;
+    property <duration> on-t0;
+    property <int> on-i: -1;
+    Timer { interval: 1s; running: root.on-anim; triggered => { root.on-anim = false; } }
+    property <float> on-t: root.on-anim ? (animation-tick() - root.on-t0) / 1ms : 2000;
+    // the stopwatch reset (25.T6 flyback, 25.T9 anti-poisoning cycle) and a new lap (T6 drop, T7 push)
+    property <float> sw-prev;
+    property <bool> flyback;
+    property <duration> fly-t0;
+    property <float> fly-from;
+    Timer { interval: 420ms; running: root.flyback; triggered => { root.flyback = false; } }
+    changed watch => {
+        if root.watch == 0 && root.sw-prev > 0 {
+            root.fly-from = root.sw-prev;
+            root.fly-t0 = animation-tick();
+            root.flyback = true;
+        }
+        root.sw-prev = root.watch;
+    }
+    property <float> fly-k: root.flyback ? 1 - Math.pow(1 - clamp((animation-tick() - root.fly-t0) / 400ms, 0, 1), 3) : 1;
+    property <int> lapn: root.laps.length;
+    property <int> lapn-last;
+    property <bool> lap-new;
+    property <duration> lapd-t0;
+    changed lapn => { if root.lapn > root.lapn-last { root.lapd-t0 = animation-tick(); root.lap-new = true; } root.lapn-last = root.lapn; }
+    Timer { interval: 520ms; running: root.lap-new; triggered => { root.lap-new = false; } }
+    property <float> lap-t: root.lap-new ? (animation-tick() - root.lapd-t0) / 1ms : 1000;
     Timer { interval: 300ms; running: root.bell-shake; triggered => { root.bell-shake = false; } }
     if !root.ringing && root.mode == 0: Rectangle {
-        Rectangle { x: root.width - 20px - 44px; y: root.top; width: 44px; height: 44px; border-radius: 22px; border-width: 1.5px; border-color: TFg.c.with-alpha(0.30);
+        // (the clock radio fills this corner: no + there)
+        Rectangle { visible: root.alarm-look != 3; x: root.width - 20px - 44px; y: root.top; width: 44px; height: 44px; border-radius: 22px; border-width: 1.5px; border-color: TFg.c.with-alpha(0.30);
             TouchArea { clicked => { Act.act("alarms.new", ""); } }
             Icon { width: parent.width; height: parent.height; text: "\u{F0415}"; font-size: 24px; color: TFg.c.with-alpha(0.80); } }
         Rectangle {
+            visible: root.alarm-look == 0;
             x: 20px; y: root.top; width: root.width - 40px - 52px; height: 44px; border-radius: 22px; background: TFg.c.with-alpha(0.05);
             HorizontalLayout { alignment: center; spacing: 8px; padding-left: 12px; padding-right: 12px;
                 // M20: switching an alarm on shakes the bell ±2 px, 3 cycles in 300 ms
@@ -773,6 +1134,7 @@ export component TimersPage inherits Rectangle {
             }
         }
         Flickable {
+            visible: root.alarm-look == 0;
             x: 0; y: root.top + 56px; width: root.width; height: 448px - root.top - 56px;
             content-height: max(self.height, root.alarms.length * 78px);
         for a[i] in root.alarms: Rectangle {
@@ -784,7 +1146,7 @@ export component TimersPage inherits Rectangle {
             Text { x: 138px; y: 35px; width: parent.width - 138px - 80px; height: 20px; text: a.days; font-size: 13px; color: a.on ? TFg.c.with-alpha(0.60) : TFg.c.with-alpha(0.25); overflow: elide; vertical-alignment: center; }
             Rectangle {
                 x: parent.width - 72px; y: (parent.height - 30px) / 2; width: 54px; height: 30px; border-radius: 15px; background: a.on ? a.tint : TFg.c.with-alpha(0.15);
-                TouchArea { x: -12px; y: -16px; width: parent.width + 24px; height: parent.height + 32px; clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; } Act.act("alarms.toggle", i); } }
+                TouchArea { x: -12px; y: -16px; width: parent.width + 24px; height: parent.height + 32px; clicked => { if !a.on { root.bell-t0 = animation-tick(); root.bell-shake = true; root.on-t0 = animation-tick(); root.on-i = i; root.on-anim = true; } Act.act("alarms.toggle", i); } }
                 Rectangle { x: a.on ? parent.width - 27px : 3px; y: 3px; width: 24px; height: 24px; border-radius: 12px; background: #ffffff; }
             }
         }
@@ -804,8 +1166,10 @@ export component TimersPage inherits Rectangle {
     // and a counterweight, every frame), the laps as small triangles outside the dial (the newest Signal)
     if !root.ringing && root.mode == 2 && root.sw-look == 1: Rectangle {
         Image { x: 109px; y: 95px; width: 262px; height: 262px; source: Theme.dark ? @image-url("timers/sw/chrono-dark.png") : @image-url("timers/sw/chrono-light.png"); }
-        property <angle> sa: Math.mod(root.watch, 60) / 60 * 360deg;
-        property <angle> ma: Math.mod(root.watch / 60, 30) / 30 * 360deg;
+        property <angle> sa: root.flyback ? Math.mod(root.fly-from, 60) / 60 * 360deg * (1 - root.fly-k) : Math.mod(root.watch, 60) / 60 * 360deg;
+        property <angle> ma: root.flyback ? Math.mod(root.fly-from / 60, 30) / 30 * 360deg * (1 - root.fly-k) : Math.mod(root.watch / 60, 30) / 30 * 360deg;
+        // the newest marker falls 10 px onto the bezel in 180 ms and bounces 2 px (120 ms)
+        property <float> drop: root.lap-t < 180 ? 10 * (1 - Math.pow(root.lap-t / 180, 2)) : root.lap-t < 300 ? 2 * Math.sin(180deg * (root.lap-t - 180) / 120) : 0;
         // the minute counter's hand
         Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: TFg.c; stroke-width: 2px; stroke-line-cap: round;
             commands: "M 240 180 L " + (240 + 19 * Math.sin(parent.ma)) + " " + (180 - 19 * Math.cos(parent.ma)); }
@@ -815,11 +1179,12 @@ export component TimersPage inherits Rectangle {
         // the laps outside the dial
         for m[i] in root.lap-marks: Path {
             property <angle> a: Math.mod(m, 60) / 60 * 360deg;
+            property <float> dr: i == root.lap-marks.length - 1 ? parent.drop : 0;
             x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480;
             fill: i == root.lap-marks.length - 1 ? #FF4A1C : root.sw-faint;
-            commands: "M " + (240 + 123 * Math.sin(self.a)) + " " + (226 - 123 * Math.cos(self.a))
-                + " L " + (240 + 130 * Math.sin(self.a - 2.0deg)) + " " + (226 - 130 * Math.cos(self.a - 2.0deg))
-                + " L " + (240 + 130 * Math.sin(self.a + 2.0deg)) + " " + (226 - 130 * Math.cos(self.a + 2.0deg)) + " Z";
+            commands: "M " + (240 + (123 + self.dr) * Math.sin(self.a)) + " " + (226 - (123 + self.dr) * Math.cos(self.a))
+                + " L " + (240 + (130 + self.dr) * Math.sin(self.a - 2.0deg)) + " " + (226 - (130 + self.dr) * Math.cos(self.a - 2.0deg))
+                + " L " + (240 + (130 + self.dr) * Math.sin(self.a + 2.0deg)) + " " + (226 - (130 + self.dr) * Math.cos(self.a + 2.0deg)) + " Z";
         }
         // the sweep hand: tip at r 113, tail 24 px back, a counterweight at 18 px
         Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; stroke: #FF4A1C; stroke-width: 2.2px; stroke-line-cap: round;
@@ -853,10 +1218,18 @@ export component TimersPage inherits Rectangle {
         Text { x: 68px; y: 190px; width: 200px; height: 18px; text: "TIME"; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: root.sw-faint; vertical-alignment: center; }
         Text { x: 360px; y: 190px; width: 96px; height: 18px; text: "GAP"; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; color: root.sw-faint; vertical-alignment: center;
             horizontal-alignment: right; }
+        property <float> push: root.lap-t < 220 ? 1 - Math.pow(1 - root.lap-t / 220, 3) : 1;
         for l[i] in root.laps: row := Rectangle {
             property <bool> best: root.lap-best >= 0 && Math.abs(l - root.lap-best) < 0.0005;
-            visible: i < 5;
-            x: 24px; y: 210px + i * 30px; width: 432px; height: 27px; border-radius: 6px; background: TFg.c.with-alpha(0.05);
+            visible: i < 5 || (i == 5 && tower.push < 1);
+            x: 24px; y: 210px + (i - 1 + tower.push) * 30px; width: 432px; height: 27px; border-radius: 6px; background: TFg.c.with-alpha(0.05);
+            opacity: i == 0 ? tower.push : i == 5 ? 1 - tower.push : 1;
+            clip: true;
+            // a new best lap: a purple shimmer sweeps across its row (500 ms)
+            if i == 0 && row.best && root.lap-t < 500: Rectangle {
+                x: -140px + (parent.width + 140px) * (root.lap-t / 500); y: 0; width: 140px; height: parent.height;
+                background: @linear-gradient(90deg, #9b4dff00 0%, #9b4dff59 50%, #9b4dff00 100%);
+            }
             Rectangle { x: 4px; y: 3px; width: 30px; height: 21px; border-radius: 4px; background: row.best ? #9b4dff : TFg.c.with-alpha(Theme.dark ? 0.14 : 0.12);
                 Text { text: root.laps.length - i; font-size: 12px; font-weight: 700; color: row.best ? #ffffff : TFg.c; horizontal-alignment: center; vertical-alignment: center; } }
             Text { x: 44px; width: 220px; height: parent.height; text: root.lapfmt(l); font-family: "Space Grotesk"; font-size: 17px; font-weight: 500; color: TFg.c; vertical-alignment: center; }
@@ -869,12 +1242,14 @@ export component TimersPage inherits Rectangle {
     // 7 %), the last lap below, CHR / LAP / ▶ RUN; a tap on the LCD lights it teal for 3 s
     property <bool> lcd-glow;
     Timer { interval: 3s; running: root.lcd-glow; triggered => { root.lcd-glow = false; } }
+    property <float> lcd-k: root.lcd-glow ? 1 : 0;
+    animate lcd-k { duration: root.lcd-glow ? 60ms : 1000ms; easing: ease-out; }
     if !root.ringing && root.mode == 2 && root.sw-look == 3: lcdw := Rectangle {
         property <color> body: Theme.dark ? #1b1c20 : #ece9e2;
         property <color> bevel: Theme.dark ? #2b2c31 : #d6d2c8;
         property <color> pusher: Theme.dark ? #3a3b40 : #c9c5bb;
         property <color> print: Theme.dark ? #a7a39b : #55524c;
-        property <color> ink: root.lcd-glow ? #0b2723 : #1d2620;
+        property <color> ink: #0b2723.mix(#1d2620, root.lcd-k);
         for pp in [{ x: 36, y: 134 }, { x: 36, y: 290 }, { x: 432, y: 134 }, { x: 432, y: 290 }]: Rectangle {
             x: pp.x * 1px; y: pp.y * 1px; width: 12px; height: 22px; border-radius: 3px; background: lcdw.pusher; }
         Rectangle { x: 44px; y: 102px; width: 392px; height: 242px; border-radius: 46px; background: lcdw.body; }
@@ -885,8 +1260,8 @@ export component TimersPage inherits Rectangle {
             letter-spacing: pr.c ? 2px : 1.2px; color: pr.c ? #FF4A1C : lcdw.print;
             horizontal-alignment: pr.a == 0 ? TextHorizontalAlignment.left : pr.a == 1 ? TextHorizontalAlignment.center : TextHorizontalAlignment.right; }
         Rectangle { x: 80px; y: 140px; width: 320px; height: 166px; border-radius: 14px;
-            background: root.lcd-glow ? @linear-gradient(180deg, #7fe7d6 0%, #45c2b0 100%) : @linear-gradient(180deg, #b6c2ac 0%, #9cab95 100%);
-            border-width: 2px; border-color: root.lcd-glow ? #2e8f82 : #7d8a76;
+            background: @linear-gradient(180deg, #7fe7d6.mix(#b6c2ac, root.lcd-k) 0%, #45c2b0.mix(#9cab95, root.lcd-k) 100%);
+            border-width: 2px; border-color: #2e8f82.mix(#7d8a76, root.lcd-k);
             TouchArea { clicked => { root.lcd-glow = true; } } }
         Text { x: 98px; y: 153px; text: "CHR"; font-size: 12px; font-weight: 700; letter-spacing: 1px; color: lcdw.ink; }
         Text { x: 140px; y: 154px; text: "LAP"; font-size: 10px; font-weight: 700; letter-spacing: 1px; color: lcdw.ink; opacity: root.laps.length > 0 ? 1 : 0.08; }
@@ -896,26 +1271,80 @@ export component TimersPage inherits Rectangle {
         property <int> mins: Math.mod(Math.floor(root.watch / 60), 100);
         property <int> secs: Math.mod(Math.floor(root.watch), 60);
         property <int> cs: Math.mod(Math.floor(root.watch * 100), 100);
-        Seg7 { d: lcdw.mins >= 10 ? Math.floor(lcdw.mins / 10) : -1; x0: 102; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
-        Seg7 { d: Math.mod(lcdw.mins, 10); x0: 150; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
-        Seg7 { d: Math.floor(lcdw.secs / 10); x0: 214; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
-        Seg7 { d: Math.mod(lcdw.secs, 10); x0: 262; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; }
-        Seg7 { d: Math.floor(lcdw.cs / 10); x0: 322; y0: 210; w: 26; h: 40; t: 6; ink: lcdw.ink; }
-        Seg7 { d: Math.mod(lcdw.cs, 10); x0: 352; y0: 210; w: 26; h: 40; t: 6; ink: lcdw.ink; }
+        Seg7 { d: lcdw.mins >= 10 ? Math.floor(lcdw.mins / 10) : -1; x0: 102; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; lag: true; }
+        Seg7 { d: Math.mod(lcdw.mins, 10); x0: 150; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; lag: true; }
+        Seg7 { d: Math.floor(lcdw.secs / 10); x0: 214; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; lag: true; }
+        Seg7 { d: Math.mod(lcdw.secs, 10); x0: 262; y0: 184; w: 40; h: 66; t: 8; ink: lcdw.ink; lag: true; }
+        Seg7 { d: Math.floor(lcdw.cs / 10); x0: 322; y0: 210; w: 26; h: 40; t: 6; ink: lcdw.ink; lag: true; }
+        Seg7 { d: Math.mod(lcdw.cs, 10); x0: 352; y0: 210; w: 26; h: 40; t: 6; ink: lcdw.ink; lag: true; }
         Rectangle { x: 201.4px; y: 201.4px; width: 7.2px; height: 7.2px; border-radius: 3.6px; background: lcdw.ink; }
         Rectangle { x: 198.4px; y: 227.4px; width: 7.2px; height: 7.2px; border-radius: 3.6px; background: lcdw.ink; }
         Rectangle { x: 312px; y: 246px; width: 5px; height: 5px; background: lcdw.ink; }
         // the last lap: L n m ss cc
         property <float> last: root.laps.length > 0 ? root.laps[0] : 0;
         if root.laps.length > 0: Rectangle {
-            Seg7 { d: 10; x0: 104; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
-            Seg7 { d: Math.mod(root.laps.length, 10); x0: 124; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
-            Seg7 { d: Math.mod(Math.floor(lcdw.last / 60), 10); x0: 168; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
-            Seg7 { d: Math.floor(Math.mod(Math.floor(lcdw.last), 60) / 10); x0: 194; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
-            Seg7 { d: Math.mod(Math.floor(lcdw.last), 10); x0: 214; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
-            Seg7 { d: Math.floor(Math.mod(Math.floor(lcdw.last * 100), 100) / 10); x0: 244; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
-            Seg7 { d: Math.mod(Math.floor(lcdw.last * 100), 10); x0: 264; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; }
+            Seg7 { d: 10; x0: 104; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
+            Seg7 { d: Math.mod(root.laps.length, 10); x0: 124; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
+            Seg7 { d: Math.mod(Math.floor(lcdw.last / 60), 10); x0: 168; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
+            Seg7 { d: Math.floor(Math.mod(Math.floor(lcdw.last), 60) / 10); x0: 194; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
+            Seg7 { d: Math.mod(Math.floor(lcdw.last), 10); x0: 214; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
+            Seg7 { d: Math.floor(Math.mod(Math.floor(lcdw.last * 100), 100) / 10); x0: 244; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
+            Seg7 { d: Math.mod(Math.floor(lcdw.last * 100), 10); x0: 264; y0: 272; w: 15; h: 24; t: 3.6; ink: lcdw.ink; lag: true; }
         }
+    }
+
+    // 4 nixie tubes: mm ss cc in six tubes and three neon dots on a walnut plinth inside a dark case, the last lap below
+    if !root.ringing && root.mode == 2 && root.sw-look == 4: nix := Rectangle {
+        property <int> mins: Math.mod(Math.floor(root.watch / 60), 100);
+        property <int> secs: Math.mod(Math.floor(root.watch), 60);
+        property <int> cs: Math.mod(Math.floor(root.watch * 100), 100);
+        Rectangle { x: 22px; y: 108px; width: 436px; height: 200px; border-radius: 18px; background: Theme.dark ? #0e0c0b : #1a1614; }
+        // the plinth (board S4): walnut with grain lines and a knot, end-grain shading, a bevel highlight, the darker lower
+        // edge and a soft contact shadow
+        Path { x: 0; y: 0; width: 480px; height: 480px; viewbox-width: 480; viewbox-height: 480; fill: #000000; opacity: 0.5;
+            commands: "M 20 302 A 220 6 0 1 0 460 302 A 220 6 0 1 0 20 302 Z"; }
+        Rectangle { x: 30px; y: 264px; width: 420px; height: 34px; border-radius: 6px;
+            background: @linear-gradient(180deg, #8a5634 0%, #6b3f22 45%, #3f2313 100%);
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 1.2px; opacity: 0.42;
+                commands: "M0 4.1 L10 4.8 L20 4.7 L30 4.3 L40 4.5 L50 5.1 L60 5.0 L70 4.3 L80 3.9 L90 4.2 L100 4.2 L110 3.6 L120 3.0 L130 3.3 L140 3.8 L150 3.8 L160 3.4 L170 3.6 L180 4.4 L190 4.8 L200 4.5 L210 4.3 L220 4.8 L230 5.2 L240 4.7 L250 4.0 L260 3.9 L270 4.3 L280 4.0 L290 3.3 L300 3.0 L310 3.5 L320 3.9 L330 3.6 L340 3.3 L350 3.9 L360 4.7 L370 4.7 L380 4.3 L390 4.4 L400 5.0 L410 5.1 L420 4.4"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #c08a5c; stroke-width: 0.8px; opacity: 0.22;
+                commands: "M0 6.4 L10 7.8 L20 7.2 L30 6.9 L40 7.2 L50 7.1 L60 6.3 L70 5.5 L80 5.6 L90 5.9 L100 5.5 L110 5.0 L120 5.2 L130 5.9 L140 6.3 L150 6.1 L160 6.2 L170 7.0 L180 7.7 L190 7.5 L200 7.1 L210 7.3 L220 7.8 L230 7.4 L240 6.5 L250 6.1 L260 6.3 L270 6.3 L280 5.5 L290 4.9 L300 5.3 L310 5.8 L320 5.7 L330 5.4 L340 5.8 L350 6.8 L360 7.2 L370 6.9 L380 6.9 L390 7.6 L400 8.0 L410 7.5 L420 6.8"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 0.8px; opacity: 0.42;
+                commands: "M0 8.8 L10 9.0 L20 8.3 L30 8.3 L40 8.3 L50 7.7 L60 7.0 L70 7.0 L80 7.7 L90 7.8 L100 7.5 L110 7.7 L120 8.7 L130 9.4 L140 9.4 L150 9.3 L160 9.9 L170 10.6 L180 10.5 L190 9.9 L200 9.7 L210 9.9 L220 9.7 L230 8.7 L240 8.0 L250 8.0 L260 8.1 L270 7.6 L280 6.9 L290 7.1 L300 7.8 L310 8.0 L320 7.7 L330 8.0 L340 9.0 L350 9.7 L360 9.6 L370 9.5 L380 10.1 L390 10.7 L400 10.5 L410 9.7 L420 9.5"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 0.8px; opacity: 0.42;
+                commands: "M0 11.1 L10 10.1 L20 10.3 L30 10.8 L40 10.7 L50 10.2 L60 10.3 L70 11.0 L80 11.4 L90 11.1 L100 10.9 L110 11.5 L120 12.1 L130 11.9 L140 11.4 L150 11.5 L160 12.1 L170 12.1 L180 11.4 L190 11.0 L200 11.3 L210 11.5 L220 10.9 L230 10.2 L240 10.4 L250 10.8 L260 10.7 L270 10.1 L280 10.1 L290 10.8 L300 11.2 L310 10.9 L320 10.7 L330 11.2 L340 11.9 L350 11.8 L360 11.4 L370 11.5 L380 12.1 L390 12.2 L400 11.5 L410 11.2 L420 11.5"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #c08a5c; stroke-width: 0.8px; opacity: 0.22;
+                commands: "M0 13.5 L10 12.3 L20 13.1 L30 13.5 L40 13.3 L50 13.2 L60 13.9 L70 14.6 L80 14.5 L90 14.1 L100 14.3 L110 14.9 L120 14.8 L130 14.1 L140 13.8 L150 14.1 L160 14.2 L170 13.4 L180 12.7 L190 12.8 L200 13.1 L210 12.8 L220 12.1 L230 12.0 L240 12.6 L250 12.9 L260 12.5 L270 12.4 L280 13.1 L290 13.8 L300 13.7 L310 13.5 L320 13.9 L330 14.7 L340 14.8 L350 14.3 L360 14.2 L370 14.7 L380 14.9 L390 14.2 L400 13.6 L410 13.6 L420 13.9"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 0.8px; opacity: 0.42;
+                commands: "M0 15.8 L10 16.5 L20 17.2 L30 17.1 L40 16.8 L50 17.1 L60 17.7 L70 17.6 L80 16.8 L90 16.6 L100 16.9 L110 16.8 L120 16.0 L130 15.2 L140 15.3 L150 15.5 L160 14.9 L170 14.2 L180 14.1 L190 14.6 L200 14.7 L210 14.2 L220 14.2 L230 14.9 L240 15.6 L250 15.5 L260 15.4 L270 16.0 L280 16.9 L290 17.1 L300 16.7 L310 16.8 L320 17.5 L330 17.8 L340 17.2 L350 16.7 L360 16.9 L370 17.1 L380 16.5 L390 15.6 L400 15.4 L410 15.6 L420 15.4"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 0.8px; opacity: 0.42;
+                commands: "M0 18.2 L10 19.3 L20 19.1 L30 18.4 L40 18.3 L50 18.8 L60 18.8 L70 18.1 L80 17.6 L90 17.9 L100 18.3 L110 17.8 L120 17.2 L130 17.3 L140 17.8 L150 17.8 L160 17.3 L170 17.2 L180 17.8 L190 18.2 L200 17.9 L210 17.6 L220 18.1 L230 18.7 L240 18.7 L250 18.3 L260 18.4 L270 19.0 L280 19.3 L290 18.7 L300 18.4 L310 18.8 L320 19.2 L330 18.8 L340 18.1 L350 18.1 L360 18.6 L370 18.4 L380 17.7 L390 17.4 L400 17.8 L410 18.0 L420 17.5"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #c08a5c; stroke-width: 0.8px; opacity: 0.22;
+                commands: "M0 20.5 L10 21.0 L20 20.2 L30 19.8 L40 20.1 L50 20.3 L60 19.7 L70 19.1 L80 19.3 L90 19.8 L100 19.7 L110 19.2 L120 19.2 L130 19.9 L140 20.3 L150 20.0 L160 19.9 L170 20.5 L180 21.2 L190 21.1 L200 20.8 L210 21.0 L220 21.8 L230 21.9 L240 21.4 L250 21.2 L260 21.7 L270 22.0 L280 21.4 L290 20.8 L300 20.9 L310 21.2 L320 20.9 L330 20.1 L340 19.8 L350 20.2 L360 20.2 L370 19.6 L380 19.1 L390 19.4 L400 19.9 L410 19.6 L420 19.1"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 1.2px; opacity: 0.42;
+                commands: "M0 22.9 L10 21.5 L20 21.0 L30 21.2 L40 21.8 L50 21.7 L60 21.3 L70 21.4 L80 22.2 L90 22.6 L100 22.4 L110 22.4 L120 23.1 L130 23.8 L140 23.7 L150 23.4 L160 23.8 L170 24.6 L180 24.7 L190 24.1 L200 24.0 L210 24.4 L220 24.6 L230 24.0 L240 23.4 L250 23.5 L260 23.7 L270 23.3 L280 22.4 L290 22.1 L300 22.5 L310 22.4 L320 21.6 L330 21.1 L340 21.5 L350 21.8 L360 21.5 L370 21.0 L380 21.3 L390 22.0 L400 22.2 L410 21.8 L420 21.9"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 0.8px; opacity: 0.42;
+                commands: "M0 25.2 L10 24.4 L20 24.6 L30 25.3 L40 25.5 L50 25.1 L60 24.9 L70 25.6 L80 26.1 L90 25.8 L100 25.4 L110 25.7 L120 26.3 L130 26.2 L140 25.6 L150 25.5 L160 26.0 L170 26.2 L180 25.6 L190 25.1 L200 25.4 L210 25.8 L220 25.4 L230 24.7 L240 24.7 L250 25.2 L260 25.1 L270 24.5 L280 24.2 L290 24.6 L300 25.0 L310 24.6 L320 24.1 L330 24.4 L340 25.0 L350 25.0 L360 24.5 L370 24.6 L380 25.3 L390 25.6 L400 25.2 L410 25.0 L420 25.5"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #c08a5c; stroke-width: 0.8px; opacity: 0.22;
+                commands: "M0 27.6 L10 27.8 L20 28.5 L30 28.9 L40 28.6 L50 28.2 L60 28.5 L70 29.1 L80 28.9 L90 28.2 L100 28.1 L110 28.6 L120 28.6 L130 27.9 L140 27.4 L150 27.7 L160 28.0 L170 27.4 L180 26.7 L190 26.7 L200 27.2 L210 27.0 L220 26.3 L230 26.1 L240 26.6 L250 26.9 L260 26.5 L270 26.1 L280 26.5 L290 27.2 L300 27.1 L310 26.7 L320 26.9 L330 27.6 L340 28.0 L350 27.6 L360 27.5 L370 28.1 L380 28.7 L390 28.5 L400 28.1 L410 28.4 L420 29.0"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 0.8px; opacity: 0.42;
+                commands: "M0 29.9 L10 31.3 L20 31.7 L30 31.3 L40 30.6 L50 30.5 L60 30.8 L70 30.7 L80 29.9 L90 29.4 L100 29.6 L110 29.8 L120 29.2 L130 28.5 L140 28.6 L150 29.0 L160 28.8 L170 28.1 L180 28.0 L190 28.6 L200 28.9 L210 28.5 L220 28.3 L230 28.8 L240 29.5 L250 29.4 L260 29.1 L270 29.4 L280 30.3 L290 30.6 L300 30.3 L310 30.3 L320 31.0 L330 31.5 L340 31.3 L350 30.9 L360 31.2 L370 31.8 L380 31.7 L390 31.1 L400 30.9 L410 31.4 L420 31.4"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: transparent; stroke: #2c170b; stroke-width: 1px; opacity: 0.45;
+                commands: "M 283 17 A 9 3.2 0 1 0 301 17 A 9 3.2 0 1 0 283 17 Z"; }
+            Path { x: 0; y: 0; width: 420px; height: 34px; viewbox-width: 420; viewbox-height: 34; fill: #2c170b; opacity: 0.45;
+                commands: "M 288 17 A 4 1.4 0 1 0 296 17 A 4 1.4 0 1 0 288 17 Z"; }
+            Rectangle { border-radius: 6px; background: @linear-gradient(90deg, #00000061 0%, #00000000 5%, #00000000 95%, #0000006b 100%); }
+            Rectangle { x: 4px; y: 0; width: 412px; height: 1.8px; border-radius: 1px; background: #ffffff3d; }
+            Rectangle { x: 0; y: 32px; width: 420px; height: 2px; border-radius: 1px; background: #00000066; } }
+        property <bool> cycling: root.flyback && (animation-tick() - root.fly-t0) < 400ms;
+        for x[i] in [47, 107, 183, 243, 319, 379]: NixieTube { x: x * 1px; y: 124px; n: i;
+            d: nix.cycling ? Math.mod(Math.floor((animation-tick() - root.fly-t0) / 40ms) + i, 10)
+                : i == 0 ? Math.floor(nix.mins / 10) : i == 1 ? Math.mod(nix.mins, 10) : i == 2 ? Math.floor(nix.secs / 10) : i == 3 ? Math.mod(nix.secs, 10)
+                : i == 4 ? Math.floor(nix.cs / 10) : Math.mod(nix.cs, 10); }
+        for dt in [{ x: 167, y: 164 }, { x: 167, y: 202 }, { x: 303, y: 222 }]: Rectangle { x: dt.x * 1px; y: dt.y * 1px; width: 9px; height: 9px; border-radius: 4.5px;
+            background: #ffb35c; drop-shadow-blur: 10px; drop-shadow-color: #ff6a00; }
+        if root.laps.length > 0: Text { x: 0; y: 318px; width: root.width; height: 26px; horizontal-alignment: center; vertical-alignment: center;
+            text: "LAP " + root.laps.length + "   " + root.lapfmt(root.laps[0]); font-size: 20px; font-weight: 300; letter-spacing: 1px; color: #ffb35c; }
     }
 
     // ---------------------------------------------------------------- stopwatch
@@ -985,8 +1414,21 @@ export component TimersPage inherits Rectangle {
         }
     }
 
+    // T1: the ring bursts into 8 dots flying out from where the one big ring was (300 ms)
+    if root.pre-ring && root.ring-theme == 0: Rectangle {
+        property <float> k: clamp(root.ring-t / 300, 0, 1);
+        property <float> e: 1 - Math.pow(1 - self.k, 2);
+        for d in 8: Rectangle {
+            property <angle> a: d * 45deg - 90deg;
+            property <float> r: 114 + 70 * parent.e;
+            property <float> s: 12 * (1 - 0.5 * parent.k);
+            x: (240 + self.r * Math.cos(self.a) - self.s / 2) * 1px; y: root.top + (128 + self.r * Math.sin(self.a) - self.s / 2) * 1px;
+            width: self.s * 1px; height: self.s * 1px; border-radius: self.s / 2 * 1px; background: root.ring-tint; opacity: 1 - parent.k;
+        }
+    }
+
     // ---------------------------------------------------------------- ringing: full screen until stop
-    if root.ringing: Rectangle {
+    if root.ring-shown: Rectangle {
         background: @radial-gradient(circle, root.ring-tint.mix(#000000, 0.55 + 0.25 * root.pulse) 0%, root.ring-tint.mix(#000000, 0.22) 100%);
         if !root.ring-alarm: Rectangle { x: (root.width - 112px) / 2; y: 70px; width: 112px; height: 112px; border-radius: 56px; background: #ffffff26;
             Icon { width: parent.width; height: parent.height; text: "\u{F13AB}"; font-size: 60px; color: #ffffff; } }
@@ -1033,7 +1475,7 @@ export component TimersPage inherits Rectangle {
         property <length> dy: 56px;                       // drums
         property <length> ty: self.dy + 120px + 14px;     // days
         property <length> sy: self.ty + 40px + 18px;      // sounds (two lines, a third for the one set in Home Assistant)
-        property <length> ly: root.edit-timer ? self.dy + 120px + 18px : self.sy + (self.ha ? 112px : 72px) + 18px;      // label
+        property <length> ly: root.edit-timer ? self.dy + 120px + 18px : self.sy + 48px + 18px;      // label
         x: 0; y: root.height - self.height; width: root.width; height: self.ly + 44px + 14px;
         border-top-left-radius: 24px; border-top-right-radius: 24px; background: Theme.sheet;
         Rectangle { x: (parent.width - 40px) / 2; y: 8px; width: 40px; height: 4px; border-radius: 2px; background: TFg.c.with-alpha(0.25); }
@@ -1088,27 +1530,18 @@ export component TimersPage inherits Rectangle {
                 Text { width: parent.width; height: parent.height; text: d; font-size: 15px; font-weight: 600; color: root.edit-days[i] ? #ffffff : TFg.c.with-alpha(0.70); horizontal-alignment: center; vertical-alignment: center; }
             }
         }
-        // sound: the built-in ones (a tap plays it), the info button, the one set in Home Assistant
-        if !root.edit-timer: HorizontalLayout {
-            x: 16px; y: ed.sy; height: 32px; alignment: start; spacing: 6px;
-            for s[i] in [root.sounds[0], root.sounds[1], root.sounds[2]]: Chip { text: s; on: root.edit-sound == i; fill: root.edit-tint;
-                TouchArea { clicked => { Act.act("alarm.sound", i); } } }
-            if root.ha-sounds: Rectangle { width: 32px; height: 32px; border-radius: 16px; background: root.edit-info ? TFg.c.with-alpha(0.18) : TFg.c.with-alpha(0.08);
-                Icon { width: parent.width; height: parent.height; text: "\u{F02FD}"; font-size: 18px; color: TFg.c.with-alpha(0.80); }
-                TouchArea { clicked => { Act.act("alarm.info", ""); } } }
+        // sound: a dropdown of the built-in ones (picking one plays it) and the one set in Home Assistant; the info button
+        if !root.edit-timer: Dropdown {
+            x: 16px; y: ed.sy; width: parent.width - 32px - (root.ha-sounds ? 44px : 0px); up: true;
+            options: ed.ha ? [root.sounds[0], root.sounds[1], root.sounds[2], root.sounds[3], root.sounds[4], root.sounds[5], root.edit-ha-sound]
+                : [root.sounds[0], root.sounds[1], root.sounds[2], root.sounds[3], root.sounds[4], root.sounds[5]];
+            selected: root.edit-sound;
+            picked(i) => { Act.act("alarm.sound", i); }
         }
-        if !root.edit-timer: HorizontalLayout {
-            x: 16px; y: ed.sy + 40px; height: 32px; alignment: start; spacing: 6px;
-            for s[i] in [root.sounds[3], root.sounds[4], root.sounds[5]]: Chip { text: s; on: root.edit-sound == i + 3; fill: root.edit-tint;
-                TouchArea { clicked => { Act.act("alarm.sound", i + 3); } } }
-        }
-        if ed.ha: Rectangle {
-            x: 16px; y: ed.sy + 80px; width: min(hs.preferred-width + 48px, parent.width - 32px); height: 32px; border-radius: 16px;
-            background: root.edit-sound == root.sounds.length ? root.edit-tint : transparent; border-width: root.edit-sound == root.sounds.length ? 0px : 1px; border-color: TFg.c.with-alpha(0.25);
-            Icon { x: 12px; width: 18px; height: parent.height; text: "\u{F07D0}"; font-size: 16px; color: root.edit-sound == root.sounds.length ? #ffffff : TFg.c; }
-            hs := Text { x: 34px; width: parent.width - 48px; height: parent.height; text: root.edit-ha-sound; font-size: 14px; font-weight: 500; color: root.edit-sound == root.sounds.length ? #ffffff : TFg.c; vertical-alignment: center; overflow: elide; }
-            TouchArea { clicked => { Act.act("alarm.sound", root.sounds.length); } }
-        }
+        if !root.edit-timer && root.ha-sounds: Rectangle { x: parent.width - 16px - 36px; y: ed.sy + 6px; width: 36px; height: 36px; border-radius: 18px;
+            background: root.edit-info ? TFg.c.with-alpha(0.18) : TFg.c.with-alpha(0.08);
+            Icon { width: parent.width; height: parent.height; text: "\u{F02FD}"; font-size: 18px; color: TFg.c.with-alpha(0.80); }
+            TouchArea { clicked => { Act.act("alarm.info", ""); } } }
         // label: a tap opens the keyboard
         Rectangle {
             x: 16px; y: ed.ly; width: parent.width - 32px; height: 44px; border-radius: 14px; background: TFg.c.with-alpha(0.07);

@@ -270,7 +270,7 @@ def screensaver_config(stored: Any) -> dict[str, Any]:
         "to": _time(s.get("to"), DEFAULT_SCREENSAVER["to"]),
         "light_entity": s["light_entity"] if isinstance(s.get("light_entity"), str) else "",
         # the clock on it
-        "face": _int(s.get("face"), 1, 0, 7),
+        "face": _int(s.get("face"), 1, 0, 10),
         "seconds": s.get("seconds", True) is not False,
         "date": s.get("date", True) is not False,
         "weather": s.get("weather", True) is not False,

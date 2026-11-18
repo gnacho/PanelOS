@@ -83,6 +83,35 @@ export component QuickPage inherits Rectangle {
     in property <image> screw;
 
     // ------------------------------------------------------------------ 0 tiles
+    // 25.Q1: the border of a w x h card (corner r) drawn clockwise from the top middle up to the fraction p
+    pure function ring(p: float, w: float, h: float, r: float) -> string {
+        "M " + (w / 2) + " 0 L " + (w / 2 + min(p * (2 * (w - 2 * r) + 2 * (h - 2 * r) + 6.2832 * r), w / 2 - r)) + " 0"
+            + root.ring2(p * (2 * (w - 2 * r) + 2 * (h - 2 * r) + 6.2832 * r) - (w / 2 - r), w, h, r)
+    }
+    pure function arc-to(d: float, r: float, cx: float, cy: float, a0: float) -> string {
+        " A " + r + " " + r + " 0 0 1 " + (cx + r * Math.cos((a0 + min(d, 1.5708 * r) / r) * 1rad)) + " " + (cy + r * Math.sin((a0 + min(d, 1.5708 * r) / r) * 1rad))
+    }
+    pure function ring2(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : root.arc-to(d, r, w - r, r, -1.5708) + root.ring3(d - 1.5708 * r, w, h, r)
+    }
+    pure function ring3(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : " L " + w + " " + (r + min(d, h - 2 * r)) + root.ring4(d - (h - 2 * r), w, h, r)
+    }
+    pure function ring4(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : root.arc-to(d, r, w - r, h - r, 0) + root.ring5(d - 1.5708 * r, w, h, r)
+    }
+    pure function ring5(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : " L " + (w - r - min(d, w - 2 * r)) + " " + h + root.ring6(d - (w - 2 * r), w, h, r)
+    }
+    pure function ring6(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : root.arc-to(d, r, r, h - r, 1.5708) + root.ring7(d - 1.5708 * r, w, h, r)
+    }
+    pure function ring7(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : " L 0 " + (h - r - min(d, h - 2 * r)) + root.ring8(d - (h - 2 * r), w, h, r)
+    }
+    pure function ring8(d: float, w: float, h: float, r: float) -> string {
+        d <= 0 ? "" : root.arc-to(d, r, r, r, 3.1416) + (d - 1.5708 * r <= 0 ? "" : " L " + (r + min(d - 1.5708 * r, w / 2 - r)) + " 0")
+    }
     if root.look == 0: tlook := Rectangle {
         Text { x: 20px; y: 46px; width: 300px; height: 30px; text: root.title; font-size: 20px; font-weight: 700; color: Theme.text; vertical-alignment: center; overflow: elide; }
         Rectangle { x: parent.width - 108px; y: 46px; width: 88px; height: 30px; border-radius: 15px;
@@ -103,6 +132,15 @@ export component QuickPage inherits Rectangle {
                 clicked => { if !tile.held { Act.act("quick.toggle", i); } }
             }
             Timer { interval: 500ms; running: tile-touch.pressed && !tile.held; triggered => { tile.held = true; Act.act("quick.details", i); } }
+            // the long press fills the border clockwise (0.5 s); it starts after a short touch (90 ms) so a tap shows nothing
+            property <duration> press-t0;
+            changed pressing => { if tile.pressing { tile.press-t0 = animation-tick(); } }
+            property <bool> pressing: tile-touch.pressed && !tile.held;
+            property <float> press-p: tile.pressing ? clamp((animation-tick() - tile.press-t0 - 90ms) / 410ms, 0, 1) : 0;
+            if tile.press-p > 0.001: Path { x: -1px; y: -1px; width: parent.width + 2px; height: parent.height + 2px;
+                viewbox-x: -1; viewbox-y: -1; viewbox-width: parent.width / 1px + 2; viewbox-height: parent.height / 1px + 2;
+                fill: transparent; stroke: t.gone ? Theme.muted : t.tint; stroke-width: 2.5px; stroke-line-cap: round;
+                commands: root.ring(tile.press-p, parent.width / 1px, parent.height / 1px, 16); }
             // M27: switching on, the icon's glow grows and settles (200 ms)
             property <float> bloom: t.on && !t.gone ? 1 : 0;
             animate bloom { duration: 200ms; easing: cubic-bezier(0.34, 1.8, 0.64, 1); }
@@ -237,6 +275,17 @@ export component QuickPage inherits Rectangle {
             property <bool> cascading;
             changed on-now => { if ch.on-now { ch.cas-t0 = animation-tick(); ch.cascading = true; } }
             Timer { interval: 120ms; running: ch.cascading; triggered => { ch.cascading = false; } }
+            // 25.Q2: after a level change the meter's peak dot (the top lit step) falls back slowly, a step every 300 ms
+            property <float> peak-v;
+            property <duration> peak-t0;
+            property <bool> peaking;
+            Timer { interval: 3s; running: ch.peaking; triggered => { ch.peaking = false; } }
+            property <float> meter: t.on ? (t.dim ? t.value : 1) : 0;
+            changed meter => { ch.peak-v = max(ch.meter, ch.peak-shown); ch.peak-t0 = animation-tick(); ch.peaking = true; }
+            property <float> peak-shown: ch.peaking ? max(ch.meter, ch.peak-v - (animation-tick() - ch.peak-t0) / 3000ms) : ch.meter;
+            property <bool> peak-on: ch.peaking && ch.peak-shown > ch.meter + 0.05;
+            if ch.peak-on: Rectangle { x: 20px; y: 40px + (9 - Math.min(9, Math.max(0, Math.ceil(ch.peak-shown * 10) - 1))) * 9px; width: 12px; height: 6px;
+                border-radius: 1px; background: ch.peak-shown > 0.8 ? #ff6b6b : ch.peak-shown > 0.6 ? #ffd43b : #69db7c; opacity: 0.85; }
             for k in 10: Rectangle { x: 20px; y: 40px + (9 - k) * 9px; width: 12px; height: 6px; border-radius: 1px;
                 background: (t.on && (t.dim ? t.value * 10 > k : true) && (!ch.cascading || (animation-tick() - ch.cas-t0) >= k * 10ms))
                     ? (k >= 8 ? #ff6b6b : k >= 6 ? #ffd43b : #69db7c) : #23272b; }
@@ -273,7 +322,14 @@ export component QuickPage inherits Rectangle {
                 }
                 moved => { ch.drag-f = max(0, min(1, 1 - (self.mouse-y - 14px) / 170px)); }
             }
-            if !t.gone && (t.dim || ch.two): Image { x: 4px; y: 140px + (1 - ch.level) * 170px - 13px; width: 44px; height: 30px; source: root.fader; }
+            // 25.Q2: the fader clicks at 0, 50 and 100 % (a 1 px snap)
+            property <int> detent: ch.level < 0.015 ? 0 : ch.level > 0.985 ? 2 : Math.abs(ch.level - 0.5) < 0.015 ? 1 : -1;
+            property <bool> snapping;
+            property <duration> snap-t0;
+            changed detent => { if ch.detent >= 0 && fd.pressed { ch.snap-t0 = animation-tick(); ch.snapping = true; } }
+            Timer { interval: 60ms; running: ch.snapping; triggered => { ch.snapping = false; } }
+            property <length> snap: ch.snapping && animation-tick() - ch.snap-t0 < 40ms ? 1px : 0px;
+            if !t.gone && (t.dim || ch.two): Image { x: 4px; y: 140px + (1 - ch.level) * 170px - 13px + ch.snap; width: 44px; height: 30px; source: root.fader; }
             Text { x: 0; y: 318px; width: parent.width; text: t.short; font-family: "DejaVu Sans Mono"; font-size: 12px; color: t.on ? #e9ecef : #868e96; horizontal-alignment: center; }
             if t.has-tape: Image { x: (parent.width - self.width) / 2; y: 334px + (34px - self.height) / 2;
                 width: t.tape.width * 1px; height: t.tape.height * 1px; source: t.tape; }
@@ -283,6 +339,9 @@ export component QuickPage inherits Rectangle {
     // ------------------------------------------------------------------ 2 flight deck
     // the panel bitmap (deckgen.py) has the plates, fasteners, title plate and wear at the 4 x 2 switch places
     if root.look == 2: deck := Rectangle {
+        // 25.Q3: opening the page runs a lamp test (all on for 300 ms)
+        property <bool> lamp-test: true;
+        Timer { interval: 300ms; running: deck.lamp-test; triggered => { deck.lamp-test = false; } }
         Image { x: 0; y: 0; width: 480px; height: 480px; source: root.deck-panel; }
         // the title, engraved into the brushed plate
         Text { x: 52px; y: 53px; width: 286px; height: 26px; text: root.title.to-uppercase(); font-size: 13px; font-weight: 800; color: #ffffff59;
@@ -300,8 +359,9 @@ export component QuickPage inherits Rectangle {
         }
         for t[i] in root.tiles: dk := Rectangle {
             x: 20px + mod(i, 4) * 112px; y: 104px + floor(i / 4) * 168px; width: 104px; height: 156px;
-            property <float> lit: (dk.pending ? dk.to-up : t.on) && !t.gone ? 1 : 0;
-            animate lit { duration: 100ms; easing: ease-out; }
+            property <float> lit: deck.lamp-test || ((dk.pending ? dk.to-up : t.on) && !t.gone) ? 1 : 0;
+            // put out from outside (all off): left to right, 30 ms apart; a lamp of one's own throw goes out at once
+            animate lit { duration: 100ms; delay: !dk.throwing && !dk.pending && !t.on ? i * 30ms : 0ms; easing: ease-out; }
             property <float> up: t.on ? 1 : 0;
             // the throw: started by a tap (or a drag past the middle); the toggle is sent at the click (205 ms); until
             // Home Assistant confirms, the lever keeps the new side (at most 3 s)

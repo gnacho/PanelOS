@@ -36,6 +36,8 @@ struct State {
     next_change: f64,
     /// a window fading in or out now: until when (then the change goes into the lit layer)
     fading: Option<f64>,
+    /// windows a tap turned on or off (spec 25.H2): left so until then
+    held: Vec<(usize, f64)>,
 }
 
 thread_local!(static STATE: std::cell::RefCell<State> = std::cell::RefCell::new(State::default()));
@@ -200,8 +202,15 @@ pub fn tick(ui: &AppWindow, theme: i32, light: bool, mood: i32, sun_el: f32, hou
         let lamps = st.conds.iter().find(|(k, _)| k == cond_name(mood)).map(|(_, v)| *v).unwrap_or(0.0);
         let s = share(night, hour, lamps);
         // a window is wanted lit when its own place in the order is under its kind's share
-        let want: Vec<bool> = st.wins.iter().zip(&st.rank).map(|(w, r)| *r < w.p * s).collect();
         let t = now();
+        st.held.retain(|(_, until)| *until > t);
+        let held: Vec<usize> = st.held.iter().map(|(i, _)| *i).collect();
+        let mut want: Vec<bool> = st.wins.iter().zip(&st.rank).map(|(w, r)| *r < w.p * s).collect();
+        for &i in &held {
+            if i < want.len() {
+                want[i] = st.lit[i];
+            }
+        }
         if fresh || !ui.get_win_on() {
             // the first picture: as it should be now, no fades (the page shows it as a whole)
             st.lit = want;
@@ -269,5 +278,39 @@ pub fn tick(ui: &AppWindow, theme: i32, light: bool, mood: i32, sun_el: f32, hou
             st.fading = Some(t + 1.0);
         }
         st.next_change = t + if diff.is_empty() { 9.0 } else { 2.5 } + (random() % 3000) as f64 / 1000.0;
+    });
+}
+
+/// A tap on the city at (x, y) of the window layer (528 x 528): the window there lights or goes dark, fading like the
+/// others, and the street leaves it so for a minute (spec 25.H2).
+pub fn tap(ui: &AppWindow, x: f32, y: f32) {
+    STATE.with(|cell| {
+        let mut st = cell.borrow_mut();
+        if st.wins.is_empty() || st.fading.is_some() || !ui.get_win_on() {
+            return;
+        }
+        let near = |w: &Win| x >= w.x - 4.0 && x <= w.x + w.w + 4.0 && y >= w.y - 4.0 && y <= w.y + w.h + 4.0;
+        let Some(i) = st.wins.iter().position(near) else {
+            return;
+        };
+        let t = now();
+        if st.lit[i] {
+            st.lit[i] = false;
+            let (img, x, y, w, h) = render(&st, Some(i));
+            ui.set_win_out(img);
+            ui.set_win_out_rect(WinRect { x, y, w, h });
+            ui.set_win_base(render(&st, None).0);
+            ui.set_win_out_show(false);
+        } else {
+            let (img, x, y, w, h) = render(&st, Some(i));
+            ui.set_win_in(img);
+            ui.set_win_in_rect(WinRect { x, y, w, h });
+            ui.set_win_in_show(true);
+            st.lit[i] = true;
+        }
+        st.fading = Some(t + 1.0);
+        st.held.retain(|(j, _)| *j != i);
+        st.held.push((i, t + 60.0));
+        eprintln!("nspanel-app: city window tapped");
     });
 }

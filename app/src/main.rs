@@ -3024,6 +3024,13 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
         "timers.stop" => stop_ringing(ui, "tap"),
         "timers.more" => ring_more(ui),
         w if w.starts_with("alarms.") || w.starts_with("alarm.") => alarms::act(ui, w, value),
+        w if w.starts_with("synth.") => synth::act(ui, w, value),
+        "home.window" => {
+            let mut it = value.split(':').map(|v| v.parse::<f32>().unwrap_or(-1.0));
+            if let (Some(x), Some(y)) = (it.next(), it.next()) {
+                windows::tap(ui, x, y);
+            }
+        }
         w if w.starts_with("timers.") || w.starts_with("watch.") => timers_act(ui, w, value),
         "voice.close" => ui.set_voice_on(false),
         // the bell: the notifications page, or the list as a temporary page when the panel has none
@@ -3631,6 +3638,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     overlay(&mut s.panel_config, &dev);
                 });
                 apply_panel_config(&ui);
+            }
+            // Development: the screensaver at once ({"saver": true}; a tap or "saver.wake" ends it)
+            if v.get("saver").and_then(Value::as_bool) == Some(true) {
+                with_state(|s| start_screensaver(&ui, s));
             }
             if v.get("dev_screens").and_then(Value::as_bool) == Some(false) {
                 with_state(|s| s.dev_screens = false);

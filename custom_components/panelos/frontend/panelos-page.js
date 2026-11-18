@@ -56,7 +56,7 @@ const TYPE_ORDER = ["home", "quick", "music", "timers", "thermostat", "camera", 
 // Looks per page type, in the panel's order (index = the page's variant).
 const LOOKS = {
   weather: ["Cards", "Living photo"],
-  clock: ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Wandering", "Split-flap"],
+  clock: ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Wandering", "Split-flap", "Nixie", "LCD quartz", "Twin-bell"],
   music: ["Plain", "Full cover", "Turntable", "Cassette", "Half cassette"],
   timers: ["Plain", "Kitchen timer", "Hourglass", "Synthwave", "Flip clock"],
   thermostat: ["Dial", "Remote control", "Wall thermostat", "Synthwave"],
@@ -94,8 +94,8 @@ const PAGER_FINISH = [
 ];
 const TIMER_FUNCTIONS = [["timer", "Timers"], ["alarm", "Alarms"], ["stopwatch", "Stopwatch"]];
 // the stopwatch's and the alarms' own looks (spec 24)
-const SW_LOOKS = ["Plain", "Chronograph", "Timing tower"];
-const ALARM_LOOKS = ["Plain"];
+const SW_LOOKS = [[0, "Plain"], [1, "Chronograph"], [2, "Timing tower"], [3, "LCD watch"], [4, "Nixie"]];
+const ALARM_LOOKS = [[0, "Plain"], [1, "Twin-bell"], [2, "Sunrise"], [3, "Clock radio"], [4, "24-hour dial"]];
 const VOICE_LOOKS = ["Plain", "Terminal", "Comic", "Oscilloscope"];
 
 // Sounds. Stored values: "auto" (the place's default), "lib:<id>" (a PanelOS sound, {STATIC}/sounds/<id>.mp3
@@ -121,7 +121,7 @@ const OWN_CRIT_DOMAINS = ["binary_sensor", "sensor", "lock", "input_boolean", "s
 // kind: 0 clock, 1 date, 2 weather now, 3 next event, 4 forecast curve,
 //   5 hourly forecast, 6 daily forecast, 7 music.
 // style: clock 0 digital, 1 big digits + seconds line, 2 round, 3 square,
-//   4 minimal, 5 numerals, 6 split-flap, 7 the time in words; music: the
+//   4 minimal, 5 numerals, 6 split-flap, 7 the time in words, 8 nixie, 9 LCD quartz, 10 twin-bell; music: the
 //   scroll speed of long titles 1..5 (with opts bit 1); others 0.
 // opts (bits): clock 1 seconds, 2 date, 4 weather, 8 next event; date 1 year,
 //   2 week number; weather now 1 condition, 2 high / low, 4 rain chance,
@@ -139,12 +139,22 @@ const WIDGETS = {
   6: { name: "Daily forecast", icon: "calendar-week", min: [3, 1], def: [4, 1], opts: 1, bits: [[1, "Chance of rain"]] },
   7: { name: "Music", icon: "music", min: [1, 1], def: [4, 1], opts: 0, bits: [] },
 };
-const CLOCK_STYLES = ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Split-flap", "In words"];
+const CLOCK_STYLES = ["Digital", "Big digits", "Round", "Square", "Minimal", "Numerals", "Split-flap", "In words", "Nixie", "LCD quartz", "Twin-bell"];
+// The smallest size of a widget in cells [w, h]: the nixie clock needs 3 x 1 (4 x 1 with seconds), the LCD 2 x 1 (its
+// case shows from 3 x 2), the twin-bell 2 x 2; other widgets as WIDGETS says.
+function widgetMin(wd) {
+  if (wd.kind === 0) {
+    if (wd.style === 8) return [((wd.opts || 0) & 1) ? 4 : 3, 1];
+    if (wd.style === 9) return [2, 1];
+    if (wd.style === 10) return [2, 2];
+  }
+  return (WIDGETS[wd.kind] || WIDGETS[0]).min;
+}
 // The screensaver's clock faces (the panel's ClockFace styles 0..7).
 // The letter weights the panel draws (clocks, widgets, the screensaver): one slider over these four
 // everywhere, live on the panel while it moves.
 const WEIGHTS = [[300, "Light"], [400, "Regular"], [600, "Semibold"], [800, "Bold"]];
-const SAVER_FACES = ["Big clock", "Huge digits", "Round", "Square", "Minimal", "Numerals", "Wandering", "Split-flap"];
+const SAVER_FACES = ["Big clock", "Huge digits", "Round", "Square", "Minimal", "Numerals", "Wandering", "Split-flap", "Nixie", "LCD quartz", "Twin-bell"];
 // The panel's own layout when a weather page has none (as the panel draws it).
 const DEFAULT_ITEMS = [
   { kind: 0, col: 0, row: 0, w: 4, h: 1, style: 1, opts: 1 },
@@ -382,6 +392,12 @@ const ART = {
     () => svgWrap(`<circle cx="60" cy="60" r="42" fill="none" stroke="#6b6a67" stroke-width="1.5"/>${txt(60, 32, 12, "#f5f3ee", "12")}${txt(91, 64, 12, "#f5f3ee", "3")}${txt(60, 96, 12, "#f5f3ee", "6")}${txt(29, 64, 12, "#f5f3ee", "9")}<line x1="60" y1="60" x2="60" y2="40" stroke="#f5f3ee" stroke-width="3" stroke-linecap="round"/><line x1="60" y1="60" x2="76" y2="66" stroke="#f5f3ee" stroke-width="2" stroke-linecap="round"/>`, "#0e0f10"),
     () => svgWrap(`${txt(40, 46, 18, "#f5f3ee", "12:45")}`, "#000"),
     () => svgWrap(`${[14, 62].map((x) => `<rect x="${x}" y="34" width="44" height="52" rx="6" fill="#2a2b2e"/>`).join("")}${txt(36, 74, 32, "#f5f3ee", "12", 600)}${txt(84, 74, 32, "#f5f3ee", "45", 600)}<line x1="14" y1="60" x2="106" y2="60" stroke="#0e0f10" stroke-width="2"/>`, "#0e0f10"),
+    // 8 nixie: four tubes on a walnut plinth
+    () => svgWrap(`${[14, 38, 66, 90].map((x, i) => `<rect x="${x}" y="30" width="18" height="50" rx="9" fill="rgba(24,14,8,.5)" stroke="rgba(255,255,255,.3)"/>${txt(x + 9, 66, 22, "#ff8a2a", "1245"[i])}`).join("")}<circle cx="60" cy="46" r="2" fill="#ffb35c"/><circle cx="60" cy="60" r="2" fill="#ffb35c"/><rect x="8" y="82" width="104" height="12" rx="3" fill="#6b3f22"/>`, "#0e0f10"),
+    // 9 LCD quartz: the resin case, the green LCD
+    () => svgWrap(`<rect x="10" y="26" width="100" height="68" rx="16" fill="#1b1c20"/><rect x="20" y="36" width="80" height="48" rx="6" fill="#a9b7a0"/>${txt(60, 72, 24, "#1d2620", "12:45", 700)}`, "#0e0f10"),
+    // 10 twin-bell: the red clock with two bells
+    () => svgWrap(`<circle cx="36" cy="30" r="12" fill="#ff4a1c"/><circle cx="84" cy="30" r="12" fill="#ff4a1c"/><circle cx="60" cy="64" r="38" fill="#ff4a1c"/><circle cx="60" cy="64" r="30" fill="#f5f3ee"/><line x1="60" y1="64" x2="60" y2="44" stroke="#101114" stroke-width="4" stroke-linecap="round"/><line x1="60" y1="64" x2="76" y2="70" stroke="#101114" stroke-width="3" stroke-linecap="round"/>`, "#0e0f10"),
   ],
   music: [
     () => { const [g, d] = grad([[0, "#8e5bd0"], [1, "#3fb6c5"]], false); return svgWrap(`${d}<rect x="16" y="16" width="56" height="56" rx="8" fill="url(#${g})"/>${bars(16, 82, [70, 44], "#f5f3ee", 8, 4)}<rect x="16" y="100" width="88" height="3" rx="1.5" fill="#3a3c40"/><rect x="16" y="100" width="40" height="3" rx="1.5" fill="#f5f3ee"/>`, "#121314"); },
@@ -3095,12 +3111,17 @@ class PanelOSPage extends HTMLElement {
         this._setPageOption(p, i, "functions", TIMER_FUNCTIONS.map(([x]) => x).filter((x) => next.includes(x)));
       }, { label: l }))),
       (page.variant || 0) === 3 ? this._row("Scene", this._seg(SW_SCENES.map((n, k) => [k, n]), Number.isInteger(o.scene) ? o.scene : 0, (v) => this._setPageOption(p, i, "scene", v), { label: "Scene" })) : null,
-      fns.includes("stopwatch") ? this._row("Stopwatch look", this._dropdown(SW_LOOKS.map((n, k) => [k, n]), Number.isInteger(o.sw_look) ? o.sw_look : 0, (v) => this._setPageOption(p, i, "sw_look", v), { label: "Stopwatch look" })) : null,
-      fns.includes("alarm") && ALARM_LOOKS.length > 1 ? this._row("Alarm look", this._dropdown(ALARM_LOOKS.map((n, k) => [k, n]), Number.isInteger(o.alarm_look) ? o.alarm_look : 0, (v) => this._setPageOption(p, i, "alarm_look", v), { label: "Alarm look" })) : null,
       this._soundRow("Timer sound", o.sound, { def: TIMER_LOOK_SOUND[page.variant || 0] || TIMER_LOOK_SOUND[0], defNote: "This look's own sound", title: "Timer sound", p },
         (v) => this._setPageOption(p, i, "sound", v), { info: "Each look has its own sound; another one, or your own, can be chosen." }),
       this._row("A colour for each timer", this._toggle(o.colourful !== false, (v) => this._setPageOption(p, i, "colourful", v), { label: "A colour for each timer" }), { sub: o.colourful === false ? "Every timer in the panel's colour" : null }),
       o.colourful !== false ? this._timerColours(p, i, o) : null),
+    // the stopwatch's and the alarms' own looks, as the panel draws them
+    fns.includes("stopwatch") ? this._card("Stopwatch look", {},
+      this._lookPicker(SW_LOOKS.map(([k, n]) => ({ id: k, name: n, pic: this._lookPic(p, `sw-${k}`, () => icon("timer-outline")) })),
+        Number.isInteger(o.sw_look) ? o.sw_look : 0, (v) => this._setPageOption(p, i, "sw_look", v))) : null,
+    fns.includes("alarm") ? this._card("Alarm look", {},
+      this._lookPicker(ALARM_LOOKS.map(([k, n]) => ({ id: k, name: n, pic: this._lookPic(p, `alarm-${k}`, () => icon("alarm")) })),
+        Number.isInteger(o.alarm_look) ? o.alarm_look : 0, (v) => this._setPageOption(p, i, "alarm_look", v))) : null,
     fns.includes("alarm") ? this._alarmsCard(p, i) : null];
   }
 
@@ -3416,7 +3437,8 @@ class PanelOSPage extends HTMLElement {
     let nw = wd.w;
     let nh = wd.h;
     let moved = false;
-    const min = (WIDGETS[wd.kind] || WIDGETS[0]).min;
+    const min = widgetMin(wd);
+    let tooSmall = false;
     this._dragging = true;
     const place = (ok) => {
       box.classList.toggle("bad", !ok);
@@ -3427,7 +3449,13 @@ class PanelOSPage extends HTMLElement {
       const dy = ev.clientY - sy;
       if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
       if (mode === "move") { nx = Math.round(wd.col + dx / g.cw); ny = Math.round(wd.row + dy / g.ch); }
-      else { nw = Math.max(min[0], Math.round(wd.w + dx / g.cw)); nh = Math.max(min[1], Math.round(wd.h + dy / g.ch)); }
+      else {
+        const rw = Math.round(wd.w + dx / g.cw);
+        const rh = Math.round(wd.h + dy / g.ch);
+        if (rw < min[0] || rh < min[1]) tooSmall = true;
+        nw = Math.max(min[0], rw);
+        nh = Math.max(min[1], rh);
+      }
       nx = Math.max(0, Math.min(4 - nw, nx));
       ny = Math.max(0, Math.min(4 - nh, ny));
       nw = Math.min(nw, 4 - nx);
@@ -3442,6 +3470,10 @@ class PanelOSPage extends HTMLElement {
       this._dragging = false;
       this._ui.sel = k;
       if (!moved) { this._render(); return; }
+      if (tooSmall) {
+        const name = wd.kind === 0 ? `The ${CLOCK_STYLES[wd.style || 0] || "clock"} clock` : (WIDGETS[wd.kind] || WIDGETS[0]).name;
+        this._toast(`${name} needs at least ${min[0]} × ${min[1]} cells`);
+      }
       if (this._inGrid(nx, ny, nw, nh) && (nx !== wd.col || ny !== wd.row || nw !== wd.w || nh !== wd.h)) {
         const over = this._overlaps(items, k, nx, ny, nw, nh);
         Object.assign(wd, { col: nx, row: ny, w: nw, h: nh });
@@ -4008,7 +4040,11 @@ class PanelOSPage extends HTMLElement {
     };
     const body = [];
     if (w.kind === 0) body.push(h("div", { class: "sec" }, h("h3", null, "Style"),
-      this._lookPicker(CLOCK_STYLES.map((n, k) => ({ id: k, name: n, pic: this._lookPic(p, `clockw-${k}`, () => svgNode(ART.clock[k]()), { fit: "contain" }) })), w.style || 0, (k) => set({ style: k }), { wide: true })));
+      this._lookPicker(CLOCK_STYLES.map((n, k) => {
+        const m = widgetMin({ kind: 0, style: k, opts: (w.opts || 0) & ~1 });
+        const ok = w.w >= m[0] && w.h >= m[1];
+        return { id: k, name: n, pic: this._lookPic(p, `clockw-${k}`, () => svgNode((ART.clock[k] || ART.clock[0])()), { fit: "contain" }), disabled: !ok, why: ok ? null : `${n} needs ${m[0]} × ${m[1]} cells.` };
+      }), w.style || 0, (k) => set({ style: k }), { wide: true })));
     const bits = meta.bits;
     if (w.kind === 7) {
       const scroll = Boolean((w.opts || 0) & 1);
@@ -4050,7 +4086,11 @@ class PanelOSPage extends HTMLElement {
     const st = w.style || 0;
     const wide = w.w > w.h * 1.5;
     if (w.kind === 0) {
-      if (st === 7) return false;
+      if (st === 7 || st === 9) return false;
+      if (st === 8 || st === 10) {
+        if (b !== 1) return false;
+        return st === 8 && w.w < 4 ? "Shows when the widget is 4 columns wide" : null;
+      }
       if (b === 1) return null;
       if ([0, 1, 6].includes(st)) return w.h >= 2 ? null : "Shows when the widget is 2 rows high";
       if (wide) return null;

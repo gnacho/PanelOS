@@ -175,7 +175,7 @@ pub fn test_cars(ui: &AppWindow, n: usize) {
         if k == n - 1 && k > 0 {
             let lead = cars[k - 1].clone();
             let line = if lead.line < 2.0 { lead.line + 1.0 } else { lead.line - 1.0 };
-            cars.push(SwCar { line, kind: PATROL, tint: Color::from_rgb_u8(255, 255, 255), born: lead.born + lead.dur * PATROL_BEHIND.0, dur: lead.dur });
+            cars.push(SwCar { line, kind: PATROL, tint: Color::from_rgb_u8(255, 255, 255), born: lead.born + lead.dur * PATROL_BEHIND.0, dur: lead.dur, ..Default::default() });
             break;
         }
         let t = CAR_TINTS[next_tint()];
@@ -186,6 +186,7 @@ pub fn test_cars(ui: &AppWindow, n: usize) {
             // the first is the farthest: born earliest
             born: now - (n - 1 - k) as f32 * 1.1,
             dur,
+            ..Default::default()
         });
     }
     cars.sort_by(|a, b| a.born.total_cmp(&b.born));
@@ -307,7 +308,8 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     let traffic = crate::page_option(s, "home", "traffic").and_then(|v| v.as_u64()).unwrap_or(0).min(2) as usize;
     let now = ui.get_scene_t();
     let all: Vec<SwCar> = (0..slint::Model::row_count(&cars)).filter_map(|i| slint::Model::row_data(&cars, i)).collect();
-    let alive: Vec<SwCar> = all.iter().filter(|c| now - c.born <= c.dur + 0.5).cloned().collect();
+    // a shoved car lost up to 0.64 s of its trip (spec 25.H5)
+    let alive: Vec<SwCar> = all.iter().filter(|c| now - c.born <= c.dur + 0.5 + if c.pushed { 0.7 } else { 0.0 }).cloned().collect();
     // the patrol car rides along with another one: the traffic rules count the ordinary cars
     let ordinary: Vec<&SwCar> = alive.iter().filter(|c| c.kind != PATROL).collect();
     let most = [1usize, 2, 3][traffic];
@@ -337,6 +339,7 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
                 tint: Color::from_rgb_u8((t >> 16) as u8, (t >> 8) as u8, t as u8),
                 born: now,
                 dur,
+                ..Default::default()
             });
             // the patrol car, when due: just behind this one (15-18 % of their trip later, the same trip, so
             // the same pace) on a neighbouring free line; never two at once
@@ -355,6 +358,7 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
                         tint: Color::from_rgb_u8(255, 255, 255),
                         born,
                         dur,
+                        ..Default::default()
                     });
                     patrol_went();
                 }
@@ -396,5 +400,70 @@ fn set_cars(ui: &AppWindow, next: Vec<SwCar>) {
         if !here {
             vec.insert(k.min(vec.row_count()), c);
         }
+    }
+}
+
+thread_local! {
+    /// When a tap last asked for a car (spec 25.H4: at most one every 3 s).
+    static ASKED: std::cell::Cell<f32> = const { std::cell::Cell::new(-100.0) };
+}
+
+/// Taps on the synthwave home background (spec 25.H4 / H5): `synth.push` "born:side" shoves that car (a fresh shove while
+/// it skids), `synth.lane` x asks for a car in the lane under the tap.
+pub fn act(ui: &AppWindow, what: &str, value: &str) {
+    use slint::Model;
+    let cars = ui.get_home_fl_cars();
+    let Some(vec) = cars.as_any().downcast_ref::<VecModel<SwCar>>() else {
+        return;
+    };
+    let now = ui.get_scene_t();
+    match what {
+        "synth.push" => {
+            let mut it = value.split(':');
+            let born: f32 = it.next().and_then(|v| v.parse().ok()).unwrap_or(-1.0);
+            let dir: f32 = it.next().and_then(|v| v.parse().ok()).unwrap_or(1.0);
+            for i in 0..vec.row_count() {
+                if let Some(mut c) = vec.row_data(i) {
+                    if (c.born - born).abs() < 0.001 {
+                        c.pushed = true;
+                        c.push_t = now;
+                        c.push_dir = if dir < 0.0 { -1.0 } else { 1.0 };
+                        vec.set_row_data(i, c);
+                        eprintln!("nspanel-app: synthwave car shoved");
+                    }
+                }
+            }
+        }
+        "synth.lane" => {
+            if now - ASKED.with(|a| a.get()) < 3.0 {
+                return;
+            }
+            let x: f32 = value.parse().unwrap_or(240.0);
+            let line = ((x - 240.0) / 46.0).round().clamp(-2.0, 2.0);
+            let all: Vec<SwCar> = (0..vec.row_count()).filter_map(|i| vec.row_data(i)).collect();
+            let alive: Vec<SwCar> = all.iter().filter(|c| now - c.born <= c.dur + 0.5).cloned().collect();
+            if alive.iter().any(|c| c.line == line) {
+                return;
+            }
+            let want = CAR_TRIP.0 + (random() % 1001) as f32 / 1000.0 * (CAR_TRIP.1 - CAR_TRIP.0);
+            let Some(dur) = fitting_trip(line, now, want, &alive) else {
+                return;
+            };
+            ASKED.with(|a| a.set(now));
+            let t = CAR_TINTS[next_tint()];
+            let mut next = alive;
+            next.push(SwCar {
+                line,
+                kind: (random() % PATROL as u64) as i32,
+                tint: Color::from_rgb_u8((t >> 16) as u8, (t >> 8) as u8, t as u8),
+                born: now,
+                dur,
+                ..Default::default()
+            });
+            next.sort_by(|a, b| a.born.total_cmp(&b.born));
+            set_cars(ui, next);
+            eprintln!("nspanel-app: synthwave car asked for (lane {line})");
+        }
+        _ => {}
     }
 }

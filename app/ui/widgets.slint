@@ -16,6 +16,12 @@ export component DragSheet inherits Rectangle {
     in property <bool> dismissable: true;        // false: it follows the finger with the rubber band and springs back
     in property <float> scrim-alpha: 0.5;
     in property <length> grab: 64px;             // the strip at the top that drags the sheet
+    // a tall sheet (its content over 424 px; `need` is then 424 px): it opens at medium (300 px high) and goes up to
+    // full (just under the status bar), where its content scrolls; the content stays the sheet's own business
+    in property <length> content-need: 0px;
+    property <bool> tall: root.content-need > 424px;
+    property <int> level;                        // a tall sheet: 0 medium, 1 full
+    property <length> base: root.tall && root.level == 0 ? root.need - 300px : 0px;
     out property <bool> shown: root.open || root.close-k < 0.999;
     // open: the M3 spring (300 ms, a 3 px overshoot); close: 200 ms ease-in
     property <float> open-k: root.open ? 1 : 0;
@@ -37,10 +43,21 @@ export component DragSheet inherits Rectangle {
     changed open => {
         if root.open {
             root.snap = true;
+            root.level = 0;
             root.drag = 0px;
             root.leaving = false;
             root.snap = false;
         }
+    }
+    // to another height: the position kept (the drag takes up the difference at once), then the spring to the new one
+    function go-level(l: int, ms: duration) {
+        let pos = root.base + root.drag;
+        root.snap = true;
+        root.level = l;
+        root.drag = pos - root.base;
+        root.snap = false;
+        root.drag-ms = ms;
+        root.drag = 0px;
     }
     pure function band(d: length) -> length {
         // above the sheet's height: 24 px · (1 − e^(−d / 80 px))
@@ -54,11 +71,14 @@ export component DragSheet inherits Rectangle {
             root.close();
         }
     }
-    property <length> visible-h: Math.max(0px, root.need - root.slide - Math.max(0px, root.drag));
+    property <length> open-h: root.need - root.base;
+    property <length> visible-h: Math.max(0px, root.need - root.slide - root.base - root.drag);
     Rectangle {
         visible: root.shown;
         background: #000000;
-        opacity: root.scrim-alpha * Math.min(1, root.visible-h / Math.max(1px, root.need));
+        // the scrim follows the sheet; at full height up to 1.15 x the theme's (at most 0.6)
+        opacity: root.visible-h <= root.open-h ? root.scrim-alpha * Math.min(1, root.visible-h / Math.max(1px, root.open-h))
+            : Math.min(0.6, root.scrim-alpha * (1 + 0.15 * Math.min(1, (root.visible-h - root.open-h) / Math.max(1px, root.need - root.open-h))));
         TouchArea {
             enabled: !root.held;
             clicked => { if root.dismissable { root.close(); } }
@@ -66,7 +86,7 @@ export component DragSheet inherits Rectangle {
     }
     sheet := Rectangle {
         visible: root.shown;
-        x: 0; y: root.height - root.need + root.slide + root.drag; width: root.width; height: root.need + 24px;
+        x: 0; y: root.height - root.need + root.slide + root.base + root.drag; width: root.width; height: root.need + 24px;
         border-radius: 24px; background: root.sheet-color;
         TouchArea { }
         // the handle: 36 × 4 at 30 %, 52 × 5 at 55 % while held
@@ -87,6 +107,34 @@ export component DragSheet inherits Rectangle {
                     root.last-t = animation-tick();
                     root.vel = 0;
                 }
+                if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) && root.held && root.tall {
+                    root.held = false;
+                    // a tall sheet (26.3): flicks change the height (or close), then the distances decide
+                    if root.level == 1 && root.vel > 1.6 && root.dismissable {
+                        root.drag-ms = Math.max(90ms, Math.min(200ms, ((root.travel + root.need - root.drag) / 1px) / root.vel * 1ms));
+                        root.drag = root.travel + root.need;
+                        root.leaving = true;
+                    } else if root.level == 1 && root.vel > 0.5 {
+                        root.go-level(0, root.vel > 0.8 ? 220ms : 300ms);
+                    } else if root.level == 0 && root.vel > 0.5 && root.dismissable {
+                        root.drag-ms = root.vel > 0.8 ? Math.max(90ms, Math.min(200ms, ((root.travel - root.drag) / 1px) / root.vel * 1ms)) : 200ms;
+                        root.drag = root.travel;
+                        root.leaving = true;
+                    } else if root.level == 0 && root.vel < -0.5 {
+                        root.go-level(1, Math.abs(root.vel) > 0.8 ? 220ms : 300ms);
+                    } else if root.dismissable && root.drag > Math.min((root.need - root.base) * 0.3, 120px) {
+                        root.drag-ms = 200ms;
+                        root.drag = root.travel + root.need;
+                        root.leaving = true;
+                    } else if root.level == 1 && root.drag > (root.need - 300px) * 0.3 {
+                        root.go-level(0, 300ms);
+                    } else if root.level == 0 && root.drag < -(root.need - 300px) * 0.3 {
+                        root.go-level(1, 300ms);
+                    } else {
+                        root.drag-ms = Math.abs(root.vel) > 0.8 ? 220ms : 300ms;
+                        root.drag = 0px;
+                    }
+                }
                 if (e.kind == PointerEventKind.up || e.kind == PointerEventKind.cancel) && root.held {
                     root.held = false;
                     // the decision: a flick down, or far enough down → close; else back to the sheet's height
@@ -105,7 +153,8 @@ export component DragSheet inherits Rectangle {
                 if root.held {
                     let dy = self.mouse-y - self.pressed-y;
                     let raw = root.dismissable ? dy : Math.min(dy, 24px);
-                    root.drag = raw >= 0 ? raw : root.band(-raw);
+                    // a tall sheet at medium follows the finger 1:1 up to full; above the top height the rubber band
+                    root.drag = raw >= -root.base ? raw : -root.base + root.band(-raw - root.base);
                     // velocity over the latest movement (at least 16 ms apart), smoothed
                     let dt = (animation-tick() - root.last-t) / 1ms;
                     if dt >= 16 {
@@ -300,6 +349,7 @@ export component RollDigit {
     in property <bool> neon;
     in property <color> glow: #ff2bd6;
     in property <bool> paper;
+    in property <duration> dur: 180ms;
     // the shown digit is a plain value (a binding to d would already hold the new digit when `changed` runs)
     property <int> now-d;
     property <int> old-d;
@@ -307,8 +357,8 @@ export component RollDigit {
     property <bool> rolling;
     property <duration> t0;
     changed d => { root.old-d = root.now-d; root.now-d = root.d; root.t0 = animation-tick(); root.rolling = true; }
-    Timer { interval: 200ms; running: root.rolling; triggered => { root.rolling = false; } }
-    property <float> p: root.rolling ? clamp((animation-tick() - root.t0) / 180ms, 0, 1) : 1;
+    Timer { interval: root.dur + 20ms; running: root.rolling; triggered => { root.rolling = false; } }
+    property <float> p: root.rolling ? clamp((animation-tick() - root.t0) / root.dur, 0, 1) : 1;
     property <float> e: 1 - Math.pow(1 - root.p, 3);
     property <length> m: 4px;
     preferred-width: g.preferred-width; preferred-height: g.preferred-height;
@@ -327,7 +377,42 @@ export component RollDigit {
     }
 }
 
-// Two clock digits ("07", "23", or "7") whose changed digit rolls (M8); any other text is shown as it is.
+// 25.C2 ink digit: a changed digit fills in from the bottom like ink (a clip rising over it, 280 ms) while the old one
+// fades; clipped only while it fills.
+export component InkDigit {
+    in property <int> d;
+    in property <length> font-size: 16px;
+    in property <int> font-weight: 400;
+    in property <brush> color: #ffffff;
+    in property <float> k;
+    in property <bool> neon;
+    in property <color> glow: #ff2bd6;
+    in property <bool> paper;
+    property <int> now-d;
+    property <int> old-d;
+    init => { root.now-d = root.d; }
+    property <bool> filling;
+    property <duration> t0;
+    changed d => { root.old-d = root.now-d; root.now-d = root.d; root.t0 = animation-tick(); root.filling = true; }
+    Timer { interval: 300ms; running: root.filling; triggered => { root.filling = false; } }
+    property <float> e: root.filling ? 1 - Math.pow(1 - clamp((animation-tick() - root.t0) / 280ms, 0, 1), 2) : 1;
+    preferred-width: g.preferred-width; preferred-height: g.preferred-height;
+    min-width: g.preferred-width; min-height: g.preferred-height;
+    property <length> lh: g.preferred-height;
+    property <length> ct: 0.30 * root.font-size;
+    property <length> ch: 0.82 * root.font-size;
+    if root.filling: GlowText { x: 0; y: (root.height - root.lh) / 2; width: root.width; height: root.lh; text: root.old-d; font-size: root.font-size;
+        font-weight: root.font-weight; color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; opacity: 1 - root.e; }
+    Rectangle {
+        property <length> cy: root.filling ? (root.height - root.lh) / 2 + root.ct + (1 - root.e) * root.ch : 0px;
+        x: -4px; y: self.cy; width: root.width + 8px; height: root.height - self.cy + 4px; clip: root.filling;
+        g := GlowText { x: 4px; y: (root.height - root.lh) / 2 - parent.cy; width: root.width; height: root.lh; text: root.now-d; font-size: root.font-size;
+            font-weight: root.font-weight; color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
+    }
+}
+
+// Two clock digits ("07", "23", or "7") whose changed digit rolls (M8), or fills in like ink (ink, 25.C2); any other
+// text is shown as it is.
 export component RollPair inherits HorizontalLayout {
     in property <string> text;
     in property <length> font-size: 16px;
@@ -337,12 +422,18 @@ export component RollPair inherits HorizontalLayout {
     in property <bool> neon;
     in property <color> glow: #ff2bd6;
     in property <bool> paper;
+    in property <bool> ink;
+    in property <duration> dur: 180ms;
     property <bool> num: root.text.is-float() && root.text.character-count <= 2;
     property <int> n: root.num ? root.text.to-float() : 0;
     spacing: 0;
-    if root.num && root.text.character-count == 2: RollDigit { d: Math.floor(root.n / 10); font-size: root.font-size; font-weight: root.font-weight;
+    if root.num && !root.ink && root.text.character-count == 2: RollDigit { d: Math.floor(root.n / 10); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; dur: root.dur; }
+    if root.num && !root.ink: RollDigit { d: Math.mod(root.n, 10); font-size: root.font-size; font-weight: root.font-weight;
+        color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; dur: root.dur; }
+    if root.num && root.ink && root.text.character-count == 2: InkDigit { d: Math.floor(root.n / 10); font-size: root.font-size; font-weight: root.font-weight;
         color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
-    if root.num: RollDigit { d: Math.mod(root.n, 10); font-size: root.font-size; font-weight: root.font-weight;
+    if root.num && root.ink: InkDigit { d: Math.mod(root.n, 10); font-size: root.font-size; font-weight: root.font-weight;
         color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
     if !root.num: GlowText { text: root.text; font-size: root.font-size; font-weight: root.font-weight;
         color: root.color; k: root.k; neon: root.neon; glow: root.glow; paper: root.paper; }
@@ -581,6 +672,7 @@ export component Dropdown inherits Rectangle {
     in property <[string]> options;
     in property <int> selected;
     in property <string> placeholder: "None";
+    in property <bool> up;                       // the menu opens above the field (a field low on the screen)
     callback picked(int);
     height: 48px;
     border-radius: 14px;
@@ -594,7 +686,7 @@ export component Dropdown inherits Rectangle {
     TouchArea { clicked => { root.pop-open = true; menu.show(); } }
     menu := PopupWindow {
         x: 0;
-        y: root.height + 6px;
+        y: root.up ? -(Math.min(8, root.options.length) * 48px + 12px) - 6px : root.height + 6px;
         width: root.width;
         close-policy: close-on-click-outside;
         Rectangle {
