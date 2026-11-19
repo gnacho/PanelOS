@@ -904,7 +904,8 @@ input[type=range]:disabled { opacity: .4; cursor: default; }
 :host([size=narrow]) .sheet-head { padding: 16px 10px 10px 18px; min-height: 60px; }
 :host([size=narrow]) .sheet-body { padding: 14px 16px 22px; }
 :host([size=narrow]) .sheet-foot { padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); }
-.layer.noanim .sheet, .layer.noanim .scrim { animation: none; }
+/* a sheet drawn again does not slide in again (stronger than the narrow layout's slide-up) */
+.layer.noanim .sheet, .layer.noanim .scrim { animation: none !important; }
 .sec { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .sec > h3 { font-size: 15px; font-family: "PanelOS Text", sans-serif; font-weight: 600; color: var(--text); letter-spacing: 0; display: flex; align-items: center; gap: 6px; position: relative; flex-wrap: wrap; }
 .group { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 2px 16px; min-width: 0; }
