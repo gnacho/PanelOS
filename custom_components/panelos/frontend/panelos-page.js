@@ -16,6 +16,9 @@ const PICTURE_EVERY_MS = 60;
 const PICTURE_IDLE_MS = 1500;
 const PICTURE_AFTER_CHANGE_MS = 700;
 const ALL_PICTURES_EVERY_MS = 10000;
+// the live preview stops after this long without use of the page (the last picture stays) and goes on with the next use
+const PREVIEW_IDLE_MS = 60000;
+const USE_EVENTS = ["pointermove", "pointerdown", "wheel", "keydown", "touchstart"];
 const SYNC_FALLBACK_MS = 3000;
 
 const DEFAULT_CAPS = ["touch", "images", "web", "video", "mic", "speaker", "proximity", "light"];
@@ -1094,7 +1097,21 @@ class PanelOSPage extends HTMLElement {
     this._dragging = false;
     this._toastBox = h("div", { class: "toasts", "aria-live": "polite" });
     this._layer = h("div");
-    this._onVisibility = () => this._schedulePicture(0);
+    this._onVisibility = () => { this._onUse(); this._schedulePicture(0); };
+    // Use of the page keeps the live preview going: only while this is the active window (a pointer over a window in
+    // the background does not count), and making the window active again counts as use.
+    this._use = { at: Date.now(), paused: false };
+    this._onUse = () => {
+      if (document.visibilityState !== "visible" || !document.hasFocus()) return;
+      const now = Date.now();
+      if (!this._use.paused && now - this._use.at < 1000) return;
+      this._use.at = now;
+      if (this._use.paused) {
+        this._use.paused = false;
+        this._requestRender();
+        this._schedulePicture(0);
+      }
+    };
     this._resize = new ResizeObserver(() => this._fit());
     this._onClick = (ev) => {
       const path = ev.composedPath();
@@ -1172,6 +1189,9 @@ class PanelOSPage extends HTMLElement {
       document.head.append(h("style", { id: "panelos-fonts" }, FONTS.replaceAll("{STATIC}", this._static)));
     }
     document.addEventListener("visibilitychange", this._onVisibility);
+    window.addEventListener("focus", this._onUse);
+    for (const ev of USE_EVENTS) window.addEventListener(ev, this._onUse, { capture: true, passive: true });
+    this.shadowRoot.addEventListener("scroll", this._onUse, { capture: true, passive: true });
     this.shadowRoot.addEventListener("click", this._onClick);
     this.shadowRoot.addEventListener("focusout", this._onFocusOut);
     this.shadowRoot.addEventListener("pointerdown", this._onPointerDown, true);
@@ -1186,6 +1206,9 @@ class PanelOSPage extends HTMLElement {
 
   disconnectedCallback() {
     document.removeEventListener("visibilitychange", this._onVisibility);
+    window.removeEventListener("focus", this._onUse);
+    for (const ev of USE_EVENTS) window.removeEventListener(ev, this._onUse, { capture: true });
+    this.shadowRoot.removeEventListener("scroll", this._onUse, { capture: true });
     window.removeEventListener("keydown", this._onKey);
     window.removeEventListener("pointerup", this._onPointerUp, true);
     window.removeEventListener("pointercancel", this._onPointerUp, true);
@@ -1727,6 +1750,14 @@ class PanelOSPage extends HTMLElement {
 
   _schedulePicture(delay) {
     if (!this.isConnected || document.visibilityState !== "visible" || !this._hass) return;
+    // a minute without use: the preview stops on its last picture until the page is used again (`_onUse`)
+    if (Date.now() - this._use.at > PREVIEW_IDLE_MS) {
+      if (!this._use.paused) {
+        this._use.paused = true;
+        this._requestRender();
+      }
+      return;
+    }
     const due = Date.now() + delay;
     if (this._pic.timer && this._pic.due <= due) return;
     clearTimeout(this._pic.timer);
@@ -2732,8 +2763,8 @@ class PanelOSPage extends HTMLElement {
     const avH = height || Math.max(240, (this.clientHeight || window.innerHeight) - (this.getAttribute("size") === "wide" ? 240 : 330));
     const size = Math.max(180, Math.min(colW, avH));
     return h("div", { class: "pv" },
-      h("div", { class: "pv-title" }, h("span", { class: `state${p.connected ? " on" : ""}` }, h("b")), p.connected ? "Live" : "Offline",
-        h("span", { class: "rinfo" }, this._infoBtn("pv", "What the panel's screen shows now, live while this page is open. Tap the screen to wake it."))),
+      h("div", { class: "pv-title" }, h("span", { class: `state${p.connected && !this._use.paused ? " on" : ""}` }, h("b")), p.connected ? (this._use.paused ? "Paused" : "Live") : "Offline",
+        h("span", { class: "rinfo" }, this._infoBtn("pv", "What the panel's screen shows now, live while you use this page. After a minute without use it stops on the last picture and goes on when you use the page again. Tap the screen to wake it."))),
       this._deviceNode(p, size),
       h("div", { class: "pv-acts" },
         this._btn("Wake", () => this._command(p, "screen", true), { cls: "small", icon: "gesture-tap", disabled: !p.connected }),
