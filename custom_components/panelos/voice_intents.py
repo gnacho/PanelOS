@@ -13,10 +13,19 @@ sets up); the reply is Home Assistant's own for that intent, in the language of 
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
-from homeassistant.components.media_player import ATTR_MEDIA_VOLUME_LEVEL, ATTR_MEDIA_VOLUME_MUTED, DOMAIN as MEDIA_PLAYER_DOMAIN
+from homeassistant.components.media_player import (
+    ATTR_MEDIA_POSITION,
+    ATTR_MEDIA_POSITION_UPDATED_AT,
+    ATTR_MEDIA_SEEK_POSITION,
+    ATTR_MEDIA_VOLUME_LEVEL,
+    ATTR_MEDIA_VOLUME_MUTED,
+    DOMAIN as MEDIA_PLAYER_DOMAIN,
+    SERVICE_MEDIA_SEEK,
+)
 from homeassistant.const import (
     ATTR_ENTITY_ID,
     SERVICE_MEDIA_NEXT_TRACK,
@@ -29,6 +38,7 @@ from homeassistant.const import (
     SERVICE_VOLUME_UP,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er, intent
 
 _LOGGER = logging.getLogger(__name__)
@@ -52,6 +62,23 @@ _TARGET_SLOTS = ("name", "floor")
 def _slot(intent_obj: intent.Intent, key: str) -> Any:
     value = (intent_obj.slots.get(key) or {}).get("value")
     return None if value in (None, "") else value
+
+
+def _elapsed(hass: HomeAssistant, player: str) -> float:
+    """Seconds the player's current track has played (0 when it does not say)."""
+    state = hass.states.get(player)
+    if state is None:
+        return 0.0
+    try:
+        position = float(state.attributes.get(ATTR_MEDIA_POSITION) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    updated = state.attributes.get(ATTR_MEDIA_POSITION_UPDATED_AT)
+    if state.state == "playing" and updated is not None:
+        updated = dt_util.parse_datetime(updated) if isinstance(updated, str) else updated
+        if updated is not None:
+            position += (dt_util.utcnow() - updated).total_seconds()
+    return position
 
 
 def _satellite(hass: HomeAssistant, intent_obj: intent.Intent) -> str | None:
@@ -125,6 +152,16 @@ async def _act(hass: HomeAssistant, intent_obj: intent.Intent, intent_type: str,
             data[ATTR_MEDIA_VOLUME_LEVEL] = max(0.0, min(1.0, now + change))
     elif intent_type in ("HassMediaPlayerMute", "HassMediaPlayerUnmute"):
         data[ATTR_MEDIA_VOLUME_MUTED] = intent_type == "HassMediaPlayerMute"
+    elif intent_type == "HassMediaPrevious" and _elapsed(hass, player) > 3:
+        # a player's "previous" restarts the current track once it has played a few seconds (the button's habit):
+        # back to its start first, so "previous" by voice really goes to the previous track
+        try:
+            await hass.services.async_call(
+                MEDIA_PLAYER_DOMAIN, SERVICE_MEDIA_SEEK, {ATTR_ENTITY_ID: player, ATTR_MEDIA_SEEK_POSITION: 0}, blocking=True, context=intent_obj.context
+            )
+            await asyncio.sleep(0.7)
+        except Exception:  # noqa: BLE001 - a player that cannot seek (a radio stream): plain previous
+            _LOGGER.debug("%s cannot seek; previous as it is", player)
     await hass.services.async_call(MEDIA_PLAYER_DOMAIN, service, data, blocking=True, context=intent_obj.context)
     _LOGGER.debug("%s on %s (said to a panel)", intent_type, player)
     response = intent_obj.create_response()
