@@ -858,19 +858,26 @@ fn player_thread(
                         busy_until = None;
                         let prebuffer = stream.is_some();
                         playing = Some(Playing { samples, offset: 0, looped, stream, prebuffer, gen });
+                    } else if busy_until.is_none() {
+                        // nothing to play (the speaker only wakes up): `play` raised busy, it ends now
+                        busy_until = Some(Instant::now());
                     }
+                } else if busy_until.is_none() {
+                    busy_until = Some(Instant::now());
                 }
             }
         }
-        if playing.is_none() && !crate::sendspin::music_active() {
-            if let Some(until) = busy_until {
-                if Instant::now() >= until {
-                    busy_until = None;
-                    busy.store(false, Ordering::SeqCst);
-                        SPEAKING.store(false, Ordering::SeqCst);
-                } else {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
+        // the played-out sound's busy time ends, also while the music keeps the speaker running (it stayed
+        // busy for good under music: the music was never muted for the listening, the wake word ran as
+        // "during playback")
+        if playing.is_none() && busy_until.is_some_and(|until| Instant::now() >= until) {
+            busy_until = None;
+            busy.store(false, Ordering::SeqCst);
+            SPEAKING.store(false, Ordering::SeqCst);
+        }
+        if playing.is_none() && !music {
+            if busy_until.is_some() {
+                std::thread::sleep(Duration::from_millis(5));
             }
             continue;
         }
