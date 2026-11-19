@@ -112,7 +112,7 @@ Up to PanelOS 0.0.3 the panel's display, settings and sensors were on the ESPHom
 - **Overview**: the panel at a glance.
 - **Pages**: the pages in swipe order (the first is the start page), each with its look and its options: a custom page's background and widgets on its 4 × 4 grid, the player and the turntable's wood, the timers page's functions and colours, the quick controls' entities and the mixing desk's labels, the cameras' fit, start view and doorbell, the calendars written on the wall calendar, the pager's finish. A page type can be added more than once (several custom pages, each with its own background and widgets); a page can be hidden without losing its settings.
 - **Alerts**: critical alerts and status screens (shared by every panel, see below), with a test on one panel.
-- **Voice**, **Display** (theme, brightness, screensaver after and when, do not disturb, new notifications) and **Device** (sensor reporting, touch calibration, restart, reboot, name and area).
+- **Voice** (the conversation's look on the screen; **Music commands**: whether music asked for by voice on the panel goes to the player picked on its music page, the default, or always to the panel itself), **Display** (theme, brightness, screensaver after and when, do not disturb, new notifications) and **Device** (sensor reporting, touch calibration, restart, reboot, name and area).
 - **All panels**: what each panel can do, and **Copy settings** to other panels (each part copied, adapted to what the target can do, or skipped, with the reason).
 - **Add a panel** starts the integration's setup for another panel, with its defaults or a copy of an existing panel.
 
@@ -142,6 +142,8 @@ The alarms live on the panel (they ring without Home Assistant); the timers page
 ## The panel's media player
 
 The panel is a media player in Home Assistant (an entity of its voice device): Home Assistant, Music Assistant and automations can play on its speaker (`media_player.play_media`, volume, mute, pause, stop, announcements). Home Assistant's media proxy turns any source into a 48 kHz WAV stream, which the panel plays as it arrives. The volume set there is a share of the panel's own volume.
+
+Music commands said to a panel (play, next, pause, volume, stop) can follow the panel: the panel reports the player picked on its music page (`music_player` in `panelos/report`), and `hass.data["panelos"]["voice_player"](satellite_entity_id)` returns the player for a panel's voice satellite: the picked player (else the integration's media player, else the panel's own Music Assistant player), or the panel's own player when Music commands is set to This panel; `None` for a satellite that is no panel's. A voice setup that keeps a player per satellite (for example a custom intent handler) calls it at the moment of the command, so the player always follows the music page.
 
 ## Dashboard mode
 
