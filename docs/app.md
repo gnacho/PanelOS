@@ -30,6 +30,29 @@ Native Rust app with the Slint UI toolkit. It draws its own interface on the pan
 - **Assets**: pictures and fonts live in the UI bundle (`/opt/panelos-ui/share/ui`) and are read at run time by their path there; the image keeps a small fallback app for panels without the bundle.
 - **Brand**: the PanelOS palette and type in `theme.slint`; Signal marks lit things only (dots, an active state, one highlighted number), never a text ground; button text is Ink or Paper.
 
+## Frame rates
+
+Measured on the panel with the app's frame statistics (`{"frame_stats": true}` on the development input, 6–8 s windows after the view settled), the screensaver held off, version 0.0.6 in development. A still view draws no frame at all; "0" below means not one frame in the window.
+
+| View | Frames a second | Slowest frame |
+|---|---|---|
+| Music page, paused (any look) | 0 | – |
+| Calendar, quick controls, to-do (also with the Lists sheet) | 0–1.4 | – |
+| Thermostat: dial, remote, wall | 0 | – |
+| Thermostat: neon (moving floor) | 60.3 | 19.8 ms |
+| Timers page, nothing running | 60.1 | 23.5 ms |
+| Critical alert (whole screen) | 60.3 | 17.4 ms |
+| Weather page, living photo at night | 60.3 | 18.2 ms |
+| Custom page, photo city: cloudy / rain / storm, music widget playing | 55.8 / 52.5 / 50.1 | 36.9 ms |
+| Custom page with the timer island (two timers) | 44.6 | 76.4 ms |
+| Synthwave drive: sunset, no traffic / busy | 59.9 / 53.7 | 84.1 ms |
+| Synthwave drive: beach, no traffic / busy | 43.4 / 41.8 | 38.0 ms |
+| Drawn big city at night: calm / storm / strong wind | 34.3 / 37.8 / 32.6 | 43.0 ms |
+| Drawn city at night: calm / storm / strong wind | 31.4 / 36.4 / 31.7 | 44.1 ms |
+| Drawn countryside at night: calm / storm / strong wind | 40.4 / 37.1 / 32.4 | 66.1 ms |
+| Synthwave timers: one / two / three running | 41.8 / 30.0 / 32.4 | 69.1 ms |
+| Stopwatch, nixie tubes, running | 45.2 | 32.7 ms |
+
 ## Pairing, theme, brightness, approach
 
 - **Pairing by QR code** (no token typing): on first start the panel shows a QR code with Home Assistant's normal login page (OAuth authorization-code flow, the panel is the IndieAuth client: `client_id` `http://<panel-ip>:8080/`, `redirect_uri` `http://<panel-ip>:8080/auth/callback`; Home Assistant accepts local IP client IDs). After the login on the phone, Home Assistant redirects the phone to the panel, which exchanges the one-time code for a refresh token. The token is stored on the panel only (`/mnt/persist/nspanel/ha_auth.json`, root-only); it can be revoked in the Home Assistant user profile, after which the panel shows the QR code again.
