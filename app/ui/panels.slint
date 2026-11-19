@@ -1133,7 +1133,10 @@ export component ClockFace inherits Rectangle {
     property <float> sqx: root.style == 6 ? 0.04 * max(0, 1 - min(root.wsx, root.wtx) / 0.06) : 0;
     property <float> sqy: root.style == 6 ? 0.04 * max(0, 1 - min(root.wsy, root.wty) / 0.06) : 0;
     // an exact corner (both turns within 40 ms of each other): a spark burst there for 400 ms
-    property <bool> spark: root.style == 6 && Math.abs(root.wsx - root.wsy) < 0.04 && root.wsx < 0.4;
+    // (two properties: written as one, the compiler computes the twice-used wsx before the style test, so every clock face read the
+    // animation clock in every frame and drew 60 frames a second whatever its style)
+    property <bool> spark-near: Math.abs(root.wsx - root.wsy) < 0.04 && root.wsx < 0.4;
+    property <bool> spark: root.style == 6 && root.spark-near;
     if root.spark: Rectangle {
         property <float> k: root.wsx / 0.4;
         property <float> cx: root.wux < root.wrx ? 0 : root.width / 1px;
