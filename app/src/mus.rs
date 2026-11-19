@@ -67,6 +67,7 @@ fn open(ui: &AppWindow) {
         let own = crate::sendspin::client_id().unwrap_or_default();
         let is_self = |e: &Value| !own.is_empty() && e["attributes"]["sendspin_id"].as_str() == Some(own.as_str());
         list.sort_by_key(|e| !is_self(e));
+        eprintln!("nspanel-app: music players: {}, this panel {}", list.len(), if list.first().is_some_and(|e| is_self(e)) { "first" } else { "not listed" });
         let group: Vec<String> = list
             .iter()
             .find(|e| e["entity_id"] == active.as_str())

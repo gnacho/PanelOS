@@ -866,6 +866,7 @@ export component MusicPage inherits Rectangle {
     property <length> picker-content: 64px + root.players.length * 52px + 16px;
     property <length> picker-need: min(424px, root.picker-content);
     property <bool> picker-info;
+    changed picker => { if self.picker { picker-list.viewport-y = 0; } }
     DragSheet {
         width: parent.width; height: parent.height;
         open: root.picker; need: root.picker-need; content-need: root.picker-content;
@@ -874,7 +875,8 @@ export component MusicPage inherits Rectangle {
         clip: true;
         // (the list first: the header's buttons lie above it)
         // the players scroll when they do not all fit
-        Flickable {
+        // every opening starts at the top of the list (the panel itself is the first row)
+        picker-list := Flickable {
             x: 0; y: 64px; width: parent.width; height: root.picker-need - 64px;
             viewport-height: max(self.height, root.players.length * 52px + 16px);
         for p[i] in root.players: Rectangle {
