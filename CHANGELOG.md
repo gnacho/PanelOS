@@ -11,7 +11,8 @@
 ### Music Assistant
 - The panel is a Sendspin player: Music Assistant finds it, pairs with it through Home Assistant and plays on it, with no setup. The music plays under every other sound and pauses while the assistant listens.
 - One volume: Music Assistant's volume of the panel is the panel's own.
-- The music page lists the panel itself first.
+- An app restart tells Music Assistant first, so it connects again as soon as the app is back.
+- The music page lists the panel itself first; the player picker opens at the top of its list every time.
 
 ### Connection
 - The Wi-Fi roam check also finds access points that hide their network name (it asks for the network by name).
@@ -28,14 +29,18 @@
 - A reload or the dashboard coming on screen shows the loading screen first, never a white web page.
 
 ### Pages
-- Timers: +1 min with two synthwave timers, the last minute in the alert colour, the ringing screen in the timer's colour, the timers page's own synthwave scene (or a random one every time); the new-timer view over running synthwave timers keeps the scene under a veil.
+- A page out of sight stands still: clocks, nixie glow and news crawls run only while their page is on screen (before, a clock on another page kept every page redrawing 30 times a second).
+- Timers: the synthwave look's running time no longer stutters every second (only the digits that change are drawn again), +1 min with two synthwave timers, the last minute in the alert colour, the ringing screen in the timer's colour, the timers page's own synthwave scene (or a random one every time); the new-timer view over running synthwave timers keeps the scene under a veil.
 - Stopwatch: one lap button (the flag) and the lap list in the nixie look, which now runs at ~45 fps instead of ~9.
 - Clocks: only the colon, the second hands and the seconds line move (30 fps); a still clock stays still. Screensaver faces nixie, LCD and twin-bell from the integration.
-- Music: transfer and group buttons in both themes, an info bubble in the player picker, the cover options in the music sheet, no thumbs on the sliders at rest, a vertical swipe no longer seeks, the half cassette's volume bar works, the position holds after a pause on the panel.
+- Music: transfer and group buttons in both themes, an info bubble in the player picker, the cover options in the music sheet, no thumbs on the sliders at rest, a vertical swipe no longer seeks, the half cassette's volume bar works, the position holds after a pause on the panel; a start after a pause no longer shows paused for a moment with the time jumping back, and the panel's own player shows playing while Music Assistant plays on it.
 - Thermostat: quick presses count one by one, the remote's clock runs, the wall look's knob turns with the finger like a real knob and never turns the page.
 - Quick controls: channels and levers centred for any count, labels fall back to the whole name, a light's effects in a dropdown, the deck's lamp in the light's own colour; the flight deck has a label field in the integration.
 - Calendar: the top-right chip names the calendar. To-do: a new item goes to the top; a ticked row stays 1.5 s; one list picker.
 - Notifications: the fridge note shows in the first window; the pager window steps on a swipe.
+
+### Integration page
+- A sheet slides in once: an ⓘ or any other change inside it no longer replays its entrance in the narrow layout.
 - Settings: the storage page sits under the status bar.
 
 ## 0.0.5
