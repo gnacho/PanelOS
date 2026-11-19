@@ -1333,8 +1333,15 @@ fn speaker_of(s: &UiState, player: &str) -> Option<String> {
 /// Whether the music a player reports as playing is really playing: false once its speaker has been
 /// idle (or off) for 30 s while the player still says playing (then the panel shows it paused).
 fn really_playing(s: &UiState, player: &str) -> bool {
-    thread_local!(static QUIET_SINCE: std::cell::RefCell<Option<(String, Instant)>> = const { std::cell::RefCell::new(None) });
+    // (speaker, quiet since, last asked): the quiet time counts only while the player keeps saying playing; a gap
+    // in the asking (the player was paused) starts it again, so a speaker that follows a new start a moment late
+    // never makes a fresh start look paused
+    thread_local!(static QUIET_SINCE: std::cell::RefCell<Option<(String, Instant, Instant)>> = const { std::cell::RefCell::new(None) });
     let Some(sp) = speaker_of(s, player) else { return true };
+    // the panel's own speaker: Music Assistant's music comes over Sendspin, not through that media player
+    if sp == media_player_entity(s) && sendspin::music_active() {
+        return true;
+    }
     let quiet = s.states.get(&sp).is_some_and(|st| !matches!(st.state.as_str(), "playing" | "buffering" | "unavailable" | "unknown"));
     QUIET_SINCE.with(|q| {
         let mut q = q.borrow_mut();
@@ -1342,10 +1349,14 @@ fn really_playing(s: &UiState, player: &str) -> bool {
             *q = None;
             return true;
         }
-        match q.as_ref() {
-            Some((who, since)) if *who == sp => since.elapsed() < Duration::from_secs(30),
+        let now = Instant::now();
+        match q.as_mut() {
+            Some((who, since, last)) if *who == sp && last.elapsed() < Duration::from_secs(3) => {
+                *last = now;
+                since.elapsed() < Duration::from_secs(30)
+            }
             _ => {
-                *q = Some((sp, Instant::now()));
+                *q = Some((sp, now, now));
                 true
             }
         }
