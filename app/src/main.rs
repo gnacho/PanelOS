@@ -3819,7 +3819,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let speaking = player.busy.clone();
         let ringing = ringing_flag.clone();
         roam::spawn(
-            move || !voice::busy() && !speaking.load(Ordering::SeqCst) && !ringing.load(Ordering::SeqCst),
+            // idle: no voice run, no sound, no ringing, no Sendspin music (a roam drops the stream for a moment)
+            move || !voice::busy() && !speaking.load(Ordering::SeqCst) && !ringing.load(Ordering::SeqCst) && !sendspin::music_active(),
             || HA_LINKED.load(Ordering::SeqCst),
         );
     }
