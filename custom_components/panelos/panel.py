@@ -33,6 +33,7 @@ from .const import (
     CONF_PANEL_ID,
     CONF_SHOW_CONVERSATION,
     CONF_VOICE_LOOK,
+    CONF_VOICE_PLAYER,
     CONF_SHOW_HEADER,
     CONF_KEEP_RESOURCES,
     CONF_SHOW_SIDEBAR,
@@ -129,6 +130,7 @@ def panel_config(entry: ConfigEntry) -> dict[str, Any]:
         "tile_entities": list(options.get(CONF_TILES, [])),
         "show_conversation": bool(options.get(CONF_SHOW_CONVERSATION, True)),
         "voice_look": max(0, min(3, int(options.get(CONF_VOICE_LOOK, 0)))),
+        "voice_player": options.get(CONF_VOICE_PLAYER, "selected"),
         "dashboard": options.get(CONF_DASHBOARD, ""),
         "show_header": bool(options.get(CONF_SHOW_HEADER, True)),
         "show_sidebar": bool(options.get(CONF_SHOW_SIDEBAR, False)),
@@ -243,6 +245,26 @@ def _media_player(entry: ConfigEntry) -> str:
         if e.domain == "media_player" and e.device_id in voice and not e.disabled:
             return e.entity_id
     return ""
+
+
+def voice_player(hass: HomeAssistant, satellite_id: str) -> str | None:
+    """The player music commands said to a panel act on (voice_device_context asks for it with ``player: panelos``):
+    the player picked on the panel's music page, or the panel's own player when the integration says so. None when
+    the satellite belongs to no panel."""
+    entity = er.async_get(hass).async_get(satellite_id) if satellite_id else None
+    device = dr.async_get(hass).async_get(entity.device_id) if entity and entity.device_id else None
+    if device is None:
+        return None
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        panel = getattr(entry, "runtime_data", None)
+        if panel is None or not panel.device_id or panel.device_id not in (device.id, device.via_device_id):
+            continue
+        options = {**entry.data, **entry.options}
+        own = _ma_player(entry) or _media_player(entry)
+        if options.get(CONF_VOICE_PLAYER, "selected") == "self":
+            return own
+        return panel.music_player or options.get(CONF_MEDIA_PLAYER, "") or own
+    return None
 
 
 def _keep_sounds(entry: ConfigEntry) -> list[str]:
@@ -414,6 +436,8 @@ class Panel:
         # The dashboard the web view shows (the panel reports it) and the
         # card resources it leaves out there (worked out by refresh_skip).
         self.web_dashboard = ""
+        # The player picked on the panel's music page (it reports it), "" until it does.
+        self.music_player = ""
         # The panel's alarms as it reports them (they live on the panel), None until it does.
         self.alarms: list[dict[str, Any]] | None = None
         # Alarms set on the PanelOS page that the panel has not confirmed yet: kept (also over a restart)
@@ -783,6 +807,8 @@ class Panel:
         elif self.pending_alarms is not None:
             # a report without alarms (an older panel or between): the kept ones go again
             self._send_pending()
+        if isinstance(player := msg.get("music_player"), str) and player != self.music_player:
+            self.music_player = player[:_TEXT_MAX]
         if isinstance(dashboard := msg.get("dashboard"), str) and dashboard != self.web_dashboard:
             self.web_dashboard = dashboard[:_TEXT_MAX]
             self.refresh_skip()

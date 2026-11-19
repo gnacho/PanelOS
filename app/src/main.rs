@@ -2803,6 +2803,7 @@ fn report_device(s: &mut UiState) {
     // one volume: Music Assistant's volume of the panel's Sendspin player is the panel's own
     crate::sendspin::panel_volume(s.settings.volume);
     d.alarms = serde_json::to_value(&s.settings.alarms).unwrap_or_default();
+    d.music_player = media_entity(s);
     d.ready = true;
     let after = (
         (d.theme.clone(), d.brightness, d.auto_brightness, d.screensaver_seconds, d.screensaver_style.clone()),

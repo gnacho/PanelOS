@@ -9,6 +9,9 @@ CONF_TILES = "tile_entities"
 CONF_SHOW_CONVERSATION = "show_conversation"
 # The voice view's look: 0 plain, 1 terminal, 2 comic, 3 oscilloscope.
 CONF_VOICE_LOOK = "voice_look"
+# The player music commands said to the panel act on: the one picked on its music page (default) or the panel itself.
+CONF_VOICE_PLAYER = "voice_player"
+VOICE_PLAYERS = ("selected", "self")
 
 # Dashboard mode: the Home Assistant dashboard in the panel's web view.
 CONF_DASHBOARD = "dashboard"

@@ -63,6 +63,8 @@ pub struct DeviceState {
     /// url_path of the dashboard the web view shows (for the integration's
     /// choice of card resources).
     pub web_dashboard: String,
+    /// The player picked on the music page (the integration sends music commands said to the panel there).
+    pub music_player: String,
     /// The panel's alarms (they live on the panel; the integration shows and edits them).
     pub alarms: serde_json::Value,
     /// The media player (media.rs): state (api.proto MediaPlayerState), gain, muted.

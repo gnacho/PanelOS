@@ -393,7 +393,10 @@ fn session(
                             eprintln!("nspanel-app: device report not accepted: {why}");
                             if why.contains("alarms") && !report.no_alarms {
                                 // An integration from before the alarms: everything again, without them.
-                                report = Report { linked: true, no_alarms: true, ..Default::default() };
+                                report = Report { linked: true, no_alarms: true, no_music_player: report.no_music_player, ..Default::default() };
+                            } else if why.contains("music_player") && !report.no_music_player {
+                                // An integration from before the music player: everything again, without it.
+                                report = Report { linked: true, no_alarms: report.no_alarms, no_music_player: true, ..Default::default() };
                             } else {
                                 // An older integration without panelos/report.
                                 report.linked = false;
@@ -537,6 +540,10 @@ struct Report {
     linked: bool,
     device_sent: bool,
     dashboard: Option<String>,
+    /// The music player last reported.
+    music_player: Option<String>,
+    /// The integration does not take the music player (older than it).
+    no_music_player: bool,
     states: Map<String, Value>,
     options: Map<String, Value>,
     /// The alarms last sent.
@@ -565,14 +572,20 @@ impl Report {
         let states = changed(crate::panel_device::states(&snapshot), &mut self.states);
         let options = changed(crate::panel_device::options(&snapshot), &mut self.options);
         let dashboard = (self.dashboard.as_deref() != Some(snapshot.web_dashboard.as_str())).then(|| snapshot.web_dashboard.clone());
+        let music_player =
+            (!self.no_music_player && self.music_player.as_deref() != Some(snapshot.music_player.as_str())).then(|| snapshot.music_player.clone());
         let alarms = (!self.no_alarms && !snapshot.alarms.is_null() && self.alarms.as_ref() != Some(&snapshot.alarms)).then(|| snapshot.alarms.clone());
-        if states.is_empty() && options.is_empty() && dashboard.is_none() && alarms.is_none() && self.device_sent {
+        if states.is_empty() && options.is_empty() && dashboard.is_none() && music_player.is_none() && alarms.is_none() && self.device_sent {
             return None;
         }
         let mut msg = json!({"type": "panelos/report", "panel_id": PANEL_ID});
         if let Some(d) = dashboard {
             msg["dashboard"] = d.clone().into();
             self.dashboard = Some(d);
+        }
+        if let Some(p) = music_player {
+            msg["music_player"] = p.clone().into();
+            self.music_player = Some(p);
         }
         if !self.device_sent {
             msg["device"] = crate::panel_device::device_info(&crate::esphome::mac_address().to_lowercase());

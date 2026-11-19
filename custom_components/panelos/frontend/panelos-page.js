@@ -3710,6 +3710,8 @@ class PanelOSPage extends HTMLElement {
       this._hero("Voice", [h("span", null, this._pname(p)), this._syncLine(p)]),
       this._card("On the screen", { info: "While you talk to it, the assistant fills the screen in this look; when it is done, the panel goes back to the page it was on." },
         this._lookPicker(VOICE_LOOKS.map((name, k) => ({ id: k, name, pic: this._lookPic(p, `voice-${k}`, () => svgNode(ART.voice[k]())) })), st.voice_look || 0, (v) => this._options(p, { voice_look: v }, { optimistic: (s) => { s.voice_look = v; } }))),
+      this._card("Music commands", { info: "Music asked for by voice on this panel (play, next, pause, volume, stop) goes to the player picked on its music page, or always to the panel's own speaker." },
+        this._row("Plays on", this._choice([["selected", "Selected player"], ["self", "This panel"]], st.voice_player || "selected", (v) => this._options(p, { voice_player: v }, { optimistic: (s) => { s.voice_player = v; } }), { label: "Plays on" }), { cls: "first" })),
       this._card("Voice assistant", { info: "The panel's voice satellite is its own ESPHome device in Home Assistant, shown as connected via this panel. Its settings (assistant, wake word, volume, microphone) are its entities." },
         ents.length ? ents.map((e, k) => this._row(short(e.entity_id), control(e), { cls: k === 0 ? "first" : "", stack: e.entity_id.startsWith("select.") }))
           : h("div", { class: "empty" }, "No voice satellite is connected via this panel yet."),
@@ -4585,7 +4587,10 @@ class PanelOSPage extends HTMLElement {
         }
         changes.screensaver = s;
       }
-      if (what.voice && this._has(to, "mic")) changes.voice_look = from.settings.voice_look || 0;
+      if (what.voice && this._has(to, "mic")) {
+        changes.voice_look = from.settings.voice_look || 0;
+        changes.voice_player = from.settings.voice_player || "selected";
+      }
       if (what.dnd) changes.dnd = clone(from.settings.dnd || DEFAULT_DND);
       if (what.popups) {
         changes.popups = clone(from.settings.popups || DEFAULT_POPUPS);

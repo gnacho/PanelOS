@@ -69,7 +69,7 @@ from .notes import Notes
 from .players import async_register_players_view
 from .sounds import async_register_views
 from .page import async_hide_page, async_setup_page, async_show_page
-from .panel import Panel, alive, find_entry, link_gone, links, panel_config
+from .panel import Panel, alive, find_entry, link_gone, links, panel_config, voice_player
 
 type PanelOSConfigEntry = ConfigEntry[Panel]
 
@@ -243,6 +243,8 @@ async def ws_log(hass: HomeAssistant, connection: websocket_api.ActiveConnection
         vol.Optional("states"): dict,
         vol.Optional("dashboard"): str,
         vol.Optional("alarms"): list,
+        # the player picked on the panel's music page (music commands said to the panel go there)
+        vol.Optional("music_player"): str,
     }
 )
 @callback
@@ -380,6 +382,9 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     await house.async_load()
     notes = Notes(hass)
     hass.data[DOMAIN]["notes"] = notes
+    # voice_device_context (a device with ``player: panelos``) asks here which player music commands said to a panel
+    # act on, at the moment of the command
+    hass.data[DOMAIN]["voice_player"] = lambda satellite_id: voice_player(hass, satellite_id)
     await notes.async_load()
     await async_setup_page(hass)
 
