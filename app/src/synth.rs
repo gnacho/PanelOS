@@ -291,7 +291,10 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     if ui.get_home_fl_grid() != g {
         ui.set_home_fl_grid(g);
     }
-    ui.set_home_fl_star(mix);
+    // only on a change: a set every second redrew every page (the scenes live on pages out of sight too)
+    if (ui.get_home_fl_star() - mix).abs() > 0.004 {
+        ui.set_home_fl_star(mix);
+    }
     // The scene clock moves its base on by 20 minutes (30 times the 40 s loop of the floor, the
     // palms and the star) and the car on the road with it, in the same step: nothing jumps.
     let cars = ui.get_home_fl_cars();
