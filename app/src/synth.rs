@@ -295,6 +295,13 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     if (ui.get_home_fl_star() - mix).abs() > 0.004 {
         ui.set_home_fl_star(mix);
     }
+    // The scene clock, the palms and the cars only while a scene is on screen: the scene time comes from the
+    // animation clock, and every read of it asks for a frame (a read every second redrew every page once a
+    // second). Cars whose trip ended meanwhile are out of sight; the next tick on screen clears them.
+    let shown = on_screen(ui, s);
+    if !shown {
+        return;
+    }
     // The scene clock moves its base on by 20 minutes (30 times the 40 s loop of the floor, the
     // palms and the star) and the car on the road with it, in the same step: nothing jumps.
     let cars = ui.get_home_fl_cars();
@@ -341,7 +348,7 @@ pub fn tick(ui: &AppWindow, s: &crate::UiState) {
     let gap = [1.0f32, 0.34, 0.2][traffic];
     let newest = ordinary.iter().max_by(|a, b| a.born.total_cmp(&b.born));
     let room = ordinary.len() < most && newest.is_none_or(|c| traffic > 0 && (now - c.born) / c.dur >= gap);
-    let patrol_due = patrol_clock(on_screen(ui, s));
+    let patrol_due = patrol_clock(shown);
     let mut changed = alive.len() != all.len();
     let mut next = alive.clone();
     if room {
