@@ -574,8 +574,12 @@ export component MusicPage inherits Rectangle {
         }
         // volume fader (dark print on aluminium)
         // speaker over the value, both centred on the fader (100 % fits inside the plate)
-        // the fader follows the finger; the volume is set when it lets go
+        // the fader moves only with a drag (a touch alone changes nothing: a tap or a swipe starting on the strip set the
+        // volume to where the finger was), by as much as the finger moves; the volume is set when it lets go
         property <bool> fdrag;
+        property <bool> fpress;
+        property <length> fy0;
+        property <float> fbase;
         property <float> fv;
         // let go: the fader stays where it was dropped until the player's volume follows (or 3 s), then glides
         property <bool> fhold;
@@ -596,16 +600,26 @@ export component MusicPage inherits Rectangle {
             x: 418px; y: (tt.f0 - 16) * 1px; width: 56px; height: (tt.f1 - tt.f0 + 32) * 1px;
             pointer-event(ev) => {
                 if ev.kind == PointerEventKind.down {
-                    tt.fdrag = true;
-                    tt.fv = max(0, min(1, (tt.f1 - (self.y + self.mouse-y) / 1px) / (tt.f1 - tt.f0)));
+                    tt.fpress = true;
+                    tt.fdrag = false;
+                    tt.fy0 = self.mouse-y;
                 }
                 if ev.kind == PointerEventKind.up {
                     if tt.fdrag { tt.fhold = true; Act.act("music.volume", tt.fv); }
                     tt.fdrag = false;
+                    tt.fpress = false;
                 }
-                if ev.kind == PointerEventKind.cancel { tt.fdrag = false; }
+                if ev.kind == PointerEventKind.cancel { tt.fdrag = false; tt.fpress = false; }
             }
-            moved => { tt.fv = max(0, min(1, (tt.f1 - (self.y + self.mouse-y) / 1px) / (tt.f1 - tt.f0))); }
+            moved => {
+                if tt.fpress && !tt.fdrag && abs(self.mouse-y - tt.fy0) > 6px {
+                    tt.fdrag = true;
+                    tt.fbase = root.volume;
+                }
+                if tt.fdrag {
+                    tt.fv = max(0, min(1, tt.fbase + (tt.fy0 - self.mouse-y) / 1px / (tt.f1 - tt.f0)));
+                }
+            }
         }
         // start / stop and the small buttons
         Rectangle {

@@ -3404,6 +3404,10 @@ fn handle_act(ui: &AppWindow, what: &str, value: &str) {
             if entity.is_empty() {
                 return;
             }
+            // which control sent what to which player (a volume nobody remembered setting can be traced)
+            if what != "music.seek" {
+                eprintln!("nspanel-app: music page: {} {value} on {entity}", what.trim_start_matches("music."));
+            }
             match what {
                 "music.play" => {
                     call("media_player", "media_play_pause", &entity, json!({}));
