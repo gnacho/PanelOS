@@ -112,6 +112,7 @@ Up to PanelOS 0.0.3 the panel's display, settings and sensors were on the ESPHom
 - **Overview**: the panel at a glance.
 - **Pages**: the pages in swipe order (the first is the start page), each with its look and its options: a custom page's background and widgets on its 4 × 4 grid, the player and the turntable's wood, the timers page's functions and colours, the quick controls' entities and the mixing desk's labels, the cameras' fit, start view and doorbell, the calendars written on the wall calendar, the pager's finish. A page type can be added more than once (several custom pages, each with its own background and widgets); a page can be hidden without losing its settings.
 - **Alerts**: critical alerts and status screens (shared by every panel, see below), with a test on one panel.
+- The panel's live screen next to every view runs while the page is used: after a minute without use (mouse, scrolling, keys, touch) it stops on its last picture ("Paused") and goes on with the next use. Use counts only while the page is the active window; making the window active again counts as use.
 - **Voice** (the conversation's look on the screen; **Music commands**: whether music asked for by voice on the panel goes to the player picked on its music page, the default, or always to the panel itself), **Display** (theme, brightness, screensaver after and when, do not disturb, new notifications) and **Device** (sensor reporting, touch calibration, restart, reboot, name and area).
 - **All panels**: what each panel can do, and **Copy settings** to other panels (each part copied, adapted to what the target can do, or skipped, with the reason).
 - **Add a panel** starts the integration's setup for another panel, with its defaults or a copy of an existing panel.
@@ -144,6 +145,17 @@ The alarms live on the panel (they ring without Home Assistant); the timers page
 The panel is a media player in Home Assistant (an entity of its voice device): Home Assistant, Music Assistant and automations can play on its speaker (`media_player.play_media`, volume, mute, pause, stop, announcements). Home Assistant's media proxy turns any source into a 48 kHz WAV stream, which the panel plays as it arrives. The volume set there is a share of the panel's own volume.
 
 Music commands said to a panel (play, next, pause, volume, stop) can follow the panel: the panel reports the player picked on its music page (`music_player` in `panelos/report`), and `hass.data["panelos"]["voice_player"](satellite_entity_id)` returns the player for a panel's voice satellite: the picked player (else the integration's media player, else the panel's own Music Assistant player), or the panel's own player when Music commands is set to This panel; `None` for a satellite that is no panel's. A voice setup that keeps a player per satellite (for example a custom intent handler) calls it at the moment of the command, so the player always follows the music page.
+
+## Music by voice
+
+Home Assistant's own media commands work on a panel with no setup: said to the panel's voice satellite without naming a player, an area or a floor, they act on the player chosen on its music page (or on the panel itself, see Music commands above). Home Assistant brings the sentences, in every language it supports and in many variations, for example:
+
+- **Next**: "next song", "skip this", "skip to the next track"
+- **Previous**: "previous track", "go back to the previous song", "play the last song again"
+- **Pause / resume**: "pause", "pause the music", "resume", "unpause the music"
+- **Volume**: "volume up", "turn the volume down", "set the volume to 30 percent", "mute", "unmute"
+
+A command that names a player, another room or a floor ("pause the kitchen"), and every command said to another device, goes to Home Assistant's own handler unchanged. The reply is Home Assistant's own, in the language of the command (`custom_components/panelos/voice_intents.py`; the handlers of Home Assistant's media intents are wrapped once Home Assistant has started). Custom sentences of your own for the same commands take precedence over Home Assistant's built-in ones; to have them follow the panel too, ask `hass.data["panelos"]["voice_player"]` for the player.
 
 ## Dashboard mode
 
