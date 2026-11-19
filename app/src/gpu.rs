@@ -354,13 +354,15 @@ impl GpuWindow {
             return Ok(false);
         }
         // Development: why frames are drawn (a property changed, an animation runs, a picture was asked for)
-        WHY.with(|w| {
-            let mut v = w.get();
-            v.0 += asked as u32;
-            v.1 += animating as u32;
-            v.2 += readback as u32;
-            w.set(v);
-        });
+        if FRAME_STATS.load(Ordering::Relaxed) {
+            WHY.with(|w| {
+                let mut v = w.get();
+                v.0 += asked as u32;
+                v.1 += animating as u32;
+                v.2 += readback as u32;
+                w.set(v);
+            });
+        }
         let started = std::time::Instant::now();
         {
             use i_slint_renderer_skia::SkiaRendererExt;
