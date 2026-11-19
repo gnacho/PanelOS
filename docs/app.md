@@ -50,8 +50,18 @@ Measured on the panel with the app's frame statistics (`{"frame_stats": true}` o
 | Drawn big city at night: calm / storm / strong wind | 34.3 / 37.8 / 32.6 | 43.0 ms |
 | Drawn city at night: calm / storm / strong wind | 31.4 / 36.4 / 31.7 | 44.1 ms |
 | Drawn countryside at night: calm / storm / strong wind | 40.4 / 37.1 / 32.4 | 66.1 ms |
-| Synthwave timers: one / two / three running | 41.8 / 30.0 / 32.4 | 69.1 ms |
+| Synthwave timers: one / two / three running | 43.2 / 30.0 / 33.6 | 62.5 ms |
 | Stopwatch, nixie tubes, running | 45.2 | 32.7 ms |
+
+Heat: the SoC temperature after eight minutes in each view, one after the other at night, with the app's CPU share. The SoC throttles passively from 70 °C.
+
+| View | SoC | App CPU |
+|---|---|---|
+| Still views (paused music, calendar) | 46–50 °C | 1.6–1.8 % |
+| Screensaver clock (breathing colon and seconds) | 58 °C | 14 % |
+| Weather page, living photo at night | 60–62 °C | 20 % |
+| Custom page, photo city; synthwave drive | 63–65 °C | 24 % |
+
 
 ## Pairing, theme, brightness, approach
 
