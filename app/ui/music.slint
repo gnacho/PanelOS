@@ -574,8 +574,8 @@ export component MusicPage inherits Rectangle {
         }
         // volume fader (dark print on aluminium)
         // speaker over the value, both centred on the fader (100 % fits inside the plate)
-        // the fader moves only with a drag (a touch alone changes nothing: a tap or a swipe starting on the strip set the
-        // volume to where the finger was), by as much as the finger moves; the volume is set when it lets go
+        // a tap on the strip jumps the fader there; a drag moves it by as much as the finger moves (no jump at the
+        // start); the volume is set when the finger lets go
         property <bool> fdrag;
         property <bool> fpress;
         property <length> fy0;
@@ -605,7 +605,13 @@ export component MusicPage inherits Rectangle {
                     tt.fy0 = self.mouse-y;
                 }
                 if ev.kind == PointerEventKind.up {
-                    if tt.fdrag { tt.fhold = true; Act.act("music.volume", tt.fv); }
+                    if tt.fdrag {
+                        tt.fhold = true; Act.act("music.volume", tt.fv);
+                    } else if tt.fpress {
+                        // a tap: the fader jumps to where the finger was
+                        tt.fv = max(0, min(1, (tt.f1 - (self.y + tt.fy0) / 1px) / (tt.f1 - tt.f0)));
+                        tt.fhold = true; Act.act("music.volume", tt.fv);
+                    }
                     tt.fdrag = false;
                     tt.fpress = false;
                 }
