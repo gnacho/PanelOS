@@ -67,10 +67,16 @@ component Ring inherits Rectangle {
     animate fr-s { duration: root.refill ? 300ms : 1000ms; easing: linear; }
     // a new ring draws from nothing to full in 400 ms before it runs (M16)
     property <float> intro: 0;
-    init => { root.intro = 1; }
+    init => { root.intro = 1; root.aq = root.stepped(root.a); }
     animate intro { duration: 400ms; easing: ease-out; }
     property <float> shown: min(root.intro, root.fr-s);
     property <angle> a: min(0.9999, max(0, root.shown)) * 360deg;
+    // the arc as drawn: in steps of half a pixel along it, taken only when a step is passed (the glide moves it a
+    // fraction of a pixel per frame; building the arc's path anew every frame cost several ms per ring)
+    property <angle> step: max(0.05deg, 1rad * 0.5 / max(1, root.r));
+    pure function stepped(x: angle) -> angle { Math.round(x / root.step) * root.step }
+    property <angle> aq;
+    changed a => { if Math.abs(root.stepped(root.a) - root.aq) > 0.001deg { root.aq = root.stepped(root.a); } }
     // the last ten seconds: the ring brightens with each second, a soft 300 ms pulse (M18)
     property <duration> pulse-t0;
     changed left => { if root.left > 0 && root.left <= 10 { root.pulse-t0 = animation-tick(); } }
@@ -80,8 +86,8 @@ component Ring inherits Rectangle {
         x: -root.stroke / 2; y: -root.stroke / 2; width: root.width + root.stroke; height: root.height + root.stroke;
         viewbox-width: root.width / 1px; viewbox-height: root.height / 1px;
         stroke: root.arc.brighter(0.45 * root.pulse); stroke-width: root.stroke;
-        commands: "M " + root.c + " " + (root.c - root.r) + " A " + root.r + " " + root.r + " 0 " + (root.a > 180deg ? "1" : "0") + " 1 "
-            + (root.c + root.r * Math.sin(root.a)) + " " + (root.c - root.r * Math.cos(root.a));
+        commands: "M " + root.c + " " + (root.c - root.r) + " A " + root.r + " " + root.r + " 0 " + (root.aq > 180deg ? "1" : "0") + " 1 "
+            + (root.c + root.r * Math.sin(root.aq)) + " " + (root.c - root.r * Math.cos(root.aq));
     }
 }
 
