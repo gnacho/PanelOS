@@ -142,6 +142,11 @@ fn pct(v: &mut [f32], p: f32) -> f32 {
     v[((v.len() as f32 - 1.0) * p).round() as usize]
 }
 
+thread_local! {
+    /// Development: frames drawn because a property changed / an animation runs / a picture was asked for.
+    static WHY: std::cell::Cell<(u32, u32, u32)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
 fn note_frame(render_ms: f32, start: std::time::Instant) {
     use std::sync::atomic::Ordering;
     if !FRAME_STATS.load(Ordering::Relaxed) {
@@ -171,9 +176,13 @@ fn note_frame(render_ms: f32, start: std::time::Instant) {
         let secs = s.since.elapsed().as_secs_f32();
         if secs >= 5.0 {
             let n = s.render.len();
+            let why = WHY.with(|w| w.replace((0, 0, 0)));
             eprintln!(
-                "nspanel-app: frames {:.1}/s | interval p50 {:.1} p99 {:.1} max {:.1} ms | render p50 {:.1} p99 {:.1} max {:.1} ms",
+                "nspanel-app: frames {:.1}/s (asked {}, animating {}, picture {}) | interval p50 {:.1} p99 {:.1} max {:.1} ms | render p50 {:.1} p99 {:.1} max {:.1} ms",
                 n as f32 / secs,
+                why.0,
+                why.1,
+                why.2,
                 pct(&mut s.interval, 0.5),
                 pct(&mut s.interval, 0.99),
                 pct(&mut s.interval, 1.0),
@@ -339,9 +348,19 @@ impl GpuWindow {
     /// Returns whether a frame was drawn.
     pub fn draw_if_needed(&self) -> Result<bool, PlatformError> {
         let readback = READBACK.with(|r| !r.borrow().is_empty());
-        if !self.needs_redraw.take() && !self.window.has_active_animations() && !readback {
+        let asked = self.needs_redraw.take();
+        let animating = self.window.has_active_animations();
+        if !asked && !animating && !readback {
             return Ok(false);
         }
+        // Development: why frames are drawn (a property changed, an animation runs, a picture was asked for)
+        WHY.with(|w| {
+            let mut v = w.get();
+            v.0 += asked as u32;
+            v.1 += animating as u32;
+            v.2 += readback as u32;
+            w.set(v);
+        });
         let started = std::time::Instant::now();
         {
             use i_slint_renderer_skia::SkiaRendererExt;
