@@ -182,8 +182,7 @@ component NeonRing inherits Rectangle {
 
 // Neon lettering: a soft coloured glow, a thin dark rim that follows the glyphs, a white core.
 component NeonText inherits Rectangle {
-    // a text that changes every second (a running time) is drawn directly; any other is drawn once into a layer
-    // (rebuilding a layer every second cost a 40-50 ms frame each second over the moving scene)
+    // drawn once into a layer; a live text (one that changes every second) is drawn directly
     in property <bool> live;
     cache-rendering-hint: !root.live;
     in property <string> text;
@@ -192,14 +191,80 @@ component NeonText inherits Rectangle {
     in property <color> glow;
     in property <color> rim;
     in property <color> core: #ffffff;
+    // what is drawn follows the inputs only when they really change: a parent whose data changes every second (a
+    // running timer's row) re-evaluates them every second, which would rebuild the layer each time (a 40-50 ms frame)
+    property <string> tx;
+    property <length> sz;
+    property <int> wt;
+    property <color> gl;
+    property <color> rm;
+    property <color> cr;
+    init => { root.tx = root.text; root.sz = root.size; root.wt = root.weight; root.gl = root.glow; root.rm = root.rim; root.cr = root.core; }
+    changed text => { root.tx = root.text; }
+    changed size => { root.sz = root.size; }
+    changed weight => { root.wt = root.weight; }
+    changed glow => { root.gl = root.glow; }
+    changed rim => { root.rm = root.rim; }
+    changed core => { root.cr = root.core; }
     for o in [{ x: -2.5, y: 0 }, { x: 2.5, y: 0 }, { x: 0, y: -2.5 }, { x: 0, y: 2.5 }]: Text {
-        x: o.x * 1px; y: o.y * 1px; width: root.width; height: root.height; text: root.text; font-size: root.size; font-weight: root.weight;
-        color: root.glow.with-alpha(0.38); horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+        x: o.x * 1px; y: o.y * 1px; width: root.width; height: root.height; text: root.tx; font-size: root.sz; font-weight: root.wt;
+        color: root.gl.with-alpha(0.38); horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
     for o in [{ x: -1, y: -1 }, { x: 1, y: -1 }, { x: -1, y: 1 }, { x: 1, y: 1 }, { x: 0, y: -1.4 }, { x: 0, y: 1.4 }, { x: -1.4, y: 0 }, { x: 1.4, y: 0 }]: Text {
-        x: o.x * 1px; y: o.y * 1px; width: root.width; height: root.height; text: root.text; font-size: root.size; font-weight: root.weight;
-        color: root.rim; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
-    Text { width: root.width; height: root.height; text: root.text; font-size: root.size; font-weight: root.weight;
-        color: root.core; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+        x: o.x * 1px; y: o.y * 1px; width: root.width; height: root.height; text: root.tx; font-size: root.sz; font-weight: root.wt;
+        color: root.rm; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+    Text { width: root.width; height: root.height; text: root.tx; font-size: root.sz; font-weight: root.wt;
+        color: root.cr; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+}
+
+// A running time in neon, one cached layer per digit: each second only the digits that change are drawn again
+// (the whole time as one live text re-set its 13 layers every second: a 40-50 ms frame over the moving scene).
+// The cells are set only when they really change, so the others keep their layers.
+component NeonClock inherits Rectangle {
+    in property <float> t;                 // seconds left
+    in property <length> size-short: 52px; // m:ss
+    in property <length> size-long: 40px;  // h:mm:ss
+    in property <int> weight: 400;
+    in property <color> glow;
+    in property <color> rim;
+    property <bool> long;                  // h:mm:ss (else m:ss)
+    property <string> c0;                  // the lead: minutes, or hours
+    property <string> c2;
+    property <string> c3;
+    property <string> c5;
+    property <string> c6;
+    property <length> size: root.long ? root.size-long : root.size-short;
+    function update() {
+        let lg = root.t >= 3600;
+        let c = Math.ceil(root.t);
+        let mm = lg ? Math.mod(Math.floor(c / 60), 60) : Math.floor(c / 60);
+        let ss = Math.mod(c, 60);
+        let l0 = lg ? "" + Math.floor(root.t / 3600) : "" + mm;
+        let a = lg ? "" + Math.floor(mm / 10) : "" + Math.floor(ss / 10);
+        let b = lg ? "" + Math.mod(mm, 10) : "" + Math.mod(ss, 10);
+        if root.long != lg { root.long = lg; }
+        if root.c0 != l0 { root.c0 = l0; }
+        if root.c2 != a { root.c2 = a; }
+        if root.c3 != b { root.c3 = b; }
+        if lg && root.c5 != "" + Math.floor(ss / 10) { root.c5 = "" + Math.floor(ss / 10); }
+        if lg && root.c6 != "" + Math.mod(ss, 10) { root.c6 = "" + Math.mod(ss, 10); }
+    }
+    init => { root.update(); }
+    changed t => { root.update(); }
+    property <length> dw: p-digit.preferred-width;
+    property <length> cw: p-colon.preferred-width;
+    property <length> lw: p-lead.preferred-width;
+    property <length> total: root.long ? root.lw + 2 * root.cw + 4 * root.dw : root.lw + root.cw + 2 * root.dw;
+    property <length> x0: (root.width - root.total) / 2 - 4px;   // 4 px either side of a cell for the glow
+    p-digit := Text { visible: false; text: "0"; font-size: root.size; font-weight: root.weight; }
+    p-colon := Text { visible: false; text: ":"; font-size: root.size; font-weight: root.weight; }
+    p-lead := Text { visible: false; text: root.c0; font-size: root.size; font-weight: root.weight; }
+    NeonText { x: root.x0; width: root.lw + 8px; height: root.height; text: root.c0; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
+    NeonText { x: root.x0 + root.lw; width: root.cw + 8px; height: root.height; text: ":"; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
+    NeonText { x: root.x0 + root.lw + root.cw; width: root.dw + 8px; height: root.height; text: root.c2; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
+    NeonText { x: root.x0 + root.lw + root.cw + root.dw; width: root.dw + 8px; height: root.height; text: root.c3; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
+    if root.long: NeonText { x: root.x0 + root.lw + root.cw + 2 * root.dw; width: root.cw + 8px; height: root.height; text: ":"; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
+    if root.long: NeonText { x: root.x0 + root.lw + 2 * root.cw + 2 * root.dw; width: root.dw + 8px; height: root.height; text: root.c5; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
+    if root.long: NeonText { x: root.x0 + root.lw + 2 * root.cw + 3 * root.dw; width: root.dw + 8px; height: root.height; text: root.c6; size: root.size; weight: root.weight; glow: root.glow; rim: root.rim; }
 }
 
 component RoundButton inherits Rectangle {
@@ -848,7 +913,7 @@ export component TimersPage inherits Rectangle {
                 fr: parent.t.total > 0 ? parent.t.remaining / parent.t.total : 0; }
             NeonText { x: (root.width - 160px) / 2; y: root.top + 58px; width: 160px; height: 24px; text: root.name(parent.t.label); size: 17px; weight: 600;
                 glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.45); }
-            NeonText { live: true; x: 0; y: root.top + 84px; width: root.width; height: 62px; text: root.clock(parent.t.remaining); size: parent.t.remaining >= 3600 ? 42px : 54px; weight: 400;
+            NeonClock { x: 0; y: root.top + 84px; width: root.width; height: 62px; t: parent.t.remaining; size-short: 54px; size-long: 42px; weight: 400;
                 glow: parent.g; rim: root.deep; }
             NeonText { x: 0; y: root.top + 146px; width: root.width; height: 20px; text: parent.t.running ? "of " + root.clock(parent.t.total) : "PAUSED"; size: 13px; weight: 600;
                 glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.6); }
@@ -863,7 +928,7 @@ export component TimersPage inherits Rectangle {
                 NeonRing { x: 8px; y: 0; width: 190px; height: 190px; stroke: 7px; glow: parent.g; paused: !t.running; fr: t.total > 0 ? t.remaining / t.total : 0; }
                 TouchArea { x: 8px; y: 0; width: 190px; height: 190px; clicked => { Act.act("timers.sheet", i); } }
                 NeonText { x: 28px; y: 50px; width: 150px; height: 22px; text: root.name(t.label); size: 15px; weight: 600; glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.45); }
-                NeonText { live: true; x: 0; y: 72px; width: 206px; height: 50px; text: root.clock(t.remaining); size: t.remaining >= 3600 ? 32px : 40px; weight: 400; glow: parent.g; rim: root.deep; }
+                NeonClock { x: 0; y: 72px; width: 206px; height: 50px; t: t.remaining; size-short: 40px; size-long: 32px; weight: 400; glow: parent.g; rim: root.deep; }
                 NeonText { x: 0; y: 122px; width: 206px; height: 18px; text: t.running ? "of " + root.clock(t.total) : "PAUSED"; size: 12px; weight: 600; glow: parent.g; rim: root.deep; core: parent.g.mix(#ffffff, 0.6); }
                 HorizontalLayout {
                     x: 0; y: 206px; width: 206px; height: 52px; alignment: center; spacing: 10px;
@@ -884,7 +949,7 @@ export component TimersPage inherits Rectangle {
                 TouchArea { clicked => { Act.act(scell.has ? "timers.sheet" : "timers.quick", c); } }
                 if scell.has: NeonRing { x: (scell.width - 118px) / 2; y: 10px; width: 118px; height: 118px; stroke: 6px; glow: scell.g; paused: !scell.t.running;
                     fr: scell.t.total > 0 ? scell.t.remaining / scell.t.total : 0; }
-                if scell.has: NeonText { live: true; x: 0; y: 10px + 38px; width: scell.width; height: 42px; text: root.clock(scell.t.remaining); size: scell.t.remaining >= 3600 ? 22px : 28px; weight: 400;
+                if scell.has: NeonClock { x: 0; y: 10px + 38px; width: scell.width; height: 42px; t: scell.t.remaining; size-short: 28px; size-long: 22px; weight: 400;
                     glow: scell.g; rim: root.deep; }
                 if scell.has && !scell.t.running: NeonText { x: 0; y: 10px + 76px; width: scell.width; height: 14px; text: "PAUSED"; size: 10px; weight: 600; glow: scell.g; rim: root.deep; core: scell.g.mix(#ffffff, 0.6); }
                 if scell.has: NeonText { x: 12px; y: 136px; width: scell.width - 24px; height: 22px; text: root.name(scell.t.label); size: 15px; weight: 600;
@@ -1314,7 +1379,7 @@ export component TimersPage inherits Rectangle {
     if !root.ringing && root.mode == 2 && root.sw-look == 4: nix := Rectangle {
         // the time as the tubes show it: sampled 30 times a second while it runs (the hundredths blur anyway)
         property <float> w30;
-        Timer { interval: 33ms; running: true; triggered => { nix.w30 = root.watch; } }
+        Timer { interval: 33ms; running: root.watch-running; triggered => { nix.w30 = root.watch; } }
         property <float> wv: root.watch-running ? nix.w30 : root.watch;
         property <int> mins: Math.mod(Math.floor(nix.wv / 60), 100);
         property <int> secs: Math.mod(Math.floor(nix.wv), 60);
