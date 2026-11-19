@@ -3174,6 +3174,7 @@ fn on_setting(ui: &AppWindow, key: &str, value: &str) {
         }
         "restart_app" => {
             eprintln!("nspanel-app: restart requested (settings / Home Assistant button)");
+            sendspin::goodbye();
             std::process::exit(0)
         }
         "reboot" => {

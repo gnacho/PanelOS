@@ -137,12 +137,29 @@ extern "C" fn on_sigusr2(_: libc::c_int) {
     SCROLL_REQUEST.store(true, Ordering::SeqCst);
 }
 
+/// Set by SIGTERM (the service stopping): the app says goodbye where it must, then exits.
+static STOP_REQUEST: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_sigterm(_: libc::c_int) {
+    STOP_REQUEST.store(true, Ordering::SeqCst);
+}
+
 pub fn install_screenshot_signal() {
     // SAFETY: the handlers only store to atomics.
     unsafe {
         libc::signal(libc::SIGUSR1, on_sigusr1 as *const () as libc::sighandler_t);
         libc::signal(libc::SIGUSR2, on_sigusr2 as *const () as libc::sighandler_t);
+        libc::signal(libc::SIGTERM, on_sigterm as *const () as libc::sighandler_t);
     }
+    // a stop: Music Assistant hears "restart" (it reconnects as soon as the app is back), then the app ends
+    std::thread::spawn(|| loop {
+        if STOP_REQUEST.load(Ordering::SeqCst) {
+            eprintln!("nspanel-app: stopping");
+            crate::sendspin::goodbye();
+            std::process::exit(0);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    });
 }
 
 /// Lets other threads run code on the UI thread (slint::invoke_from_event_loop).

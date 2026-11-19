@@ -461,6 +461,21 @@ pub fn panel_volume(percent: u8) {
 
 /// Each new connection gets a number; the admitted one is in ADMITTED.
 static CONN_SEQ: AtomicU64 = AtomicU64::new(0);
+/// The app is stopping: the session says goodbye ("restart"), so the server comes back as soon as the app runs again.
+static GOODBYE: AtomicBool = AtomicBool::new(false);
+static GOODBYE_SENT: AtomicBool = AtomicBool::new(false);
+
+/// Says goodbye to the server before the app stops (waits at most 700 ms; at once without a session).
+pub fn goodbye() {
+    GOODBYE.store(true, Ordering::SeqCst);
+    if ADMITTED.lock().unwrap().is_none() {
+        return;
+    }
+    let t = Instant::now();
+    while !GOODBYE_SENT.load(Ordering::SeqCst) && t.elapsed() < Duration::from_millis(700) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 static ADMITTED: Mutex<Option<(u64, bool)>> = Mutex::new(None); // (connection, declares playback)
 
 pub fn spawn(player: std::sync::Arc<crate::voice::Player>, volume: u8, set_volume: impl Fn(u8) + Send + Sync + 'static) {
@@ -512,6 +527,21 @@ struct Conn {
 }
 
 impl Conn {
+    /// A clean WebSocket close (the server sees a normal close, not a dropped connection), at most 300 ms.
+    fn close(&mut self) {
+        let _ = self.ws.close(None);
+        let t = Instant::now();
+        while t.elapsed() < Duration::from_millis(300) {
+            match self.ws.read() {
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e)) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                    let _ = self.ws.flush();
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
     fn send(&mut self, v: &Value) -> Result<(), String> {
         let mut plain = vec![0u8];
         plain.extend(v.to_string().as_bytes());
@@ -691,6 +721,12 @@ fn session(stream: TcpStream, id: u64) -> Result<String, String> {
     let started = Instant::now();
 
     loop {
+        if GOODBYE.load(Ordering::SeqCst) {
+            let _ = c.send(&json!({"type": "client/goodbye", "payload": {"reason": "restart"}}));
+            c.close();
+            GOODBYE_SENT.store(true, Ordering::SeqCst);
+            return Ok("the app stops".into());
+        }
         if ADMITTED.lock().unwrap().is_some_and(|(a, _)| a != id) && activated {
             let _ = c.send(&json!({"type": "client/goodbye", "payload": {"reason": "another_server"}}));
             return Ok("another server took over".into());
