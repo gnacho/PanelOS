@@ -56,6 +56,13 @@ The button opens steps 1–3 in your Home Assistant.
 5. From the unpacked ZIP, copy the folder `custom_components/panelos` into that `custom_components` folder. The result is `config/custom_components/panelos`, with the `__init__.py` and `manifest.json` files directly inside.
 6. Restart Home Assistant: **Settings → System**, the power icon at the top right, **Restart Home Assistant**.
 
+## Upgrading from 0.0.5
+
+1. Put the new UI bundle on the panel (`docs/app.md`, "Build, run, develop"); the image and the web bundle stay as they are.
+2. Update the integration (Marketplace, HACS or a copy of the new `custom_components/panelos` folder) and restart Home Assistant. The settings stay.
+
+Music Assistant then finds the panel as a Sendspin player and pairs with it through Home Assistant by itself (see [docs/app.md](app.md#voice-satellite)).
+
 ## Upgrading from 0.0.4
 
 Update the panel and the integration together: the new interface uses the integration's newer requests (timers through Home Assistant, PanelOS notifications, page settings from the panel).

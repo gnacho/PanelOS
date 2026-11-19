@@ -1,11 +1,13 @@
 # Changelog
 
-## 0.0.6 (in development)
+## 0.0.6
+
+**Upgrading from 0.0.5**: put the new UI bundle on the panel and update the integration, then restart Home Assistant ([docs/home_assistant.md](docs/home_assistant.md#upgrading-from-005)); the image and the web bundle stay as they are.
 
 ### Voice
 - A ringing timer stops only on a stop word or a short stop phrase; a one-word fragment of a conversation no longer stops it. Speech over the ring counts from 8 dB over its echo.
 - After the wake word, listening ends when nobody speaks within 5 s.
-- The voice view keeps the microphone level and trace live while it shows; the comic answer waits until the thinking is over, and the comic look runs smoothly.
+- The voice view keeps the microphone level and trace live while it shows; the comic answer waits until the thinking is over, and its bubbles stay layers over the swaying halftone.
 - The integration's wake word rows show and set what the satellite really listens for, by name.
 
 ### Music Assistant
@@ -13,13 +15,13 @@
 - One volume: Music Assistant's volume of the panel is the panel's own.
 - An app restart tells Music Assistant first, so it connects again as soon as the app is back.
 - The music page lists the panel itself first; the player picker opens at the top of its list every time.
-- Music by voice with no setup: Home Assistant's own media commands (next, previous, pause, resume, volume, mute; in every language it has, in many variations) said to the panel act on the player chosen on its music page.
+- Music by voice with no setup: Home Assistant's own media commands (next, previous, pause, resume, volume, mute; in every language it has, in many variations) said to the panel act on the player chosen on its music page. Previous by voice goes to the previous track, not to the start of the current one.
 - Music commands said to the panel can follow the player picked on its music page or always use the panel itself (Voice page: Music commands; default: the selected player). The panel reports its picked player; voice setups ask the integration (`hass.data["panelos"]["voice_player"]`).
 
 ### Connection
 - The Wi-Fi roam check also finds access points that hide their network name (it asks for the network by name).
-- A connection log on the persistent partition: Home Assistant sessions ending and coming back, roam checks with the access points they saw, moves and reconnects, with the local time ([docs/security/app.md](docs/security/app.md)).
-- The integration keeps the panel's entities for 30 s through a short drop or an app restart instead of turning them unavailable.
+- A connection log on the persistent partition: Home Assistant sessions ending and coming back, roam checks with the access points they saw, moves and reconnects, with the local time ([docs/app.md](docs/app.md#connection-start-and-outages)).
+- The integration keeps the panel's entities (all but the restart and reboot buttons) with their last state for 30 s through a short drop or an app restart instead of turning them unavailable.
 - Illuminance is reported from a change of 5 lx, at most once in 10 s, and again every 10 minutes.
 
 ### Status bar, shade, sheets, pages
@@ -29,21 +31,24 @@
 - The theme change crossfades the whole screen.
 - After a ring, or a view shown for some seconds (`panelos.show_view`), the panel goes back to the page it was on.
 - A reload or the dashboard coming on screen shows the loading screen first, never a white web page.
+- Settings: the storage page sits under the status bar; a row's value takes the rest of the row.
 
 ### Pages
 - A page out of sight stands still: clocks, nixie glow and news crawls run only while their page is on screen (before, a clock on another page kept every page redrawing 30 times a second); the synthwave scene's cars and palms are planned only while a scene is on screen (before, a synthwave timers page on the list redrew every page once a second).
 - Timers: the synthwave look's running time no longer stutters every second (only the digits that change are drawn again), +1 min with two synthwave timers, the last minute in the alert colour, the ringing screen in the timer's colour, the timers page's own synthwave scene (or a random one every time); the new-timer view over running synthwave timers keeps the scene under a veil.
 - Stopwatch: one lap button (the flag) and the lap list in the nixie look, which now runs at ~45 fps instead of ~9.
 - Clocks: only the colon, the second hands and the seconds line move (30 fps); a still clock stays still (every clock face drew 60 frames a second whatever its style: the wandering face's corner spark read the animation clock in every frame). Calm clocks: when nobody has been near and nothing was asked of the panel for 10 minutes, every clock's colon turns gradually over 5 s from breathing into a plain step, bright one second and dim the next, and the seconds tick once a second (one frame a second instead of 30); a touch, an approach or a request from Home Assistant brings the breathing back, gradually over 2 s. Screensaver faces nixie, LCD and twin-bell from the integration.
-- Music: transfer and group buttons in both themes, an info bubble in the player picker, the cover options in the music sheet, no thumbs on the sliders at rest, a vertical swipe no longer seeks, the half cassette's volume bar works, the turntable's volume fader jumps to a tap and follows a drag from where it is, the position holds after a pause on the panel; a start after a pause no longer shows paused for a moment with the time jumping back, and the panel's own player shows playing while Music Assistant plays on it.
-- Thermostat: quick presses count one by one, the remote's clock runs, the wall look's knob turns with the finger like a real knob and never turns the page.
+- Music: transfer and group buttons in both themes, an info bubble in the player picker, the cover options in the music sheet, no thumbs on the sliders at rest, a vertical drag across the time bar no longer seeks, the half cassette's volume bar works, the turntable's volume fader jumps to a tap and follows a drag from where it is; a start after a pause no longer shows paused for a moment with the time jumping back, and the panel's own player shows playing while Music Assistant plays on it.
+- Thermostat: quick presses count one by one, the remote's clock runs, the swing labels make room, the wall look's knob turns with the finger like a real knob (relative, with its detents) and sends the target when the finger lifts.
 - Quick controls: channels and levers centred for any count, labels fall back to the whole name, a light's effects in a dropdown, the deck's lamp in the light's own colour; the flight deck has a label field in the integration.
-- Calendar: the top-right chip names the calendar. To-do: a new item goes to the top; a ticked row stays 1.5 s; one list picker.
-- Notifications: the fridge note shows in the first window; the pager window steps on a swipe.
+- Calendar: the top-right chip names the calendar. To-do: one list picker (the chip).
+- Notifications: the fridge note shows in the first window; the pager window steps on a swipe, and the pager's finish changes without an app restart.
 
 ### Integration page
 - A sheet slides in once: an ⓘ or any other change inside it no longer replays its entrance in the narrow layout.
-- Settings: the storage page sits under the status bar.
+- The ⓘ buttons in the sound sheets open their bubbles.
+- The layout editor draws the page's own background until the panel's picture of that page arrives.
+- A new critical alert's test waits until something that starts the alert is chosen.
 - The panel's live screen stops on its last picture after a minute without use of the page and goes on with the next use (only while the page is the active window; making it active counts as use).
 
 ## 0.0.5
