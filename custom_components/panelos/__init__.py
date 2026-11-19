@@ -46,6 +46,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.helpers.start import async_at_started
 
 from .const import (
     CONF_PAGES,
@@ -355,6 +356,12 @@ def ws_timer(hass: HomeAssistant, connection: websocket_api.ActiveConnection, ms
     connection.send_result(msg["id"])
 
 
+async def _setup_voice_intents(hass: HomeAssistant) -> None:
+    from .voice_intents import async_setup_voice_intents  # noqa: PLC0415
+
+    async_setup_voice_intents(hass)
+
+
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     """Register the websocket commands, the actions and the sidebar page's files once."""
     websocket_api.async_register_command(hass, ws_subscribe)
@@ -387,6 +394,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     hass.data[DOMAIN]["voice_player"] = lambda satellite_id: voice_player(hass, satellite_id)
     await notes.async_load()
     await async_setup_page(hass)
+    # music by voice on a panel: Home Assistant's media intents act on the panel's chosen player
+    async_at_started(hass, _setup_voice_intents)
 
     async def handle_show(call: ServiceCall) -> None:
         request = dict(call.data)
