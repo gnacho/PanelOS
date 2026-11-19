@@ -888,8 +888,63 @@ export component ClockFace inherits Rectangle {
     // the colon breathes evenly, once in 2 s
     // the seconds, sampled 30 times a second: the colon, the second hand and the seconds line move at 30 fps
     property <float> s30;
-    Timer { interval: root.show-seconds ? 33ms : 1s; running: root.live; triggered => { root.s30 = root.seconds; } }
-    property <float> colon: root.show-seconds ? 0.75 + 0.25 * Math.cos(root.s30 * 180deg) : 1;
+    // Calm (Clock.calm: nobody near and nothing asked of the panel for 10 minutes): over 5 s the breathing turns into a
+    // plain step, bright one second and dim the next, and then the seconds tick once a second, on the whole second (one
+    // frame a second); anything that stirs the panel brings the breathing back, gradually over 2 s.
+    property <float> calm-k;             // 0 breathing … 1 calm
+    property <bool> calm-wait;           // waiting for the next whole second
+    property <bool> calm-tick;           // ticking once a second
+    property <duration> calm-d: 1s;
+    property <int> calm-n;
+    property <bool> calm-on: Clock.calm;
+    changed calm-on => { if !root.calm-on { root.calm-wait = false; root.calm-tick = false; } }
+    changed live => { root.calm-wait = false; root.calm-tick = false; }
+    Timer {
+        interval: !root.show-seconds ? 1s : 33ms;
+        running: root.live && !root.calm-wait && !root.calm-tick;
+        triggered => {
+            root.s30 = root.seconds;
+            if root.show-seconds {
+                if root.calm-on {
+                    root.calm-k = min(1, root.calm-k + 0.033 / 5);
+                } else {
+                    root.calm-k = max(0, root.calm-k - 0.033 / 2);
+                }
+                if root.calm-on && root.calm-k >= 1 {
+                    root.calm-d = (1 - Math.mod(root.s30, 1)) * 1000ms + 20ms;
+                    root.calm-wait = true;
+                }
+            }
+        }
+    }
+    Timer {
+        interval: root.calm-d;
+        running: root.live && root.calm-wait;
+        triggered => {
+            root.calm-wait = false;
+            root.s30 = Math.mod(Math.round(root.seconds), 60);
+            root.calm-n = 0;
+            root.calm-tick = true;
+        }
+    }
+    Timer {
+        interval: 1s;
+        running: root.live && root.calm-tick;
+        triggered => {
+            root.s30 = Math.mod(Math.round(root.seconds), 60);
+            root.calm-n += 1;
+            // once a minute back onto the whole second (the ticks drift by a few ms)
+            if root.calm-n >= 60 {
+                root.calm-d = (1 - Math.mod(root.seconds, 1)) * 1000ms + 20ms;
+                root.calm-tick = false;
+                root.calm-wait = true;
+            }
+        }
+    }
+    // on a whole second the breath is at its top or bottom: calm and breathing meet there
+    property <float> breath: 0.75 + 0.25 * Math.cos(root.s30 * 180deg);
+    property <float> beat: Math.mod(Math.floor(root.s30 + 0.001), 2) == 0 ? 1 : 0.5;
+    property <float> colon: root.show-seconds ? root.breath + (root.beat - root.breath) * root.calm-k : 1;
     property <float> minutes: root.data.mm.to-float() + root.s30 / 60;
     property <float> hours: Math.mod(root.data.hh.to-float(), 12) + root.minutes / 60;
     // Content area between the top line and the bottom row (heads, dots).
@@ -1083,7 +1138,7 @@ export component ClockFace inherits Rectangle {
         spacing: 14px;
         if root.style == 8: NixieClock {
             height: min(root.clock-only ? 300px : 220px, root.look-w * 168 / (root.show-seconds ? 438 : 302));
-            hh: root.data.hh; mm: root.data.mm; seconds: root.s30; show-seconds: root.show-seconds; live: root.live;
+            hh: root.data.hh; mm: root.data.mm; seconds: root.s30; show-seconds: root.show-seconds; live: root.live && !root.calm-tick;
         }
         if root.style == 9: LcdClock {
             height: min(root.clock-only ? 300px : 236px, root.look-w * 200 / 348);

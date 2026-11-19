@@ -24,6 +24,9 @@ export global Act {
 // number stays small and exact however long the panel runs.
 export global Clock {
     in-out property <duration> base;
+    // calm (the app: nobody near and nothing asked of the panel for 10 minutes): every clock's colon turns from
+    // breathing into a plain step, bright one second and dim the next, and the seconds tick once a second
+    in-out property <bool> calm;
 }
 
 export global Theme {

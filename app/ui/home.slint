@@ -2,7 +2,7 @@
 // Every widget has a kind, a size in cells (w x h) and its own look (style, accent, weight, switches).
 // The layout is edited in Home Assistant; editing on the panel itself is optional (switched on in
 // HA): a long press opens a lock, holding the lock unlocks the edit mode.
-import { Theme, Act, Words } from "theme.slint";
+import { Theme, Act, Words, Clock } from "theme.slint";
 import { Icon, Glyph, PlayGlyph, GlowText, Marquee, RollPair, Segmented, Dropdown, Toggle, CheckBox } from "widgets.slint";
 import { WeatherData, ClockData, AnalogDial, FlipClock } from "panels.slint";
 import { NixieClock, LcdClock, TwinBellClock } from "clocks.slint";
@@ -78,8 +78,63 @@ component ClockW inherits Rectangle {
     // the colon breathes evenly, once in 2 s
     // the seconds, sampled 30 times a second: the colon, the second hand and the seconds line move at 30 fps
     property <float> s30;
-    Timer { interval: root.secs ? 33ms : 1s; running: root.live; triggered => { root.s30 = root.seconds; } }
-    property <float> colon: root.secs ? 0.75 + 0.25 * Math.cos(root.s30 * 180deg) : 1;
+    // Calm (Clock.calm: nobody near and nothing asked of the panel for 10 minutes): over 5 s the breathing turns into a
+    // plain step, bright one second and dim the next, and then the seconds tick once a second, on the whole second;
+    // anything that stirs the panel brings the breathing back, gradually over 2 s.
+    property <float> calm-k;
+    property <bool> calm-wait;
+    property <bool> calm-tick;
+    property <duration> calm-d: 1s;
+    property <int> calm-n;
+    property <bool> calm-on: Clock.calm;
+    changed calm-on => { if !root.calm-on { root.calm-wait = false; root.calm-tick = false; } }
+    changed live => { root.calm-wait = false; root.calm-tick = false; }
+    Timer {
+        interval: root.secs ? 33ms : 1s;
+        running: root.live && !root.calm-wait && !root.calm-tick;
+        triggered => {
+            root.s30 = root.seconds;
+            if root.secs {
+                if root.calm-on {
+                    root.calm-k = min(1, root.calm-k + 0.033 / 5);
+                } else {
+                    root.calm-k = max(0, root.calm-k - 0.033 / 2);
+                }
+                if root.calm-on && root.calm-k >= 1 {
+                    root.calm-d = (1 - Math.mod(root.s30, 1)) * 1000ms + 20ms;
+                    root.calm-wait = true;
+                }
+            }
+        }
+    }
+    Timer {
+        interval: root.calm-d;
+        running: root.live && root.calm-wait;
+        triggered => {
+            root.calm-wait = false;
+            root.s30 = Math.mod(Math.round(root.seconds), 60);
+            root.calm-n = 0;
+            root.calm-tick = true;
+        }
+    }
+    Timer {
+        interval: 1s;
+        running: root.live && root.calm-tick;
+        triggered => {
+            root.s30 = Math.mod(Math.round(root.seconds), 60);
+            root.calm-n += 1;
+            // once a minute back onto the whole second (the ticks drift by a few ms)
+            if root.calm-n >= 60 {
+                root.calm-d = (1 - Math.mod(root.seconds, 1)) * 1000ms + 20ms;
+                root.calm-tick = false;
+                root.calm-wait = true;
+            }
+        }
+    }
+    // on a whole second the breath is at its top or bottom: calm and breathing meet there
+    property <float> breath: 0.75 + 0.25 * Math.cos(root.s30 * 180deg);
+    property <float> beat: Math.mod(Math.floor(root.s30 + 0.001), 2) == 0 ? 1 : 0.5;
+    property <float> colon: root.secs ? root.breath + (root.beat - root.breath) * root.calm-k : 1;
     // the accent (colon, seconds line, hands), unless it would vanish into the background: a pale accent on a light
     // scene or a dark one on a dark scene draws in the text colour instead
     property <float> acc-l: (root.it.accent.red * 0.299 + root.it.accent.green * 0.587 + root.it.accent.blue * 0.114) / 255;
@@ -201,7 +256,7 @@ component ClockW inherits Rectangle {
     //   clock (spec 24.9); each scaled to fit, centred, nothing behind it
     if root.st == 8: NixieClock {
         x: 4px; y: 4px; width: root.width - 8px; height: root.height - 8px;
-        hh: root.clock.hh; mm: root.clock.mm; seconds: root.s30; show-seconds: root.secs && root.it.w >= 4; live: root.live;
+        hh: root.clock.hh; mm: root.clock.mm; seconds: root.s30; show-seconds: root.secs && root.it.w >= 4; live: root.live && !root.calm-tick;
     }
     if root.st == 9: LcdClock {
         x: 4px; y: 4px; width: root.width - 8px; height: root.height - 8px;

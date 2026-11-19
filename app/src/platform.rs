@@ -130,6 +130,24 @@ pub fn note_activity() {
     LAST_INPUT_MS.store(now_ms(), Ordering::SeqCst);
 }
 
+/// Milliseconds (since START) of the last stir for the clocks' calm: someone near, or something asked of the panel
+/// from Home Assistant (these do not hold off the screensaver).
+static LAST_STIR_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Someone came near, or Home Assistant asked something of the panel.
+pub fn note_stir() {
+    LAST_STIR_MS.store(now_ms(), Ordering::SeqCst);
+}
+
+/// Seconds without activity or stir before the clocks turn calm (development: `{"calm_after": s}`).
+pub static CALM_AFTER_S: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(600);
+
+/// Nobody near and nothing asked of the panel for CALM_AFTER_S: the clocks' colon steps instead of breathing.
+pub fn calm() -> bool {
+    let last = LAST_INPUT_MS.load(Ordering::SeqCst).max(LAST_STIR_MS.load(Ordering::SeqCst));
+    now_ms().saturating_sub(last) >= CALM_AFTER_S.load(Ordering::SeqCst) * 1000
+}
+
 /// Set by SIGUSR2: scroll the dashboard one page (development aid).
 pub static SCROLL_REQUEST: AtomicBool = AtomicBool::new(false);
 

@@ -2370,6 +2370,17 @@ fn start_pairing(ui: &AppWindow) {
 }
 
 fn handle_event(ui: &AppWindow, event: Event) {
+    // Home Assistant asking something of the panel stirs the clocks (the live preview's screenshots and the list of
+    // notifications sent at every connection do not)
+    let asked = match &event {
+        Event::Panel(_) | Event::Show(_) => true,
+        Event::Command { key, .. } => key != "screenshot",
+        Event::Notes { kind, .. } => kind != "current",
+        _ => false,
+    };
+    if asked {
+        stir(ui);
+    }
     match event {
         Event::Status { text, connected } => {
             HA_LINKED.store(connected, Ordering::SeqCst);
@@ -2612,6 +2623,9 @@ fn reroll_lines(weak: slint::Weak<AppWindow>) {
 /// Carries out a request from Home Assistant (ESPHome API or the PanelOS
 /// integration) on the UI thread.
 fn apply_control(ui: &AppWindow, control: esphome::Control) {
+    if matches!(control, esphome::Control::Setting(..) | esphome::Control::Screen(_)) {
+        stir(ui);
+    }
     match control {
         esphome::Control::Setting(k, v) => on_setting(ui, &k, &v),
         esphome::Control::Screen(true) => wake(ui),
@@ -2624,8 +2638,17 @@ fn apply_control(ui: &AppWindow, control: esphome::Control) {
     }
 }
 
+/// Someone is near or something was asked of the panel: the clocks breathe again at once (see `platform::calm`).
+fn stir(ui: &AppWindow) {
+    platform::note_stir();
+    if ui.global::<Clock>().get_calm() {
+        ui.global::<Clock>().set_calm(false);
+    }
+}
+
 fn wake(ui: &AppWindow) {
     platform::note_activity();
+    stir(ui);
     if ui.get_screensaver_on() {
         ui.set_screensaver_on(false);
         with_state(|s| {
@@ -3055,6 +3078,15 @@ fn tick(ui: &AppWindow) {
             if s.proximity_test.is_some() {
                 show_proximity_test(ui, s, p);
             }
+            // someone near (an approach, or still near) keeps the clocks breathing
+            if approach || s.proximity.near() {
+                platform::note_stir();
+            }
+        }
+        // the clocks' calm: nobody near and nothing asked of the panel for 10 minutes
+        let calm = platform::calm();
+        if ui.global::<Clock>().get_calm() != calm {
+            ui.global::<Clock>().set_calm(calm);
         }
         // Backlight
         let target = if s.screensaver && (s.settings.screensaver_style == "black" || s.screen_off) && !wake_now {
@@ -3253,6 +3285,7 @@ fn on_setting(ui: &AppWindow, key: &str, value: &str) {
 /// Taps, holds and drags from the pages and layers (`act(what, value)`).
 fn handle_act(ui: &AppWindow, what: &str, value: &str) {
     platform::note_activity();
+    stir(ui);
     match what {
         "saver.wake" => wake(ui),
         "timers.stop" => stop_ringing(ui, "tap"),
@@ -3924,6 +3957,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if v.get("patrol").and_then(Value::as_bool) == Some(true) {
                 synth::patrol_now();
+            }
+            // Development: the clocks turn calm after this many seconds without activity ({"calm_after": 600})
+            if let Some(n) = v.get("calm_after").and_then(Value::as_u64) {
+                platform::CALM_AFTER_S.store(n, Ordering::SeqCst);
             }
             if let Some(n) = v.get("cars_test").and_then(Value::as_u64) {
                 synth::test_cars(&ui, n as usize);
