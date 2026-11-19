@@ -68,6 +68,7 @@ component ClockW inherits Rectangle {
     in property <bool> neon;
     in property <color> glow;
     in property <float> seconds;
+    in property <bool> live: true;        // the page is on screen: only then the seconds run (a page off screen stands still)
     pure function on(bit: int) -> bool { Math.mod(Math.floor(root.it.opts / bit), 2) == 1 }
     property <bool> secs: root.on(1);
     property <bool> show-date: root.on(2);
@@ -77,7 +78,7 @@ component ClockW inherits Rectangle {
     // the colon breathes evenly, once in 2 s
     // the seconds, sampled 30 times a second: the colon, the second hand and the seconds line move at 30 fps
     property <float> s30;
-    Timer { interval: root.secs ? 33ms : 1s; running: true; triggered => { root.s30 = root.seconds; } }
+    Timer { interval: root.secs ? 33ms : 1s; running: root.live; triggered => { root.s30 = root.seconds; } }
     property <float> colon: root.secs ? 0.75 + 0.25 * Math.cos(root.s30 * 180deg) : 1;
     // the accent (colon, seconds line, hands), unless it would vanish into the background: a pale accent on a light
     // scene or a dark one on a dark scene draws in the text colour instead
@@ -200,7 +201,7 @@ component ClockW inherits Rectangle {
     //   clock (spec 24.9); each scaled to fit, centred, nothing behind it
     if root.st == 8: NixieClock {
         x: 4px; y: 4px; width: root.width - 8px; height: root.height - 8px;
-        hh: root.clock.hh; mm: root.clock.mm; seconds: root.s30; show-seconds: root.secs && root.it.w >= 4;
+        hh: root.clock.hh; mm: root.clock.mm; seconds: root.s30; show-seconds: root.secs && root.it.w >= 4; live: root.live;
     }
     if root.st == 9: LcdClock {
         x: 4px; y: 4px; width: root.width - 8px; height: root.height - 8px;
@@ -699,6 +700,7 @@ export component HomeWidget inherits Rectangle {
     in property <HomeMusic> music;
     in property <float> seconds;
     in property <float> music-pos;
+    in property <bool> live: true;        // on screen (the clock's seconds run only then)
     // Widgets without per-second changes are drawn once into a layer; the clock and
     // the music widget keep their moving parts live (their texts are layers of their own).
     cache-rendering-hint: root.it.kind != 0 && root.it.kind != 7 && !(root.it.kind == 2 && WxIcons.kind > 0);
@@ -708,7 +710,7 @@ export component HomeWidget inherits Rectangle {
         background: (root.ink.red > 128 ? #121314 : #F5F3EE).with-alpha((root.it.card - 1) / 100);
     }
     if root.it.kind == 7: MusicW { width: root.width; height: root.height; ink: root.ink; m: root.music; pos: root.music-pos; it: root.it; halo: root.halo; neon: root.neon; glow: root.glow; }
-    if root.it.kind == 0: ClockW { width: root.width; height: root.height; ink: root.ink; clock: root.clock; seconds: root.seconds; data: root.data; event: root.event; it: root.it; halo: root.halo; neon: root.neon; glow: root.glow; }
+    if root.it.kind == 0: ClockW { width: root.width; height: root.height; ink: root.ink; clock: root.clock; seconds: root.seconds; data: root.data; event: root.event; it: root.it; halo: root.halo; neon: root.neon; glow: root.glow; live: root.live; }
     if root.it.kind == 1: DateW { width: root.width; height: root.height; ink: root.ink; clock: root.clock; it: root.it; weekday-long: root.weekday-long; day-month: root.day-month;
         year: root.year; week: root.week; halo: root.halo; neon: root.neon; glow: root.glow; }
     if root.it.kind == 2: WeatherW { width: root.width; height: root.height; ink: root.ink; data: root.data; it: root.it; halo: root.halo; neon: root.neon; glow: root.glow; }
@@ -803,6 +805,7 @@ export component HomeGrid inherits Rectangle {
     in property <bool> fl-cars: true;
     in property <bool> rise;              // 25.H6: the widgets rise into place when the page comes into view (the plain background)
     in property <bool> shown;
+    in property <bool> live: true;        // the page is (partly) on screen: clocks run only then
     property <bool> rising;
     property <duration> rise-t0;
     changed shown => { if root.rise && root.shown { root.rise-t0 = animation-tick(); root.rising = true; } }
@@ -867,7 +870,7 @@ export component HomeGrid inherits Rectangle {
         HomeWidget {
             width: parent.width; height: parent.height;
             it: it; data: root.data; clock: root.clock; event: root.event; halo: root.halo; music: root.music; ink: root.ink;
-            seconds: root.seconds; music-pos: root.music-pos;
+            seconds: root.seconds; music-pos: root.music-pos; live: root.live;
             neon: root.neon && it.neon; glow: root.glow;
             weekday-long: root.weekday-long; day-month: root.day-month; year: root.year; week: root.week;
         }

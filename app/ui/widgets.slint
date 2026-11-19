@@ -180,6 +180,7 @@ export component DragSheet inherits Rectangle {
 export component Crawl inherits Rectangle {
     in property <string> text;
     in property <int> epoch;
+    in property <bool> live: true;         // its page is on screen: off screen it stands still and starts afresh on return
     in property <length> font-size: 13px;
     in property <int> font-weight: 700;
     in property <string> font-family;
@@ -206,6 +207,7 @@ export component Crawl inherits Rectangle {
     }
     init => { root.restart(); }
     changed epoch => { root.restart(); }
+    changed live => { if root.live { root.restart(); } }
     changed text => {
         if root.lead == "" {
             root.restart();
@@ -217,7 +219,7 @@ export component Crawl inherits Rectangle {
     // moves the swap into the gap: the picture does not jump)
     Timer {
         interval: 250ms;
-        running: root.lead != "";
+        running: root.lead != "" && root.live;
         triggered => {
             if root.off >= root.span {
                 root.t0 += root.span / 1px / root.speed * 1ms;

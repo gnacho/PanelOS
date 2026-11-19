@@ -169,6 +169,7 @@ export component NixieClock inherits Rectangle {
     in property <string> mm;
     in property <float> seconds;          // 0..60
     in property <bool> show-seconds;
+    in property <bool> live: true;        // on screen: only then the glow flickers (off screen nothing redraws)
     property <float> fw: root.show-seconds ? 438 : 302;
     property <float> fh: 168;
     property <float> k: min(root.width / 1px / root.fw, root.height / 1px / root.fh);
@@ -177,7 +178,7 @@ export component NixieClock inherits Rectangle {
     property <int> s: Math.floor(root.seconds);
     // the glow of each tube, never quite steady (12 times a second)
     property <float> ft;
-    Timer { interval: 80ms; running: true; triggered => { root.ft = animation-tick() / 1ms; } }
+    Timer { interval: 80ms; running: root.live; triggered => { root.ft = animation-tick() / 1ms; } }
     pure function fl(n: int) -> float { 0.94 + 0.06 * Math.abs(Math.sin(1rad * (root.ft / 37 + n * 1.7)) * Math.sin(1rad * (root.ft / 91 + n))) }
     fr := Rectangle {
         width: root.fw * 1px; height: root.fh * 1px;

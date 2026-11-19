@@ -130,6 +130,7 @@ component CalBoardLook inherits Rectangle {
 
 // The board and its crawl: the board is drawn once into a layer, the crawl rolls on above it.
 component CalBoardPage inherits Rectangle {
+    in property <bool> live: true;
     in property <[CalBoard]> rows;
     in property <string> clock;
     in property <string> date;
@@ -138,7 +139,7 @@ component CalBoardPage inherits Rectangle {
     in property <string> empty;
     CalBoardLook { rows: root.rows; clock: root.clock; date: root.date; empty: root.empty; }
     Rectangle { x: 0; y: 418px; width: root.width; height: 26px; background: #141416;
-        Crawl { x: 19px; y: 0; width: 442px; height: parent.height; text: root.ticker; epoch: root.ticker-epoch; font-family: "DejaVu Sans Mono";
+        Crawl { x: 19px; y: 0; width: 442px; height: parent.height; text: root.ticker; epoch: root.ticker-epoch; live: root.live; font-family: "DejaVu Sans Mono";
             font-size: 12px; font-weight: 700; letter-spacing: 1px; ink: #ff9f1a; } }
 }
 
@@ -246,6 +247,7 @@ component CalWallLook inherits Rectangle {
 }
 
 export component CalendarPage inherits Rectangle {
+    in property <bool> live: true;         // on screen (the board's crawl runs only then)
     in property <int> view;                // 0 agenda, 1 day, 2 week, 3 month, 4 three days (plain look)
     in property <int> look;                // 0 plain, 1 departure board, 2 tear-off, 3 wall calendar
     // 25.K1: a tapped event lifts (its shadow grows, 120 ms) before its details open
@@ -334,7 +336,7 @@ export component CalendarPage inherits Rectangle {
     background: Theme.background;
 
     // ---------------------------------------------------------------- header: title and date, view chip (top right), back / forward
-    if root.look == 1: CalBoardPage { rows: root.board-rows; clock: root.board-clock; date: root.board-date; ticker: root.board-ticker;
+    if root.look == 1: CalBoardPage { live: root.live; rows: root.board-rows; clock: root.board-clock; date: root.board-date; ticker: root.board-ticker;
         ticker-epoch: root.board-epoch; empty: root.board-empty; }
     if root.look == 2: CalTearLook { month: root.tear-month; day: root.tear-day; weekday: root.tear-weekday; sunday: root.tear-sunday; info: root.tear-info;
         events: root.tear-events; more: root.tear-more; line: root.tear-line; free: root.day-free; }

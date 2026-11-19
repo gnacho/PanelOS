@@ -876,6 +876,7 @@ export component ClockFace inherits Rectangle {
     in property <bool> show-weather: true;
     in property <bool> show-next: true;
     in property <bool> show-seconds: true;   // second hand / seconds line / breathing colon
+    in property <bool> live: true;           // on screen: only then the seconds run (a page off screen stands still)
     // 0..60, moving smoothly (the app's clock, interpolated by the UI)
     in property <float> seconds: root.data.seconds;
     // Style 6 wanders like the classic bouncing screensaver: straight lines
@@ -887,7 +888,7 @@ export component ClockFace inherits Rectangle {
     // the colon breathes evenly, once in 2 s
     // the seconds, sampled 30 times a second: the colon, the second hand and the seconds line move at 30 fps
     property <float> s30;
-    Timer { interval: root.show-seconds ? 33ms : 1s; running: true; triggered => { root.s30 = root.seconds; } }
+    Timer { interval: root.show-seconds ? 33ms : 1s; running: root.live; triggered => { root.s30 = root.seconds; } }
     property <float> colon: root.show-seconds ? 0.75 + 0.25 * Math.cos(root.s30 * 180deg) : 1;
     property <float> minutes: root.data.mm.to-float() + root.s30 / 60;
     property <float> hours: Math.mod(root.data.hh.to-float(), 12) + root.minutes / 60;
@@ -1082,7 +1083,7 @@ export component ClockFace inherits Rectangle {
         spacing: 14px;
         if root.style == 8: NixieClock {
             height: min(root.clock-only ? 300px : 220px, root.look-w * 168 / (root.show-seconds ? 438 : 302));
-            hh: root.data.hh; mm: root.data.mm; seconds: root.s30; show-seconds: root.show-seconds;
+            hh: root.data.hh; mm: root.data.mm; seconds: root.s30; show-seconds: root.show-seconds; live: root.live;
         }
         if root.style == 9: LcdClock {
             height: min(root.clock-only ? 300px : 236px, root.look-w * 200 / 348);

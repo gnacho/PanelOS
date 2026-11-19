@@ -810,6 +810,8 @@ export component AppWindow inherits Window {
                 background: Theme.background;
                 // a page's drawing stays on its page (the half cassette's reel slides past its edge)
                 clip: true;
+                // (partly) on screen: a page off screen stands still (its clocks' seconds do not run)
+                property <bool> on-view: !root.screensaver-on && (i == root.warm-page || (self.x > -root.width && self.x < root.width));
 
                 // several weather pages may each have their own background and widgets
                 property <int> home-theme: slot.theme >= 0 ? slot.theme : root.weather.theme;
@@ -833,6 +835,7 @@ export component AppWindow inherits Window {
                 if slot.kind == "home" && home-slot.home-theme == 9: Rectangle {
                     background: home-slot.home-light ? #F5F3EE : #000000;
                     HomeGrid {
+                        live: home-slot.on-view;
                         rise: true; shown: root.page == i && !root.screensaver-on;
                         items: home-slot.home-items;
                         data: root.weather;
@@ -940,6 +943,7 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "home" && home-slot.home-theme != 8 && home-slot.home-theme != 9: Rectangle {
                     HomeGrid {
+                        live: home-slot.on-view;
                         items: home-slot.home-items;
                         data: root.weather;
                         clock: root.clock;
@@ -978,6 +982,7 @@ export component AppWindow inherits Window {
                     mix: root.home-fl-mix; grid: root.home-fl-grid; star-k: root.home-fl-star; t: root.home-fl-t; cars: root.home-fl-cars;
                     palm-l: root.home-fl-palm-l; palm-r: root.home-fl-palm-r; palm-l2: root.home-fl-palm-l2; palm-r2: root.home-fl-palm-r2; palm-lk: root.home-fl-palm-lk; palm-rk: root.home-fl-palm-rk;
                     HomeGrid {
+                        live: home-slot.on-view;
                         items: home-slot.home-items;
                         data: root.weather;
                         clock: root.clock;
@@ -1025,6 +1030,7 @@ export component AppWindow inherits Window {
                 }
                 if slot.kind == "clock": ClockFace {
                     data: root.clock;
+                    live: home-slot.on-view;
                     style: slot.variant;
                     accent: root.clock-page-accent;
                     weight: root.clock-weight;
@@ -1092,6 +1098,7 @@ export component AppWindow inherits Window {
                     replies: root.cam-replies; reply-list: root.cam-reply-list;
                 }
                 if slot.kind == "calendar": CalendarPage {
+                    live: home-slot.on-view;
                     look: slot.variant; board-rows: root.cal-board-rows; board-clock: root.cal-board-clock; board-date: root.cal-board-date;
                     board-ticker: root.cal-board-ticker; board-epoch: root.cal-board-epoch; board-empty: root.cal-board-empty; tear-month: root.cal-tear-month; tear-day: root.cal-tear-day;
                     tear-weekday: root.cal-tear-weekday; tear-sunday: root.cal-tear-sunday; tear-info: root.cal-tear-info; tear-events: root.cal-tear-events;
@@ -1118,6 +1125,7 @@ export component AppWindow inherits Window {
                     note-head: root.todo-note-head; note-done: root.todo-note-done; note-empty: root.todo-note-empty;
                 }
                 if slot.kind == "info": InfoPage {
+                    live: home-slot.on-view;
                     look: slot.variant; notes: root.info-notes; scroll: root.info-scroll; empty-title: root.info-empty-title; empty-sub: root.info-empty-sub;
                     card: root.info-card; card-note: root.info-card-note; card-index: root.info-card-index; card-count: root.info-card-count;
                     critical: root.info-critical; crit-title: root.info-crit-title; crit-message: root.info-crit-message; crit-icon: root.info-crit-icon;

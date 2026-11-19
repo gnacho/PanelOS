@@ -125,6 +125,7 @@ component PagerLook inherits Rectangle {
 
 // ---------------------------------------------------------------- news look: a TV news screen
 component NewsLook inherits Rectangle {
+    in property <bool> live: true;
     in property <[InfoNote]> notes;
     in property <bool> open;
     in property <InfoNote> n;
@@ -176,7 +177,7 @@ component NewsLook inherits Rectangle {
     Rectangle { x: 16px; y: 404px; width: 72px; height: 28px; background: #d8202a;
         Text { text: root.clock; font-size: 15px; font-weight: 900; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; } }
     Rectangle { x: 88px; y: 404px; width: 376px; height: 28px; background: #ffffff;
-        Crawl { x: 8px; y: 0; width: parent.width - 8px; height: parent.height; text: root.ticker; epoch: root.ticker-epoch; font-size: 13px;
+        Crawl { x: 8px; y: 0; width: parent.width - 8px; height: parent.height; text: root.ticker; epoch: root.ticker-epoch; live: root.live; font-size: 13px;
             font-weight: 700; ink: #0b1f4d; } }
 }
 
@@ -214,6 +215,7 @@ component FridgeLook inherits Rectangle {
 }
 
 export component InfoPage inherits Rectangle {
+    in property <bool> live: true;         // on screen (the news crawl runs only then)
     in property <int> look;                // 0 plain, 1 fridge, 2 pager, 3 news
     in property <[InfoNote]> notes;
     in property <length> scroll;
@@ -288,7 +290,7 @@ export component InfoPage inherits Rectangle {
         arrive-t: root.arrive-t; }
     if root.look == 2: PagerLook { x: root.buzz; notes: root.notes; open: root.card; n: root.card-note; index: root.card-index; clock: root.clock; empty: root.pager-empty;
         body: root.pager-body; led: root.pager-led; first-row: root.pager-first; backlight: root.arrive-t < 1100; }
-    if root.look == 3: NewsLook { notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; ticker-epoch: root.news-epoch; empty: root.news-empty;
+    if root.look == 3: NewsLook { live: root.live; notes: root.notes; open: root.card; n: root.card-note; clock: root.clock; ticker: root.news-ticker; ticker-epoch: root.news-epoch; empty: root.news-empty;
         arrive-t: root.arrive-t; }
 
     // ---------------------------------------------------------------- plain pop-up card (the looks show their own)
