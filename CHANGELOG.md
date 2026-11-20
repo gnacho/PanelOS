@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.0.7 (in development)
+
+### Home Assistant
+- HACS and the Marketplace install the integration from `panelos.zip` on the release (2 MB) instead of the whole repository (about 90 MB, close to the Marketplace's 100 MB download limit).
+
 ## 0.0.6
 
 **Upgrading from 0.0.5**: put the new UI bundle on the panel and update the integration, then restart Home Assistant ([docs/home_assistant.md](docs/home_assistant.md#upgrading-from-005)); the image and the web bundle stay as they are.
