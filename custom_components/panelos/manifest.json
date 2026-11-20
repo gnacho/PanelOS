@@ -2,6 +2,7 @@
   "domain": "panelos",
   "name": "PanelOS",
   "after_dependencies": [
+    "assist_pipeline",
     "esphome",
     "intent"
   ],
