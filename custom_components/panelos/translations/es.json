@@ -1,0 +1,266 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Añadir un panel PanelOS",
+        "description": "Añade un panel con PanelOS como dispositivo, con su pantalla, sus ajustes y sus sensores, y define lo que muestran su modo panel y su modo asistente. El satélite de voz del panel viene con la integración ESPHome y aparece como conectado a través de este dispositivo.",
+        "data": {
+          "panel_id": "ID del panel (el nombre del panel en la red)",
+          "weather_entity": "Tiempo",
+          "media_player_entity": "Reproductor multimedia",
+          "tile_entities": "Accesos rápidos",
+          "show_conversation": "Conversación a pantalla completa"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "Este panel ya está configurado."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "PanelOS",
+        "menu_options": {
+          "dashboard": "Modo panel",
+          "assistant": "Modo asistente",
+          "sensor_reporting": "Envío de sensores"
+        }
+      },
+      "dashboard": {
+        "title": "Modo panel",
+        "description": "El panel muestra un panel de Home Assistant en su visor web, igual que en un navegador, tarjetas personalizadas incluidas.",
+        "data": {
+          "dashboard": "Panel",
+          "show_header": "Cabecera",
+          "show_sidebar": "Barra lateral",
+          "zoom": "Tamaño",
+          "loading_screen": "Pantalla de carga",
+          "skip_unused_resources": "Omitir los recursos de tarjetas sin usar",
+          "keep_resources": "Cargar siempre estos recursos de tarjetas"
+        },
+        "data_description": {
+          "dashboard": "Qué panel muestra el dispositivo. \"Elegido en el panel\" lo deja en manos de los ajustes del propio panel y de su entidad Panel.",
+          "show_header": "La barra superior del panel con su título y las pestañas de sus vistas. Sin ella el panel ocupa toda la pantalla, pero sus vistas solo se alcanzan mediante enlaces del propio panel.",
+          "show_sidebar": "El menú de Home Assistant (todos los paneles, los ajustes y otras páginas). Sin él el dispositivo se queda en el panel elegido.",
+          "zoom": "Cómo de grande se dibuja el panel en el dispositivo. Por debajo del 100 % cabe más en pantalla.",
+          "loading_screen": "Mientras un panel carga, el dispositivo muestra su pantalla de carga y lo revela cuando está completo. Desactivado: se ve el arranque de Home Assistant y el panel aparece mientras carga, antes pero sin terminar al principio.",
+          "skip_unused_resources": "Con esto activado, el dispositivo carga solo los recursos de tarjetas que necesita el panel que muestra, así que abre más rápido.",
+          "keep_resources": "Para un recurso que el panel necesita aunque su nombre no coincida con ninguna de sus tarjetas."
+        }
+      },
+      "assistant": {
+        "title": "Modo asistente",
+        "data": {
+          "weather_entity": "Tiempo",
+          "media_player_entity": "Reproductor multimedia",
+          "tile_entities": "Accesos rápidos",
+          "show_conversation": "Conversación a pantalla completa"
+        }
+      },
+      "sensor_reporting": {
+        "title": "Envío de sensores",
+        "description": "Cuánto tiene que cambiar un sensor para que el dispositivo envíe un valor nuevo a Home Assistant. Cada valor enviado es una fila en la base de datos del registrador (historial, registro, estadísticas). Los números bajos dan un historial más fino y automatizaciones más rápidas, pero más escrituras en la base de datos. Los números altos implican menos escrituras, pero solo se ven los cambios mayores. El brillo, el tema y el roaming Wi-Fi del propio dispositivo no dependen de esto.",
+        "data": {
+          "illuminance_change": "Iluminancia",
+          "soc_temperature_change": "Temperatura del SoC",
+          "wifi_signal_change": "Señal Wi-Fi"
+        },
+        "data_description": {
+          "illuminance_change": "Cambio respecto al último valor enviado, en porcentaje, y como mínimo 5 lx, para no enviar el ruido de una habitación a oscuras. El dispositivo comprueba la luz dos veces por segundo y envía como mucho un cambio cada 10 segundos, y el valor de nuevo cada 10 minutos. Más bajo: historial de luz más fino y automatizaciones que reaccionan a cambios pequeños. Más alto: menos escrituras, y las automatizaciones solo ven cambios mayores.",
+          "soc_temperature_change": "La temperatura del procesador se lee cada minuto y se promedia sobre unos cinco minutos. Se envía un valor nuevo cuando la media se mueve al menos esta cantidad. Más bajo: historial de temperatura detallado. Más alto: menos escrituras, y solo se ven los calentamientos o enfriamientos mayores.",
+          "wifi_signal_change": "La señal se lee cada minuto y se promedia sobre unos cinco minutos. Se envía un valor nuevo cuando la media se mueve al menos esta cantidad. Más bajo: historial detallado, útil para localizar puntos flojos. Más alto: menos escrituras, y las caídas cortas no se ven."
+        }
+      }
+    }
+  },
+  "selector": {
+    "view": {
+      "options": {
+        "home": "Pantalla de inicio",
+        "dashboard": "Panel",
+        "weather": "Tiempo",
+        "media": "Reproductor multimedia",
+        "camera": "Cámara"
+      }
+    },
+    "level": {
+      "options": {
+        "info": "Información",
+        "warning": "Aviso"
+      }
+    }
+  },
+  "services": {
+    "show_view": {
+      "name": "Mostrar vista",
+      "description": "Muestra una vista en un panel PanelOS durante un rato.",
+      "fields": {
+        "panel_id": {
+          "name": "Panel",
+          "description": "El ID del panel, tal como aparece en su entrada de PanelOS. Vacío = todos los paneles."
+        },
+        "view": {
+          "name": "Vista",
+          "description": "Qué mostrar."
+        },
+        "entity_id": {
+          "name": "Cámara",
+          "description": "La cámara para la vista de cámara."
+        },
+        "seconds": {
+          "name": "Segundos",
+          "description": "Cuánto tiempo mostrarla. 0 = hasta que alguien toque la pantalla."
+        }
+      }
+    },
+    "show_status": {
+      "name": "Mostrar pantalla de estado",
+      "description": "Muestra una pantalla de estado iniciada por una acción (configurada en la página PanelOS) en los paneles para los que está definida.",
+      "fields": {
+        "screen": {
+          "name": "Pantalla de estado",
+          "description": "El nombre de la pantalla de estado en las automatizaciones, tal como se muestra en la página PanelOS (por ejemplo, toilet_occupied)."
+        }
+      }
+    },
+    "clear_status": {
+      "name": "Quitar pantalla de estado",
+      "description": "Termina una pantalla de estado iniciada por una acción.",
+      "fields": {
+        "screen": {
+          "name": "Pantalla de estado",
+          "description": "El nombre de la pantalla de estado en las automatizaciones, tal como se muestra en la página PanelOS (por ejemplo, toilet_occupied)."
+        }
+      }
+    },
+    "critical_alert": {
+      "name": "Iniciar alerta crítica",
+      "description": "Inicia una alerta crítica propia, iniciada por una acción (configurada en la página PanelOS) en los paneles donde se muestra.",
+      "fields": {
+        "alert": {
+          "name": "Alerta crítica",
+          "description": "El ID de la alerta crítica, tal como se muestra en la página PanelOS."
+        }
+      }
+    },
+    "clear_critical_alert": {
+      "name": "Terminar alerta crítica",
+      "description": "Termina una alerta crítica propia iniciada por una acción.",
+      "fields": {
+        "alert": {
+          "name": "Alerta crítica",
+          "description": "El ID de la alerta crítica, tal como se muestra en la página PanelOS."
+        }
+      }
+    },
+    "notify": {
+      "name": "Notificar",
+      "description": "Pone una notificación en los paneles PanelOS: en su lista de notificaciones y en la ventana de notificación nueva. Se mantiene hasta que se responde en el panel.",
+      "fields": {
+        "panel_id": {
+          "name": "Paneles",
+          "description": "Los ID de los paneles. Ninguno: todos los paneles."
+        },
+        "title": {
+          "name": "Título",
+          "description": "El título de la notificación."
+        },
+        "message": {
+          "name": "Mensaje",
+          "description": "El texto de la notificación."
+        },
+        "icon": {
+          "name": "Icono",
+          "description": "Un icono (mdi:…)."
+        },
+        "level": {
+          "name": "Nivel",
+          "description": "Información, o un aviso."
+        },
+        "picture": {
+          "name": "Imagen",
+          "description": "Una entidad de cámara o la dirección de una imagen, que se muestra con la notificación."
+        },
+        "buttons": {
+          "name": "Botones",
+          "description": "Hasta tres botones. Al pulsar uno se lanza el evento panelos_notification_action."
+        },
+        "until_answered": {
+          "name": "Hasta que se responda",
+          "description": "Se queda delante hasta que se confirma o se descarta en el panel."
+        }
+      }
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "presence": {
+        "name": "Presencia"
+      }
+    },
+    "button": {
+      "restart_app": {
+        "name": "Reiniciar la aplicación"
+      },
+      "reboot": {
+        "name": "Reiniciar el dispositivo"
+      }
+    },
+    "number": {
+      "brightness": {
+        "name": "Brillo"
+      }
+    },
+    "select": {
+      "dashboard": {
+        "name": "Panel"
+      },
+      "theme": {
+        "name": "Tema"
+      },
+      "screensaver": {
+        "name": "Salvapantallas tras"
+      },
+      "screensaver_style": {
+        "name": "Estilo del salvapantallas"
+      },
+      "display_mode": {
+        "name": "Modo de pantalla"
+      }
+    },
+    "sensor": {
+      "illuminance": {
+        "name": "Iluminancia"
+      },
+      "soc_temperature": {
+        "name": "Temperatura del SoC"
+      },
+      "wifi_signal": {
+        "name": "Señal Wi-Fi"
+      },
+      "ip_address": {
+        "name": "Dirección IP"
+      },
+      "app_version": {
+        "name": "Versión de la aplicación"
+      }
+    },
+    "switch": {
+      "screen": {
+        "name": "Pantalla"
+      },
+      "auto_brightness": {
+        "name": "Brillo automático"
+      },
+      "proximity_wake": {
+        "name": "Encender al acercarse"
+      }
+    },
+    "notify": {
+      "notifications": {
+        "name": "Notificaciones"
+      }
+    }
+  }
+}
