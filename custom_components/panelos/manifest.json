@@ -6,6 +6,10 @@
     "esphome",
     "intent"
   ],
+  "categories": [
+    "diy_makers",
+    "ai_voice.voice_assistants"
+  ],
   "codeowners": [
     "@bazsc20ne"
   ],
